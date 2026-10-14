@@ -11,6 +11,7 @@ const budgets = require('./budgets');
 const decisions = require('./decisions');
 const ledger = require('./ledger');
 const { matchesAny } = require('../lib/glob');
+const git = require('../lib/git');
 
 function park(root, state, reason, from) {
   state.status = 'parked';
@@ -19,30 +20,113 @@ function park(root, state, reason, from) {
   job.save(root, state);
 }
 
-function ownersOfFindings(ctx, findings) {
-  const tasks = steps.planTasks(ctx);
-  const owners = new Set();
-  for (const f of findings) {
-    const hit = tasks.filter((t) => f.file && matchesAny(f.file, t.allowed_paths || []));
-    (hit.length ? hit : tasks).forEach((t) => owners.add(t.id));
-  }
-  return [...owners];
+// One owner per finding: the task whose commit last wrote the finding's line (git blame on
+// the job branch, then that commit's Factory-Task trailer, else the first task in build order
+// whose branch holds the commit); without a line, the first task in build order whose paths
+// cover the file. Only a finding no task's paths cover goes to every task.
+function blameOwner(ctx, f, tasks) {
+  const { root, state } = ctx;
+  if (!f.file || !f.line || !state.branch) return null;
+  const r = git.run(root, ['blame', '--porcelain', '-L', `${f.line},${f.line}`, state.branch, '--', f.file], { allowFail: true });
+  if (r.code !== 0 || !r.stdout) return null;
+  const sha = r.stdout.split(/\s/)[0];
+  if (!/^[0-9a-f]{7,64}$/.test(sha) || /^0+$/.test(sha)) return null;
+  const t = (git.run(root, ['log', '-1', '--format=%(trailers:key=Factory-Task,valueonly)', sha], { allowFail: true }).stdout || '').split('\n')[0].trim();
+  if (t && tasks.some((x) => x.id === t)) return t;
+  const hit = tasks.find((x) => git.branchExists(root, steps.taskBranch(state, x.id)) && git.isAncestor(root, sha, steps.taskBranch(state, x.id)));
+  return hit ? hit.id : null;
 }
 
+function ownersOfFindings(ctx, findings) {
+  const all = steps.planTasks(ctx);
+  const order = require('./plan').buildOrder(all);
+  const tasks = order.map((id) => all.find((t) => t.id === id)).filter(Boolean);
+  const owners = new Set();
+  const byFinding = {};
+  for (const f of findings) {
+    const hit = tasks.filter((t) => f.file && matchesAny(f.file, t.allowed_paths || []));
+    let owner = null;
+    if (hit.length === 1) owner = hit[0].id;
+    else if (hit.length > 1) owner = blameOwner(ctx, f, hit) || hit[0].id;
+    else owner = blameOwner(ctx, f, tasks);
+    if (owner) {
+      owners.add(owner);
+      if (f.id) byFinding[f.id] = owner;
+    } else tasks.forEach((t) => owners.add(t.id));
+  }
+  return { owners: [...owners], byFinding };
+}
+
+// Which kind of work closes each unproven criterion, from the prove record:
+//   build    a covering command failed, or a test/run proof is missing: builders fix it
+//   evidence only a doc or diff record is missing: the main session runs factory evidence add
+//   human    only the human's own check is missing: "confirm AC-n"
+// An AC is proven by any one of its evidence types, so a doc/diff route wins over a human one.
+function proveGaps(failures) {
+  const out = { build: [], evidence: [], human: [] };
+  const missing = failures.missing || {};
+  for (const [ac, st] of Object.entries(failures.acs || {})) {
+    if (st === 'proven') continue;
+    const types = missing[ac] || ((failures.why || {})[ac] || []).map((w) => String(w).split(':')[0].trim());
+    if (st === 'failed' || !types.length) out.build.push(ac);
+    else if (types.some((t) => t === 'doc' || t === 'diff')) out.evidence.push({ ac, types: types.filter((t) => t === 'doc' || t === 'diff') });
+    else if (types.every((t) => t === 'human')) out.human.push(ac);
+    else out.build.push(ac);
+  }
+  return out;
+}
+
+// Tasks that own a failing command or a criterion builders can fix. Criteria that need only
+// evidence or a human confirmation have no owner; only a failing command no task owns (a
+// policy check) falls back to every task.
 function ownersOfFailures(ctx, failures) {
   const tasks = steps.planTasks(ctx);
   const owners = new Set();
   const failedCmds = (failures.commands || []).filter((c) => !c.pass).map((c) => c.cmd);
-  const failedAcs = Object.entries(failures.acs || {})
-    .filter(([, s]) => s !== 'proven')
-    .map(([k]) => k);
+  const failedAcs = proveGaps(failures).build;
+  const ownedCmds = new Set();
   for (const t of tasks) {
     const cmds = (t.verify_commands || []).map((c) => (typeof c === 'string' ? c : c.cmd));
-    if (cmds.some((c) => failedCmds.includes(c))) owners.add(t.id);
+    for (const c of cmds) if (failedCmds.includes(c)) { owners.add(t.id); ownedCmds.add(c); }
     if ((t.criteria_ids || []).some((a) => failedAcs.includes(a))) owners.add(t.id);
   }
-  if (!owners.size) tasks.forEach((t) => owners.add(t.id));
+  if (!owners.size && failedCmds.some((c) => !ownedCmds.has(c))) tasks.forEach((t) => owners.add(t.id));
   return [...owners];
+}
+
+// Unproven criteria that only need a record: no fix round, no counter. Once everything asked
+// for has been recorded since the failed proof, prove runs again.
+function evidenceAction(ctx, proveRecord, gaps) {
+  const { state } = ctx;
+  const since = String(proveRecord || '').replace(/^prove@/, '');
+  const recorded = ledger.all(ctx.root, state.id).filter((e) => e.kind === 'evidence' && e.pass && e.at > since);
+  const has = (ac, types) => recorded.some((e) => e.ac === ac && types.includes(e.type));
+  const evidence = gaps.evidence.filter((g) => !has(g.ac, g.types));
+  const human = gaps.human.filter((ac) => !has(ac, ['human']));
+  if (!evidence.length && !human.length) {
+    return { ...stepAction(ctx, ctx.recipe.steps.find((s) => s.step === 'prove')), reason: 'The missing evidence is recorded: prove runs again.', rule: 'row5.evidence_recorded' };
+  }
+  if (evidence.length) {
+    const commands = evidence.map((g) => `factory evidence add ${g.ac} --type ${g.types[0]} --path <${g.types[0] === 'doc' ? 'the file that documents it' : 'the changed file that shows it'}> --job ${state.id}`);
+    return {
+      step: 'prove',
+      run: 'cli:evidence add',
+      action: 'evidence',
+      command: commands[0],
+      commands,
+      acs: evidence.map((g) => g.ac),
+      reason: `${evidence.map((g) => g.ac).join(', ')} ${evidence.length > 1 ? 'need' : 'needs'} a ${[...new Set(evidence.map((g) => g.types[0]))].join('/')} record, not a code change. Check the build (job worktree) yourself, then record it with the command shown for each (with the real path); factory next then re-runs prove.${human.length ? ` After that, ${human.join(', ')} still needs the user's own check.` : ''}`,
+      rule: 'row5.evidence_missing',
+    };
+  }
+  return {
+    step: 'prove',
+    run: 'human:confirm',
+    action: 'wait',
+    acs: human,
+    reason: `${human.join(', ')} ${human.length > 1 ? 'need' : 'needs'} your own check on the current build: reply "${human.map((a) => `confirm ${a}`).join('" and "')}" once you have checked it.`,
+    rule: 'row5.human_confirm',
+  };
 }
 
 function reopenTasks(state, ids, why) {
@@ -84,6 +168,76 @@ function repeatKey(ctx, action) {
       ledgerLen,
     }),
   );
+}
+
+// The key a routing decision is remembered by (state.last_decision).
+function decisionKey(result) {
+  return `${result.action}:${result.step || ''}:${result.scope || ''}:${(result.gate && result.gate.hash) || ''}`;
+}
+
+// Commands that only look: running them is not an attempt at the step factory next chose.
+const LOOKS = new Set(['next', 'why', 'help', 'doctor', 'console', 'job', 'contract', 'doc', 'report', 'recipe', 'telemetry', 'finalize', 'use', 'task:show', 'lessons:list', 'distill:context']);
+
+// Was anything tried under the decision in force (a workflow brief was built, a record or
+// step command ran)? A `factory next` with nothing tried since is a re-query, not a repeat.
+function attemptedSince(root, state) {
+  const id = state.last_decision_id;
+  if (!id) return true;
+  let lines;
+  try {
+    lines = require('fs').readFileSync(require('path').join(root, '.factory', 'log', 'events.jsonl'), 'utf8').split('\n');
+  } catch {
+    return true; // no log: be conservative and count it
+  }
+  for (const l of lines) {
+    if (!l || !l.includes(id)) continue;
+    let e;
+    try {
+      e = JSON.parse(l);
+    } catch {
+      continue;
+    }
+    if (e.decision_id !== id) continue;
+    if (e.event !== 'cli') continue;
+    if (LOOKS.has(e.cmd) || LOOKS.has(`${e.cmd}:${e.sub}`)) continue;
+    return true;
+  }
+  return false;
+}
+
+// After "deny" at a gate, the step that produced the document runs again (with the reason
+// in its brief) instead of the unchanged document being presented again. Once that step
+// has run since the denial, the gate is shown even if the document came out the same.
+const PRODUCER = { H1: 'clarify', EH1: 'clarify', H2: 'decide', EH2: 'decide', HF: 'decide', H3: 'decompose', EH3: 'decompose' };
+
+function deniedReroute(ctx, gate) {
+  const { root, state } = ctx;
+  const from = PRODUCER[gate];
+  const producer = from && ctx.recipe.steps.find((s) => s.step === from);
+  if (!producer || producer.run.startsWith('cli:')) return null;
+  const hash = steps.gateHash(ctx, gate);
+  if (!hash) return null;
+  const denied = (state.denials || []).filter((d) => d.gate === gate && d.hash === hash).pop();
+  if (!denied) return null;
+  if (ledger.steps(root, state.id, from).some((e) => e.at > denied.at)) return null;
+  const why = denied.reason ? `: "${denied.reason}"` : '';
+  const how = producer.run.startsWith('skill:')
+    ? `Revise the ${from === 'clarify' ? 'contract' : 'document'} to address it, then run the ${from} step again.`
+    : `Run the ${producer.run.slice(9)} workflow again (factory wfargs ${producer.run.slice(9)}${producer.config ? ` --config ${producer.config}` : ''}); the reason is in its brief.`;
+  return { ...stepAction(ctx, producer), denied: { gate, reason: denied.reason || '', at: denied.at }, reason: `You denied ${gate}${why}. ${how}` };
+}
+
+// After a local merge the CI re-verify floor is still owed: route `factory ci verify`
+// before distill/close instead of letting close fail on it.
+function localReverify(ctx, s) {
+  const { state, recipe } = ctx;
+  const iH4 = recipe.steps.findIndex((x) => x.step === 'H4');
+  if (iH4 < 0 || recipe.steps.indexOf(s) <= iH4) return null;
+  if (!state.pr || !state.pr.merged || state.pr.mode === 'github') return null;
+  const fl = require('./floors').evaluate(ctx, 'full');
+  if (!fl.results.some((r) => r.floor === 'ci_reverify' && !r.ok)) return null;
+  // Part of finishing the merge step (H4); unlike a PR sync it counts toward the repeat guard.
+  return { step: 'H4', run: 'cli:ci verify', action: 'cli', command: `factory ci verify --job ${state.id}`, reason: 'Local merge recorded: re-verify the merge result (the CI re-verify floor).' };
 }
 
 function decide(root, jobId) {
@@ -155,9 +309,9 @@ function decide(root, jobId) {
         park(root, state, `Review rounds used up (${L.max_review_rounds}) with confirmed serious findings still open.`, 'review');
         return record(root, state, al, out({ action: 'parked', reason: state.park.reason, rule: 'cap.review_rounds' }));
       }
-      const owners = ownersOfFindings(ctx, al.detail.serious);
+      const { owners, byFinding } = ownersOfFindings(ctx, al.detail.serious);
       reopenTasks(state, owners, 'review');
-      state.fix = { kind: 'fix', source: al.detail.challenge_record, fingerprint: ctx.b.fingerprint, tasks: owners, findings: al.detail.serious.map((f) => f.id) };
+      state.fix = { kind: 'fix', source: al.detail.challenge_record, fingerprint: ctx.b.fingerprint, tasks: owners, findings: al.detail.serious.map((f) => f.id), owners: byFinding };
       job.save(root, state);
       action = stepAction(ctx, ctx.recipe.steps.find((s) => s.step === 'realize'));
       action.scope = 'fix';
@@ -165,12 +319,19 @@ function decide(root, jobId) {
       break;
     }
     case 'acs_proven': {
+      const owners = ownersOfFailures(ctx, al.detail.prove_failures);
+      if (!owners.length) {
+        // Nothing for builders: the proof lacks only doc/diff records or a human check.
+        action = evidenceAction(ctx, al.detail.prove_record, proveGaps(al.detail.prove_failures));
+        rule = action.rule;
+        delete action.rule;
+        break;
+      }
       state.counters.verify_fix_rounds += 1;
       if (state.counters.verify_fix_rounds > L.max_verify_fix_rounds) {
         park(root, state, `Verify-fix rounds used up (${L.max_verify_fix_rounds}); criteria still unproven.`, 'verify');
         return record(root, state, al, out({ action: 'parked', reason: state.park.reason, rule: 'cap.verify_fix_rounds' }));
       }
-      const owners = ownersOfFailures(ctx, al.detail.prove_failures);
       reopenTasks(state, owners, 'verify');
       state.fix = { kind: 'verifyFix', source: al.detail.prove_record, fingerprint: ctx.b.fingerprint, tasks: owners };
       job.save(root, state);
@@ -186,8 +347,17 @@ function decide(root, jobId) {
     default: {
       const s = ctx.recipe.steps.find((x) => !steps.isDone(ctx, x));
       if (!s) return record(root, state, al, out({ action: 'done', reason: 'Every step is done.', rule: 'order.complete' }));
-      action = stepAction(ctx, s);
-      rule = 'order.next_step';
+      const ci = localReverify(ctx, s);
+      action = ci || stepAction(ctx, s);
+      rule = ci ? 'order.ci_reverify' : 'order.next_step';
+    }
+  }
+
+  if (action.action === 'gate') {
+    const re = deniedReroute(ctx, action.step);
+    if (re) {
+      action = re;
+      rule = 'gate.denied_revise';
     }
   }
 
@@ -233,9 +403,13 @@ function decide(root, jobId) {
   }
 
   // Repeat guard: the same step from the same state twice in a row means no progress.
-  if (!['gate', 'wait'].includes(action.action) && action.step !== 'H4') {
+  if (!['gate', 'wait'].includes(action.action) && (action.step !== 'H4' || action.run === 'cli:ci verify')) {
     const key = repeatKey(ctx, action);
     state = job.load(root, state.id);
+    if (state.repeat && state.repeat.key === key && state.last_decision === decisionKey(action) && state.last_decision_id && !attemptedSince(root, state)) {
+      // Asked again with nothing tried and nothing changed: the same decision, not a new one.
+      return out({ ...action, rule, alignment: al.vector, first_failing: al.first_failing, decision_id: state.last_decision_id, requery: true });
+    }
     if (state.repeat && state.repeat.key === key) state.repeat.count += 1;
     else state.repeat = { key, count: 1 };
     if (state.repeat.count > L.repeat_guard) {
@@ -249,7 +423,7 @@ function decide(root, jobId) {
 }
 
 function record(root, state, al, result) {
-  const key = `${result.action}:${result.step || ''}:${result.scope || ''}:${(result.gate && result.gate.hash) || ''}`;
+  const key = decisionKey(result);
   const fresh = job.load(root, state.id);
   const isRepeatWait = ['gate', 'wait', 'parked'].includes(result.action) && fresh.last_decision === key;
   if (!isRepeatWait) {
@@ -294,4 +468,4 @@ function record(root, state, al, result) {
   return result;
 }
 
-module.exports = { decide, park, ownersOfFindings, ownersOfFailures };
+module.exports = { decide, park, ownersOfFindings, ownersOfFailures, proveGaps };

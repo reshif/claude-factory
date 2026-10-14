@@ -20,13 +20,14 @@ The CLI is on your PATH as `factory` (from this plugin's `bin/`). If it isn't, u
 ## 2. The loop
 Repeat until you reach a stop point:
 
-1. Run `factory next` and read `action`:
+1. Run `factory next` and read `action`. Running it again from the same state is harmless (it returns the same decision, with `requery: true`), but don't poll it: run it when a step is finished or the user has replied.
 
 | action | what you do |
 |---|---|
 | `skill` | Follow the factory skill named in `skill` (clarify, ship, distill, amend), then go back to step 1. |
 | `workflow` | Run the workflow (section 3), record its result, go back to step 1. |
 | `cli` | Run exactly the `command` shown. Read its JSON. If it failed, show the user the message and run `factory next` again (the CLI decides whether to retry or park). |
+| `evidence` | A criterion needs a doc or diff record, not a code change. For each AC in `acs`, check the build (the job worktree) shows it, then run its line in `commands` yourself with the real file path (relative to the repository root). If it isn't there, tell the user and stop. Then go back to step 1. |
 | `gate` | Follow **factory:gate**. **Stop** and wait for the user's reply. |
 | `wait` | If it lists `ready` slice jobs (epic), run `factory use <first ready id>` and continue the loop on that job. Otherwise tell the user in one or two lines what is being waited for (`reason`) and **stop**. |
 | `parked` | Follow **factory:park**. **Stop.** |

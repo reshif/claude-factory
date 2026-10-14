@@ -612,3 +612,29 @@ test('briefs name a real factory agent for every item, and carry only the run co
   for (const sp of specs) assert.match(sp.agent_type, /^factory:(intent-analyst|judge|god-eye)$/);
   assert.equal(c.judge.model, undefined, 'no model unless policy names one');
 });
+
+test('stop hook never blocks while the human is the one to act (gate, park, open questions, a record that asked the user)', () => {
+  const root = F.makeRepo();
+  const J = F.cli(root, ['job', 'new', '--title', 'x', '--type', 'bug', '--risk', 'low']).job;
+  fs.writeFileSync(path.join(F.jobDir(root, J), 'contract.md'), F.contractText());
+  const { spawnSync } = require('child_process');
+  const claim = 'All done! The task breakdown is complete.';
+  const run = (msg = claim) => spawnSync('node', [path.join(F.PLUGIN, 'hooks', 'stop.js')], { input: JSON.stringify({ cwd: root, last_assistant_message: msg }), encoding: 'utf8' }).stdout;
+  assert.equal(JSON.parse(run()).decision, 'block', 'nothing waits on the human: a false "done" is blocked');
+  // clarify asked the user a question: waiting
+  F.cli(root, ['next']);
+  let b = F.cli(root, ['wfargs', 'fanout-judge', '--config', 'clarify']);
+  assert.equal(F.record(root, F.envelope(b, 'needs_user', { analysts: [], degraded: [], judge: { questions: [{ question: 'Floats too?', why: 'scope' }], dismissed: [] }, critique: null })).status, 'needs_user');
+  assert.equal(run(), '', 'open clarify question');
+  F.cli(root, ['answer', '--id', 'Q-1', '--answer', 'no']);
+  assert.equal(run(), '', 'the record asked for the user and no factory next since');
+  F.cli(root, ['next']);
+  assert.equal(JSON.parse(run()).decision, 'block', 'answered and routed again: Claude owes the step');
+  // the H1 gate: waiting on the human
+  b = F.cli(root, ['wfargs', 'fanout-judge', '--config', 'clarify']);
+  F.record(root, F.envelope(b, 'ok', { analysts: [], degraded: [], judge: { questions: [], dismissed: [] }, critique: { verdict: 'approve', items: [] } }));
+  assert.equal(F.cli(root, ['next']).action, 'gate');
+  assert.equal(run(), '', 'pending gate');
+  const { waitingOnHuman } = require('../hooks/stop');
+  assert.match(waitingOnHuman(root, require('../cli/core/job').load(root, J)), /waiting at H1/);
+});

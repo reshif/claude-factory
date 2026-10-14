@@ -52,10 +52,11 @@ function cleanJob(root) {
   next(root);
   F.sh(root, `git merge -q --no-ff -m m factory/${J}`);
   F.reply(root, `merged ${F.sh(root, 'git rev-parse HEAD')}`);
+  next(root); // a local merge: factory next asks for factory ci verify first
+  F.cli(root, ['ci', 'verify']);
   next(root);
   F.cli(root, ['distill', 'done']);
   next(root);
-  F.cli(root, ['ci', 'verify']);
   assert.equal(F.cli(root, ['close']).status, 'closed');
   return J;
 }
@@ -97,7 +98,9 @@ test('driver fidelity (R7): acting at a gate, and skipping what the router asked
   F.cli(root, ['plan', 'from-contract']); // acting while the human hasn't approved
   F.reply(root, 'approve');
   assert.equal(next(root).workflow, 'ground');
-  next(root); // asked for ground, ran nothing, asked again
+  next(root); // asked again with nothing tried: the same decision (factory next is a query)
+  F.cli(root, ['answer', '--question', 'Which Node versions?', '--answer', '18+']); // did something else instead of ground
+  next(root); // …and asked again: a new decision, so the ground decision was skipped
   inspect(root, ['run', '--job', J]);
   const fds = I.report(root).findings;
   const waiting = fds.find((x) => x.rule === 'R7.acted_while_waiting');
@@ -361,4 +364,51 @@ test('independence: the inspector imports nothing from the factory', () => {
       assert.ok(!/require\([^)]*factory\/cli/.test(src) && !/require\(['"]\.\.\/\.\.\/factory/.test(src), `${dir}/${f} must not import factory code`);
     }
   }
+});
+
+test('R19.intent_parked fires only on the park entry, not on a needs_user round that asks an intent question', () => {
+  const { LIMITS } = require('../inspector/config');
+  const at = (h) => new Date(Date.UTC(2026, 0, 1) + h * 36e5).toISOString();
+  const job = {
+    id: 'J-0001',
+    state: { status: 'active', updated_at: at(9) },
+    lock: null,
+    ledger: [{ kind: 'step', step: 'clarify', ok: false, at: at(1), detail: { round: 1, questions: 1, question_ids: ['Q-1'], intent_open: true, held: 2, dropped: 0 } }],
+    decisions: [{ id: 'J-0001-D0001', ts: at(1), action: 'skill', skill: 'clarify' }],
+    events: [],
+  };
+  assert.ok(!rules.jobHealth(job, LIMITS, at(10)).some((x) => x.rule === 'R19.intent_parked'), 'a needs_user intent round is not a park');
+  // the real park entry (record.js: intent_open, questions 0, no question ids) still fires
+  job.ledger.push({ kind: 'step', step: 'clarify', ok: false, at: at(4), detail: { round: 2, intent_open: true, intent_rounds: 2, questions: 0, contract_problems: [] } });
+  assert.ok(rules.jobHealth(job, LIMITS, at(10)).some((x) => x.rule === 'R19.intent_parked'));
+});
+
+test('guard regressions: redirects to /dev/null, prose and patterns are not inspector writes or calls; indirection is caught', () => {
+  for (const c of [
+    'ls .factory/inspect/ 2>/dev/null',
+    "jq '.findings | length' .factory/inspect/register.json > /tmp/n.txt",
+    'grep -c open .factory/inspect/register.json 2>&1',
+    'cat .factory/inspect/register.json >&2',
+    'grep -n "factory-inspect mark" $(git ls-files \'*.md\')',
+    'git commit -m "docs: factory-inspect mode examples"',
+    "echo 'Run factory-inspect mark F3 --status fixed when done'",
+    'gh pr create --body "then run factory-inspect mode all off"',
+    'factory-inspect report --status open 2>/dev/null | head',
+    'factory-inspect run',
+  ]) assert.equal(guardCheck(c), null, c);
+  for (const c of [
+    'factory-inspect mark F1 fixed',
+    'echo x > .factory/inspect/register.json',
+    'jq . x.json | tee .factory/inspect/config.json',
+    'rm -f .factory/inspect/register.json',
+    'sed -i s/open/fixed/ .factory/inspect/register.json',
+    'bash -c "factory-inspect mode all off"',
+    `env X=1 node ${BIN} mark F2 fixed`,
+    'X=$(which factory-inspect); $X mark F1 fixed',
+    'echo "$(factory-inspect mode all off)"',
+    `I=${BIN}; node $I mark F1 --to fixed`,
+    `echo mode | xargs node ${BIN}`,
+    'eval "factory-inspect ma""rk F1"',
+  ]) assert.ok(guardCheck(c), c);
+  assert.equal(fs.readFileSync(path.join(PLUGIN, 'hooks', 'shell.js'), 'utf8'), fs.readFileSync(path.join(PLUGIN, '..', 'factory', 'hooks', 'shell.js'), 'utf8'), "the shell reader is an identical copy of the factory's");
 });
