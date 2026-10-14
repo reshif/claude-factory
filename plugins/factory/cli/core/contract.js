@@ -7,11 +7,29 @@ const { jobPaths } = require('../lib/paths');
 
 const EVIDENCE_TYPES = ['test', 'run', 'diff', 'doc', 'human'];
 
+// The Intent section is the why, written before the what. Each line is "- Label: value".
+// Clarify asks about these first and alone; a line left as <…> fails the check.
+const INTENT_FIELDS = [
+  { key: 'problem', label: 'Problem', re: /^problem$/, required: true, hint: 'what is wrong or missing today' },
+  { key: 'who', label: 'Who', re: /^who(\s+is\s+affected)?$/, required: true, hint: 'who has the problem, and who asked' },
+  { key: 'outcome', label: 'Outcome', re: /^(desired\s+)?outcome$/, required: true, hint: 'what is true for them when this is done' },
+  { key: 'why_now', label: 'Why now', re: /^why\s+now$/, required: false, hint: 'what prompted this now' },
+  { key: 'success', label: 'Success signal', re: /^success(\s+signal)?$/, required: true, hint: 'how we would know it worked, observably' },
+];
+
+function intentLines(values = {}) {
+  return INTENT_FIELDS.map((f) => `- ${f.label}: ${values[f.key] && !isPlaceholder(values[f.key]) ? values[f.key] : `<${f.hint}>`}`);
+}
+
 function template({ title, workType, risk, epic }) {
   const ac = epic ? 'E-AC' : 'AC';
   return `# ${title}
 
 <!-- factory contract · work_type: ${workType} · risk: ${risk}${epic ? ' · epic' : ''} -->
+
+## Intent
+<!-- The why, settled first: clarify asks about it before anything else. One line each. -->
+${intentLines().join('\n')}
 
 ## Goal
 <the outcome in one or two sentences — what is true when this is done, not how>
@@ -74,6 +92,18 @@ function isPlaceholder(t) {
   return !s || /^<[^<>]*>(\s*\(.*\))?$/.test(s) || /^<[^<>]*>\/?\**\/?\**$/.test(s);
 }
 
+function parseIntent(lines) {
+  if (!lines) return { present: false };
+  const out = { present: true };
+  for (const it of items(lines)) {
+    const m = it.match(/^([^:]{2,30}):\s*(.*)$/);
+    if (!m) continue;
+    const f = INTENT_FIELDS.find((x) => x.re.test(m[1].trim().toLowerCase()));
+    if (f && out[f.key] === undefined) out[f.key] = m[2].trim();
+  }
+  return out;
+}
+
 function parse(text) {
   const s = sections(text);
   const title = (String(text || '').match(/^#\s+(.+)$/m) || [])[1] || '';
@@ -101,6 +131,7 @@ function parse(text) {
   }
   return {
     title,
+    intent: parseIntent(s.intent),
     goal,
     nonGoals: items(s['non-goals']),
     acs,
@@ -111,8 +142,14 @@ function parse(text) {
   };
 }
 
-function problems(parsed, { requirePlanFields = false } = {}) {
-  const p = [];
+function intentProblems(intent, requireIntent) {
+  if (!intent || !intent.present) return requireIntent ? ['No "## Intent" section: add Problem, Who, Outcome, Why now and Success signal (one line each) above the Goal'] : [];
+  return INTENT_FIELDS.filter((f) => (intent[f.key] === undefined ? f.required : isPlaceholder(intent[f.key]))).map((f) => `Intent: ${f.label} is missing or still a placeholder`);
+}
+
+// requireIntent: false only for contracts approved before the Intent section existed.
+function problems(parsed, { requirePlanFields = false, requireIntent = true } = {}) {
+  const p = intentProblems(parsed.intent, requireIntent);
   if (isPlaceholder(parsed.goal) || parsed.goal.length < 10) p.push('Goal is missing or still a placeholder');
   if (!parsed.acs.length) p.push('No acceptance criteria (lines like "- AC-1: … (evidence: test)")');
   const ids = parsed.acs.map((a) => a.id);
@@ -138,4 +175,4 @@ function hash(root, state) {
   return sha256(`${text}\n--factory--\nwork_type=${state.work_type}\nrisk=${state.risk}\nepic=${Boolean(state.epic)}`);
 }
 
-module.exports = { EVIDENCE_TYPES, template, parse, problems, read, hash, isPlaceholder };
+module.exports = { EVIDENCE_TYPES, INTENT_FIELDS, intentLines, template, parse, problems, read, hash, isPlaceholder };

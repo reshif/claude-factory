@@ -24,7 +24,7 @@ async function clarify(root) {
     if (opts.agentType === 'factory:god-eye') return { verdict: 'approve', items: [] };
     throw new Error(`unexpected ${opts.agentType}: ${instructions(prompt).slice(0, 80)}`);
   });
-  assert.ok(Array.isArray(result.agents) && result.agents.length === 5, 'the envelope carries the roster');
+  assert.ok(Array.isArray(result.agents) && result.agents.length === 6, 'the envelope carries the roster (intent gate + 3 angles, judge, God Eye)');
   return F.record(root, result);
 }
 
@@ -81,7 +81,7 @@ test('console: steps, timeline and the agents per step, read-only', async () => 
   for (const t of ['route', 'human', 'agents', 'result']) assert.ok(types.includes(t), `timeline has ${t}`);
   const a = job.timeline.find((t) => t.type === 'agents');
   assert.equal(a.step, 'clarify', 'agents are placed on the step that ran them');
-  assert.equal(a.agents.filter((x) => x.role === 'intent-analyst').length, 3);
+  assert.equal(a.agents.filter((x) => x.role === 'intent-analyst').length, 4);
   assert.equal(job.timeline.find((t) => t.type === 'human').step, 'H1');
   const park = job.timeline.find((t) => t.type === 'park');
   assert.ok(park && /API owners/.test(park.text), 'a park you asked for is on the timeline, even after a resume clears it from state');
@@ -98,4 +98,41 @@ test('console: never creates a factory key on a machine without one', () => {
   assert.equal(r.status, 0, r.stdout + r.stderr);
   assert.equal(JSON.parse(r.stdout).integrity, 'not_checked');
   assert.ok(!fs.existsSync(key), 'no key file was created');
+});
+
+test('console --serve: streams fresh data when the factory writes, only to this machine', async () => {
+  const root = F.makeRepo();
+  const J = F.cli(root, ['job', 'new', '--title', 'Live one', '--type', 'bug', '--risk', 'low']).job;
+  const http = require('http');
+  const { url, close } = await new Promise((resolve) => require('../cli/core/console').serve(root, { port: 0, interval: 50, onReady: resolve }));
+  try {
+    const get = (p, headers = {}) => new Promise((res, rej) => http.get(url + p, { headers }, (r) => { let b = ''; r.on('data', (c) => { b += c; }); r.on('end', () => res({ status: r.statusCode, body: b })); }).on('error', rej));
+    const page = await get('');
+    assert.equal(page.status, 200);
+    assert.match(page.body, /"live":true/);
+    assert.equal((await get('data.json', { host: 'attacker.example' })).status, 403, 'a rebound foreign host is refused');
+
+    const events = [];
+    let wake = () => {};
+    const req = http.get(`${url}events`, (r) => {
+      let buf = '';
+      r.on('data', (c) => {
+        buf += c;
+        let i;
+        while ((i = buf.indexOf('\n\n')) !== -1) {
+          const block = buf.slice(0, i);
+          buf = buf.slice(i + 2);
+          const line = block.split('\n').find((l) => l.startsWith('data: '));
+          if (line) { events.push(JSON.parse(line.slice(6))); wake(); }
+        }
+      });
+    });
+    const nextEvent = (n) => new Promise((res, rej) => { const t = setTimeout(() => rej(new Error('no event')), 5000); const check = () => { if (events.length >= n) { clearTimeout(t); res(events[n - 1]); } }; wake = check; check(); });
+    assert.equal((await nextEvent(1)).jobs.find((j) => j.id === J).status, 'active', 'connecting sends the current data');
+    F.cli(root, ['park', '--reason', 'Waiting on the API owners']);
+    assert.equal((await nextEvent(2)).jobs.find((j) => j.id === J).status, 'parked', 'a CLI write reaches the open page');
+    req.destroy();
+  } finally {
+    close();
+  }
 });

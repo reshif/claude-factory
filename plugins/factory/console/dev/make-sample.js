@@ -224,10 +224,18 @@ const BASE = {
 };
 
 // ---- contracts ---------------------------------------------------------------------
-function contract({ title, type, risk, goal, nonGoals, ac, constraints, allowed, verify, assumptions }) {
+function contract({ title, type, risk, goal, nonGoals, ac, constraints, allowed, verify, assumptions, intent = {} }) {
+  const signal = String(ac[0] || goal).replace(/^E?-?AC-\d+:\s*/, '').replace(/\s*\(evidence:[^)]*\)\s*$/, '');
   return `# ${title}
 
 <!-- factory contract · work_type: ${type} · risk: ${risk} -->
+
+## Intent
+- Problem: ${intent.problem || `Not true today: ${goal}`}
+- Who: ${intent.who || 'Callers of the search API; asked by the search team lead'}
+- Outcome: ${intent.outcome || goal}
+- Why now: ${intent.why_now || 'Raised in this week\'s search review'}
+- Success signal: ${intent.success || signal}
 
 ## Goal
 ${goal}

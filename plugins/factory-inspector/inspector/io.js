@@ -105,6 +105,7 @@ function layout(root) {
     inspect: path.join(f, 'inspect'),
     register: path.join(f, 'inspect', 'register.json'),
     config: path.join(f, 'inspect', 'config.json'),
+    hookErrors: path.join(f, 'inspect', 'hook-errors.jsonl'), // the inspector's own hook failures (unsealed: its own file)
     job: (id) => ({
       dir: path.join(f, 'jobs', id),
       state: path.join(f, 'jobs', id, 'state.json'),

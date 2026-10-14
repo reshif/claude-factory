@@ -21,4 +21,7 @@ The page shows:
 - **Recipe map.** The whole factory as a floor plan for any recipe.
 - **The crew.** All 19 agents, with how often each ran in these jobs.
 
-Never edit the page or `.factory/` to change what it shows. Re-run `factory console` to refresh it.
+## Watching live
+If the user wants to watch a job as it runs (or asks for the console while a job is active), serve it instead: run `factory console --serve` **in the background** (it keeps running; with the Bash tool, set `run_in_background`). Its first output line gives the `serving` URL (`http://127.0.0.1:4477/` by default; `--port 0` picks a free port). Give the user that URL. The page then updates by itself as the hooks and the CLI write to `.factory/`, with a pulsing **live** flag: new steps play in if they're watching the latest moment, and their place is kept if they're scrubbing back. It listens on this machine only and is still read-only. Don't start a second one if one is already serving.
+
+Never edit the page or `.factory/` to change what it shows. Re-run `factory console` to refresh a static page.

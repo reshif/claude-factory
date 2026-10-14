@@ -7,10 +7,38 @@
 
 const { readJson, writeJson, layout } = require('./io');
 
-const DEFAULTS = { version: 1, mode: 'on', sample_every: 10, settle_after: 20, threshold: 3, recipes: {} };
+// Thresholds for the factory-wide and per-job health rules (R10–R19). Edit them in
+// .factory/inspect/config.json under "limits"; switch rules off with "rules_off"
+// (a rule id like "R18.slow_reply" or a family like "R18").
+const LIMITS = {
+  hook_errors: 1, // the same hook failure seen this many times
+  guard_denials_per_job: 5,
+  stop_blocks_per_job: 2,
+  replies_refused_per_job: 2,
+  replies_unparsed_per_job: 2,
+  cli_failures: 3, // the same command failing with the same code in one job
+  stale_results_per_job: 2,
+  workflow_errors_per_job: 2,
+  agent_retries_per_job: 4,
+  agent_failures_per_job: 2,
+  escalations_per_job: 2,
+  step_failures: 3, // the same step recorded as failed (prove/challenge are R6's)
+  orphan_agent_minutes: 120,
+  parks_per_job: 3,
+  resumes_per_job: 3,
+  idle_hours: 72,
+  reply_hours: 48,
+  questions_dropped_per_job: 3, // clarify questions over budget or re-asked, dropped by the CLI
+};
+const DEFAULTS = { version: 1, mode: 'on', sample_every: 10, settle_after: 20, threshold: 3, recipes: {}, limits: LIMITS, rules_off: [] };
 
 function load(root) {
-  return { ...DEFAULTS, ...(readJson(layout(root).config, {}) || {}) };
+  const file = readJson(layout(root).config, {}) || {};
+  return { ...DEFAULTS, ...file, limits: { ...LIMITS, ...(file.limits || {}) }, rules_off: file.rules_off || [] };
+}
+
+function ruleOn(cfg, rule) {
+  return !(cfg.rules_off || []).some((p) => rule === p || rule.startsWith(`${p}.`));
 }
 
 function save(root, cfg) {
@@ -77,4 +105,4 @@ function setMode(cfg, target, mode, every) {
   return cfg;
 }
 
-module.exports = { load, save, recipeCfg, modeFor, shouldInspect, rearmIfChanged, suggestions, setMode, DEFAULTS };
+module.exports = { load, save, recipeCfg, modeFor, shouldInspect, rearmIfChanged, suggestions, setMode, ruleOn, DEFAULTS, LIMITS };
