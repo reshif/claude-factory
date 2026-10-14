@@ -1,0 +1,8 @@
+{
+  "name": "factory",
+  "version": "0.9.0",
+  "description": "Software Factory v2 — a grounded orchestrator: outcome contracts, deterministic CLI routing, CLI-enforced floors per risk, evidence bound to builds, human gates, and telemetry for a monthly human review.",
+  "author": { "name": "Firdous" },
+  "keywords": ["software-factory", "orchestrator", "workflows", "verification", "code-review", "governance"],
+  "license": "MIT"
+}

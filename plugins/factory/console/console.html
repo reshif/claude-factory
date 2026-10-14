@@ -1,0 +1,2613 @@
+<title>Software Factory Console</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Big+Shoulders+Display:wght@600;800&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&family=Overpass:wght@700;800&display=swap">
+<style>
+/* A signal box for the Software Factory. The live line is a street: every step of the job's
+   recipe is a stop, stages meet at intersections with signals, the request drives through,
+   fix rounds take the detour. The recipe map is the same factory as a floor plan. */
+:root {
+  --paper: #eef1ef;
+  --sheet: #fafbfa;
+  --bay: #e4e9e6;
+  --ink: #17201e;
+  --muted: #5b6965;
+  --rule: #cbd4d0;
+  --track: #1f6f63;
+  --track-soft: #dcebe7;
+  --signal: #9a6400;
+  --signal-soft: #f6e9cc;
+  --stop: #b5412d;
+  --stop-soft: #f6dfd9;
+  --live: #2d5ea6;
+  --live-soft: #dfe8f6;
+  --skill: #6b5aa6;
+  --skill-soft: #ebe7f6;
+  --asphalt: #d3dad7;
+  --asphalt-edge: #b4bfbb;
+  --lane: #fbfcfb;
+  --sig-housing: #1c2422;
+  --sig-rim: #3a4541;
+  --sig-off: #3b4541;
+  --sig-green: #17a463;
+  --sig-amber: #f2a900;
+  --sig-red: #df3f2b;
+  --ped: #ff7a1a;
+  --sign: #1f6f63;
+  --sign-ink: #f4f7f5;
+  --detour: #f2b01e;
+  --detour-ink: #1c2422;
+  --m-opus: #7a5af5;
+  --m-sonnet: #2d7fd6;
+  --m-haiku: #0f9d8a;
+  --grain-o: 0.035;
+  --display: "Big Shoulders Display", "Arial Narrow", "Roboto Condensed", sans-serif;
+  --body: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+  --road: "Overpass", "Arial Narrow", "Helvetica Neue", sans-serif;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --paper: #0f1513; --sheet: #161e1c; --bay: #131a18; --ink: #e2e9e6; --muted: #95a49f; --rule: #2c3936;
+    --track: #4fb3a2; --track-soft: #173430; --signal: #e3a83a; --signal-soft: #3a2e14;
+    --stop: #e2735f; --stop-soft: #3d1f19; --live: #82a9ea; --live-soft: #1b2a42;
+    --skill: #b3a4ec; --skill-soft: #272241;
+    --asphalt: #222c2a; --asphalt-edge: #34413e; --lane: #5d6c67;
+    --sig-housing: #070b0a; --sig-rim: #2c3936; --sig-off: #1e2725; --sig-green: #3ddc8c; --sig-amber: #ffc23d; --sig-red: #ff6650; --ped: #ff9640;
+    --sign: #1d5e54; --sign-ink: #e9f2ee; --detour: #e3a83a; --detour-ink: #14100a;
+    --m-opus: #a993ff; --m-sonnet: #6aaeff; --m-haiku: #3fd1bb; --grain-o: 0.05;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --paper: #0f1513; --sheet: #161e1c; --bay: #131a18; --ink: #e2e9e6; --muted: #95a49f; --rule: #2c3936;
+  --track: #4fb3a2; --track-soft: #173430; --signal: #e3a83a; --signal-soft: #3a2e14;
+  --stop: #e2735f; --stop-soft: #3d1f19; --live: #82a9ea; --live-soft: #1b2a42;
+  --skill: #b3a4ec; --skill-soft: #272241;
+  --asphalt: #222c2a; --asphalt-edge: #34413e; --lane: #5d6c67;
+  --sig-housing: #070b0a; --sig-rim: #2c3936; --sig-off: #1e2725; --sig-green: #3ddc8c; --sig-amber: #ffc23d; --sig-red: #ff6650; --ped: #ff9640;
+  --sign: #1d5e54; --sign-ink: #e9f2ee; --detour: #e3a83a; --detour-ink: #14100a;
+  --m-opus: #a993ff; --m-sonnet: #6aaeff; --m-haiku: #3fd1bb; --grain-o: 0.05;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body { background: var(--paper); color: var(--ink); font: 15px/1.55 var(--body); }
+body::before { content: ""; position: fixed; inset: 0; pointer-events: none; z-index: 0; opacity: var(--grain-o);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E"); }
+.wrap { position: relative; z-index: 1; max-width: 1480px; margin: 0 auto; padding-inline: 20px; padding-block: 20px 56px; }
+@media (max-width: 560px) { .wrap { padding-inline: 16px; } }
+h1, h2, h3 { margin: 0; text-wrap: balance; }
+code, .mono { font-family: var(--mono); font-size: 0.86em; }
+button { font: inherit; color: inherit; }
+:focus-visible { outline: 2px solid var(--live); outline-offset: 2px; }
+
+.top { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 16px; border-bottom: 2px solid var(--ink); padding-bottom: 12px; }
+.brand .eyebrow { font: 500 12px/1 var(--mono); letter-spacing: 0.12em; text-transform: uppercase; color: var(--muted); display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: center; }
+.brand h1 { font: 800 clamp(32px, 5vw, 50px)/0.95 var(--display); text-transform: uppercase; margin-top: 6px; }
+.flag { display: inline-block; font: 600 10.5px/1.35 var(--mono); letter-spacing: 0.08em; padding: 3px 7px; border-radius: 2px; border: 1px solid currentColor; }
+.flag.sample { color: var(--signal); }
+.flag.ok { color: var(--track); } .flag.bad { color: var(--stop); } .flag.unk { color: var(--muted); }
+.tabs { display: flex; gap: 4px; flex-wrap: wrap; }
+.tab { border: 1px solid var(--rule); background: var(--sheet); padding: 8px 14px; border-radius: 2px; cursor: pointer; font-weight: 500; }
+.tab[aria-selected="true"] { background: var(--ink); color: var(--paper); border-color: var(--ink); }
+.lede { color: var(--muted); max-width: 76ch; margin: 12px 0 0; }
+.label { font: 500 11px/1.2 var(--mono); letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted); }
+.panel { background: var(--sheet); border: 1px solid var(--rule); border-radius: 3px; }
+
+/* ---------- live line: jobs */
+.jobs { display: flex; gap: 10px; overflow-x: auto; scroll-snap-type: x proximity; padding: 14px 2px 6px; margin-top: 4px; }
+.jobcard { flex: 0 0 248px; scroll-snap-align: start; text-align: left; display: grid; gap: 6px; padding: 10px 12px 11px; background: var(--sheet); border: 1px solid var(--rule); border-radius: 4px; cursor: pointer; position: relative; }
+.jobcard:hover { border-color: var(--muted); }
+.jobcard[aria-pressed="true"] { border: 2px solid var(--ink); padding: 9px 11px 10px; }
+.jobcard .jt { display: flex; justify-content: space-between; gap: 8px; align-items: baseline; }
+.jobcard .jid { font: 500 12px var(--mono); color: var(--muted); font-variant-numeric: tabular-nums; }
+.jobcard .jr { font: 500 10.5px var(--mono); color: var(--muted); border: 1px solid var(--rule); padding: 1px 6px; border-radius: 999px; white-space: nowrap; }
+.jobcard .jn { font-weight: 600; font-size: 14px; line-height: 1.3; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; min-height: 2.6em; }
+.jobcard .jb { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.jobcard .jw { font: 600 11px var(--mono); letter-spacing: 0.06em; text-transform: uppercase; }
+.lamps { display: inline-flex; gap: 3px; align-items: center; background: var(--sig-housing); padding: 3px 5px; border-radius: 8px; }
+.lamps i { width: 7px; height: 7px; border-radius: 50%; background: var(--sig-off); display: block; }
+.lamps i.done, .lamps i.auto { background: var(--sig-green); }
+.lamps i.running { background: var(--sig-amber); }
+.lamps i.waiting { background: var(--sig-amber); animation: blink 1s steps(1) infinite; }
+.lamps i.failed, .lamps i.blocked { background: var(--sig-red); }
+.lamps i.skipped, .lamps i.none { background: transparent; box-shadow: inset 0 0 0 1px var(--sig-rim); }
+.w-done { color: var(--track); } .w-running { color: var(--signal); } .w-waiting { color: var(--signal); } .w-failed, .w-blocked { color: var(--stop); } .w-pending, .w-skipped { color: var(--muted); }
+
+.jobhead { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px 24px; align-items: end; margin: 14px 0 8px; }
+@media (max-width: 860px) { .jobhead { grid-template-columns: minmax(0, 1fr); } }
+.jobhead h2 { font: 800 clamp(24px, 3.4vw, 34px)/1.02 var(--display); text-transform: uppercase; }
+.jobhead .meta { display: flex; flex-wrap: wrap; gap: 4px 14px; color: var(--muted); font-size: 13px; margin-top: 6px; }
+.odo { display: flex; gap: 6px; flex-wrap: wrap; }
+.odo div { background: var(--sig-housing); color: #e8efe9; border-radius: 4px; padding: 6px 10px 5px; min-width: 76px; display: grid; gap: 2px; }
+.odo b { font: 800 22px/1 var(--display); font-variant-numeric: tabular-nums; letter-spacing: 0.02em; display: inline-block; }
+.odo b.tick { animation: tick 260ms ease-out; }
+.odo span { font: 500 9.5px/1 var(--mono); letter-spacing: 0.12em; text-transform: uppercase; color: #9fb0aa; }
+@keyframes tick { from { transform: translateY(-5px); opacity: .3; } to { transform: none; opacity: 1; } }
+
+.siglegend { display: flex; flex-wrap: wrap; gap: 6px 18px; align-items: center; font-size: 12.5px; color: var(--muted); margin: 6px 0 8px; }
+.siglegend span { display: inline-flex; align-items: center; gap: 7px; }
+.siglegend svg { overflow: visible; }
+
+/* ---------- live line: street */
+.line { display: grid; grid-template-columns: minmax(0, 1fr); gap: 14px; align-items: start; }
+@media (min-width: 1780px) { .line { grid-template-columns: minmax(0, 1fr) 360px; } }
+@media (max-width: 1779px) { .line .now { max-height: none; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); column-gap: 28px; } .line .now > * { grid-column: 1; } .line .now > .logwrap { grid-column: 2; grid-row: 1 / span 30; align-self: start; } }
+@media (max-width: 860px) { .line .now { grid-template-columns: minmax(0, 1fr); } .line .now > .logwrap { grid-column: 1; grid-row: auto; } }
+.logwrap { display: grid; gap: 8px; min-width: 0; }
+.logwrap .log { max-height: 420px; }
+.street { position: relative; overflow-x: auto; overflow-y: hidden; border: 1px solid var(--rule); border-radius: 4px; background: var(--paper);
+  background-image: radial-gradient(var(--rule) 1px, transparent 1px); background-size: 24px 24px; scrollbar-width: thin; }
+.street svg { display: block; }
+.transport { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 10px 14px; align-items: center; margin-top: 10px; padding: 10px 12px; }
+@media (max-width: 700px) { .transport { grid-template-columns: minmax(0, 1fr); } }
+.tbtns { display: flex; gap: 4px; align-items: center; flex-wrap: wrap; }
+.tbtns button { border: 1px solid var(--rule); background: var(--paper); border-radius: 3px; padding: 6px 10px; cursor: pointer; min-width: 36px; font-weight: 600; line-height: 1.2; }
+.tbtns button.primary { background: var(--ink); color: var(--paper); border-color: var(--ink); min-width: 92px; }
+.tbtns button[aria-pressed="true"] { background: var(--live-soft); border-color: var(--live); color: var(--live); }
+.speed { display: inline-flex; border: 1px solid var(--rule); border-radius: 3px; overflow: hidden; margin-left: 6px; }
+.speed button { border: 0; border-radius: 0; min-width: 34px; padding: 6px 7px; background: var(--paper); font: 500 12px var(--mono); }
+.speed button[aria-pressed="true"] { background: var(--ink); color: var(--paper); }
+.scrub { position: relative; height: 34px; min-width: 0; }
+.scrub .rail { position: absolute; left: 0; right: 0; top: 13px; height: 6px; border-radius: 3px; background: var(--bay); border: 1px solid var(--rule); }
+.scrub .fill { position: absolute; left: 0; top: 13px; height: 6px; border-radius: 3px; background: var(--live); }
+.scrub .tk { position: absolute; top: 9px; width: 2px; height: 14px; margin-left: -1px; background: var(--muted); opacity: .55; pointer-events: none; }
+.scrub .tk.gate { width: 9px; height: 9px; top: 11.5px; margin-left: -4.5px; transform: rotate(45deg); background: var(--signal); opacity: 1; border-radius: 1px; }
+.scrub .tk.fail { background: var(--stop); opacity: 1; width: 3px; }
+.scrub .tk.loop { background: var(--stop); opacity: 1; width: 3px; height: 20px; top: 6px; }
+.scrub .tk.agents { background: var(--track); opacity: .8; }
+.scrub .st { position: absolute; top: 25px; font: 500 9px var(--mono); color: var(--muted); transform: translateX(-50%); pointer-events: none; }
+.scrub input { position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; opacity: 0; cursor: pointer; }
+.scrub .head { position: absolute; top: 8px; width: 16px; height: 16px; margin-left: -8px; border-radius: 50%; background: var(--sheet); border: 3px solid var(--live); pointer-events: none; }
+.scrub input:focus-visible ~ .head { outline: 2px solid var(--live); outline-offset: 2px; }
+.clock { font: 500 12.5px var(--mono); font-variant-numeric: tabular-nums; color: var(--muted); white-space: nowrap; text-align: right; }
+
+/* street svg */
+.st-street text { font-family: var(--body); }
+.road-bed { fill: var(--asphalt); }
+.road-edge { stroke: var(--asphalt-edge); stroke-width: 1.5; }
+.road-dash { stroke: var(--lane); stroke-width: 1.6; stroke-dasharray: 9 9; fill: none; }
+.stopline { fill: var(--lane); }
+.zebra rect { fill: var(--lane); }
+.stem { stroke: var(--muted); stroke-width: 1.2; stroke-dasharray: 2 3; opacity: .7; }
+.signpost { fill: var(--sign); }
+.signtext { font: 800 13px var(--road); fill: var(--sign-ink); letter-spacing: 0.04em; text-transform: uppercase; }
+.signnum { font: 800 13px var(--road); fill: var(--sign-ink); opacity: .7; }
+.signrule { stroke: var(--rule); stroke-width: 1; }
+.signrule.done { stroke: var(--sig-green); stroke-width: 2; }
+.card { cursor: pointer; }
+.card .cbox { fill: var(--sheet); stroke: var(--rule); stroke-width: 1.2; }
+.card .cbar { fill: var(--muted); }
+.card.k-skill .cbar { fill: var(--skill); } .card.k-workflow .cbar { fill: var(--track); } .card.k-cli .cbar { fill: var(--live); }
+.card.k-gate .cbar, .card.k-merge .cbar, .card.k-start .cbar { fill: var(--signal); }
+.card .ck { font: 500 9px var(--mono); letter-spacing: 0.1em; text-transform: uppercase; fill: var(--muted); }
+.card .ct { font: 800 17px var(--display); text-transform: uppercase; fill: var(--ink); letter-spacing: 0.01em; }
+.card .cs, .st-street .cs { font: 400 10px var(--mono); fill: var(--muted); }
+.card .cw { font: 600 9.5px var(--mono); letter-spacing: 0.08em; text-transform: uppercase; fill: var(--muted); }
+.card.s-done .cw, .card.s-auto .cw { fill: var(--track); }
+.card.s-running .cw, .card.s-waiting .cw { fill: var(--signal); }
+.card.s-failed .cw, .card.s-blocked .cw { fill: var(--stop); }
+.card.s-running .cbox { stroke: var(--sig-amber); stroke-width: 2; }
+.card.s-waiting .cbox { stroke: var(--sig-amber); stroke-width: 2; stroke-dasharray: 5 3; }
+.card.s-failed .cbox, .card.s-blocked .cbox { stroke: var(--sig-red); stroke-width: 2; }
+.card.s-skipped { opacity: 0.55; }
+.card.s-skipped .cbox { stroke-dasharray: 3 3; }
+.card.here .cbox { stroke: var(--live); stroke-width: 2.5; }
+.card.sel .cbox { stroke: var(--ink); stroke-width: 2.5; }
+.card:hover .cbox { stroke-width: 2; }
+.card:focus { outline: none; }
+.card:focus-visible .cbox { stroke: var(--live); stroke-width: 3; }
+
+/* signals */
+.sig .housing { fill: var(--sig-housing); stroke: var(--sig-rim); stroke-width: 1; }
+.sig .plate { fill: var(--sig-housing); opacity: .35; }
+.sig .pole { fill: var(--sig-rim); }
+.sig .visor { fill: none; stroke: var(--sig-rim); stroke-width: 1.2; }
+.sig .lamp { fill: var(--sig-off); }
+.sig .halo { opacity: 0; }
+.sig.is-done .lamp.green, .sig.is-auto .lamp.green { fill: var(--sig-green); }
+.sig.is-done .halo.green, .sig.is-auto .halo.green { opacity: .32; fill: var(--sig-green); }
+.sig.is-running .lamp.amber, .sig.is-waiting .lamp.amber { fill: var(--sig-amber); }
+.sig.is-running .halo.amber { fill: var(--sig-amber); animation: breathe 1.6s ease-in-out infinite; }
+.sig.is-waiting .lamp.amber { animation: blink 1s steps(1) infinite; }
+.sig.is-failed .lamp.red, .sig.is-blocked .lamp.red { fill: var(--sig-red); }
+.sig.is-failed .halo.red, .sig.is-blocked .halo.red { opacity: .32; fill: var(--sig-red); }
+.sig.is-skipped .housing, .sig.is-none .housing { opacity: .35; }
+.sig .bag { fill: none; stroke: var(--muted); stroke-width: 1; stroke-dasharray: 3 2; display: none; }
+.sig.is-skipped .bag, .sig.is-none .bag { display: inline; }
+.sig .glyph { fill: var(--sig-off); }
+.sig.ped .hand { fill: var(--sig-off); }
+.sig.ped .walk { fill: var(--sig-off); }
+.sig.ped.is-waiting .hand { fill: var(--ped); animation: blink 1s steps(1) infinite; }
+.sig.ped.is-failed .hand, .sig.ped.is-blocked .hand { fill: var(--sig-red); }
+.sig.ped.is-done .walk, .sig.ped.is-auto .walk { fill: var(--sig-green); }
+.siglabel { font: 600 8.5px var(--mono); letter-spacing: 0.1em; text-transform: uppercase; fill: var(--muted); }
+.siglabel.is-waiting, .siglabel.is-running { fill: var(--signal); } .siglabel.is-failed, .siglabel.is-blocked { fill: var(--stop); } .siglabel.is-done { fill: var(--track); }
+@keyframes breathe { 0%, 100% { opacity: .18; } 50% { opacity: .48; } }
+@keyframes blink { 0%, 49% { opacity: 1; } 50%, 100% { opacity: .15; } }
+
+/* agents */
+.achip .abox { fill: var(--track-soft); stroke: var(--track); stroke-width: 1; }
+.achip.ro .abox { stroke-dasharray: 3 2; }
+.achip .aname { font: 500 10.5px var(--mono); fill: var(--track); }
+.achip .acount { font: 600 10.5px var(--mono); fill: var(--ink); font-variant-numeric: tabular-nums; }
+.achip .afail { fill: var(--sig-red); }
+.achip.failed .abox { stroke: var(--sig-red); }
+.achip .aretry { font: 600 10px var(--mono); fill: var(--signal); }
+.achip.more .abox { fill: transparent; stroke: var(--rule); }
+.achip.more .aname { fill: var(--muted); }
+.achip.pop { animation: pop 520ms cubic-bezier(.2, .8, .2, 1.2) both; }
+@keyframes pop { from { opacity: 0; transform: translateY(-6px); } to { opacity: 1; transform: none; } }
+.mdl rect { rx: 3px; }
+.mdl.opus rect { fill: var(--m-opus); } .mdl.sonnet rect { fill: var(--m-sonnet); } .mdl.haiku rect { fill: var(--m-haiku); } .mdl.other rect { fill: var(--muted); }
+.mdl text { font: 700 9px var(--mono); fill: #fff; }
+.crewstrip { font: 500 9.5px var(--mono); fill: var(--muted); }
+
+/* route, detours, vehicle */
+.trail { fill: none; stroke: var(--live); stroke-width: 3.2; stroke-linecap: round; opacity: .55; }
+.trail.loopt { stroke: var(--stop); }
+.detour { fill: none; stroke: var(--stop); stroke-width: 1.8; stroke-dasharray: 7 5; opacity: .9; }
+.dsign rect { fill: var(--detour); stroke: var(--detour-ink); stroke-width: 1; }
+.dsign .din { fill: none; stroke: var(--detour-ink); stroke-width: .8; opacity: .6; }
+.dsign text { font: 800 11px var(--road); fill: var(--detour-ink); letter-spacing: 0.05em; }
+.dnote { font: 500 10px var(--mono); fill: var(--stop); }
+.mile rect { fill: var(--sheet); stroke: var(--asphalt-edge); }
+.mile text { font: 600 9.5px var(--mono); fill: var(--muted); font-variant-numeric: tabular-nums; }
+.startline text, .finish text { font: 800 12px var(--road); fill: var(--muted); letter-spacing: 0.08em; }
+.chk { fill: var(--ink); }
+.car .body { fill: var(--live); stroke: var(--sheet); stroke-width: 1.5; }
+.car .glass { fill: var(--sheet); opacity: .85; }
+.car .beam { fill: url(#beam); }
+.car .brake { fill: var(--sig-red); opacity: .25; }
+.car.braking .brake { opacity: 1; }
+.plate rect { fill: var(--ink); }
+.plate text { font: 600 10px var(--mono); fill: var(--paper); }
+
+/* ---------- flow canvas */
+.street { overflow: auto; max-height: min(78vh, 940px); overscroll-behavior: contain; }
+.street .flowhead { position: sticky; top: 0; z-index: 2; display: block; }
+.headbg { fill: var(--sheet); }
+.flowhead { border-bottom: 1px solid var(--rule); }
+.band { fill: transparent; }
+.band.alt { fill: var(--bay); opacity: .6; }
+.band.insp { fill: var(--stop-soft); opacity: .35; }
+.lane { stroke: var(--rule); stroke-dasharray: 2 5; }
+.crewrule { stroke: var(--rule); }
+.colhead { font: 600 9.5px var(--mono); letter-spacing: .12em; fill: var(--muted); }
+.colsub { font: 400 10px var(--mono); fill: var(--muted); }
+.stagebar { fill: var(--rule); }
+.stagebar.is-done, .stagebar.is-auto { fill: var(--sig-green); }
+.stagebar.is-running { fill: var(--sig-amber); }
+.stagebar.is-waiting { fill: var(--sig-amber); animation: blink 1s steps(1) infinite; }
+.stagebar.is-failed, .stagebar.is-blocked { fill: var(--sig-red); }
+.stephead { cursor: pointer; }
+.stephead:focus { outline: none; }
+.stephead:focus-visible .steplabel { fill: var(--live); }
+.steplabel { font: 600 9.5px var(--mono); fill: var(--ink); letter-spacing: .04em; }
+.signpost.insp { fill: var(--stop); }
+.dayline { stroke: var(--ink); opacity: .2; }
+.daylabel { font: 600 10px var(--mono); fill: var(--ink); text-transform: uppercase; letter-spacing: .06em; }
+.tclock { font: 500 11px var(--mono); fill: var(--muted); font-variant-numeric: tabular-nums; }
+.gap { font: 500 10px var(--mono); fill: var(--signal); }
+.seg .ghost { fill: none; stroke: none; }
+.seg .line { fill: none; stroke: var(--live); stroke-width: 2.6; stroke-linecap: round; stroke-linejoin: round; }
+.seg.back .line { stroke: var(--stop); stroke-width: 3; }
+.seg.halt .line { stroke: var(--muted); }
+.seg.park .line { stroke: var(--signal); }
+.seg.amendl .line { stroke: var(--skill); stroke-width: 3; }
+.seglabel { transition: opacity 200ms; }
+.seglabel rect { fill: var(--sheet); stroke: var(--stop); }
+.seglabel text { font: 600 10.5px var(--mono); fill: var(--stop); }
+.seglabel.amendl rect { stroke: var(--skill); }
+.seglabel.amendl text { fill: var(--skill); }
+.rowhl { fill: transparent; }
+.frow.current .rowhl { fill: var(--live-soft); opacity: .55; }
+.fnode { cursor: pointer; }
+.fnode:focus { outline: none; }
+.fnode:focus-visible .nshape { stroke: var(--live); stroke-width: 3.5; }
+.fnode .nshape { fill: var(--sheet); stroke: var(--muted); stroke-width: 2.2; }
+.fnode.s-done .nshape, .fnode.s-auto .nshape { fill: var(--track); stroke: var(--sheet); }
+.fnode.s-running .nshape { fill: var(--live); stroke: var(--sheet); }
+.fnode.s-waiting .nshape, .fnode.s-parked .nshape { fill: var(--signal); stroke: var(--sheet); }
+.fnode.s-failed .nshape, .fnode.s-blocked .nshape { fill: var(--stop); stroke: var(--sheet); }
+.fnode.s-again .nshape { fill: var(--sheet); stroke: var(--signal); }
+.fnode .nglyph { fill: none; stroke: #fff; stroke-width: 2; stroke-linecap: round; }
+.fnode .nletter { font: 800 10px var(--mono); fill: #fff; }
+.fnode .pulse { fill: none; stroke: none; transform-box: fill-box; transform-origin: center; }
+.fnode.here.s-waiting .pulse { stroke: var(--sig-amber); stroke-width: 2.5; animation: ring 1.4s ease-out infinite; }
+.fnode.here.s-running .pulse { stroke: var(--live); stroke-width: 2.5; animation: ring 1.6s ease-out infinite; }
+@keyframes ring { from { transform: scale(.55); opacity: .95; } to { transform: scale(1.35); opacity: 0; } }
+.rtitle { font: 600 13.5px var(--body); fill: var(--ink); }
+.rtag rect { fill: var(--paper); stroke: var(--rule); }
+.rtag text { font: 600 9.5px var(--mono); fill: var(--muted); }
+.rtag.hot rect { fill: var(--stop-soft); stroke: var(--stop); }
+.rtag.hot text { fill: var(--stop); }
+.rline > text { font: 400 12.5px var(--body); fill: var(--muted); }
+.rline.ok > text { fill: var(--track); }
+.rline.bad > text, .rline.warn > text { fill: var(--stop); }
+.rline.ask > text, .rline.park > text { fill: var(--signal); }
+.rline.you > text { fill: var(--ink); }
+.rline.you.bad > text { fill: var(--stop); }
+.rline.wf > text { font: 500 11px var(--mono); fill: var(--track); }
+.rline.why > text { font: 500 11px var(--mono); fill: var(--live); }
+.rline.why.back > text { fill: var(--stop); }
+.rline.amend > text { fill: var(--skill); }
+.rline.cmd > text { font: 500 11px var(--mono); fill: var(--stop); opacity: .85; }
+.rline.quote > text { fill: var(--ink); font-style: italic; }
+.rline.linkable { cursor: pointer; }
+.rline.link > text { fill: var(--live); text-decoration: underline; }
+.icard .ibox { fill: var(--sheet); stroke: var(--rule); }
+.icard .ibar { fill: var(--muted); }
+.icard.sev-high .ibar, .icard.sev-critical .ibar { fill: var(--stop); }
+.icard.sev-medium .ibar { fill: var(--signal); }
+.icard .ihead { font: 600 11px var(--mono); fill: var(--ink); }
+.icard .itext { font: 400 11.5px var(--body); fill: var(--ink); }
+.icard .irule { font: 500 9.5px var(--mono); fill: var(--muted); }
+.icard .iconn { fill: none; stroke: var(--signal); stroke-dasharray: 2 4; opacity: .7; }
+.icard.sev-high .iconn { stroke: var(--stop); }
+.icard.st-fixed, .icard.st-wont_fix { opacity: .55; }
+.puck .core { fill: var(--live); stroke: var(--sheet); stroke-width: 2.5; }
+.puck .halo { fill: var(--live); opacity: .16; }
+.achip .afailt { fill: var(--stop); font-weight: 600; }
+
+/* now panel */
+.now { padding: 14px 16px; display: grid; gap: 12px; align-content: start; max-height: 640px; overflow-y: auto; }
+.now h3 { font: 600 18px/1.3 var(--body); }
+.now p { margin: 0; font-size: 14px; color: var(--muted); }
+.nowtop { display: flex; justify-content: space-between; gap: 10px; align-items: center; }
+.state-word { font: 600 11px var(--mono); letter-spacing: 0.08em; text-transform: uppercase; padding: 3px 7px; border-radius: 2px; border: 1px solid currentColor; }
+.checks { display: flex; flex-wrap: wrap; gap: 4px; }
+.checks span { font: 500 10.5px/1 var(--mono); padding: 4px 6px; border-radius: 2px; border: 1px solid var(--rule); color: var(--muted); }
+.checks span.pass { border-color: var(--track); color: var(--track); background: var(--track-soft); }
+.checks span.fail { border-color: var(--stop); color: var(--stop); background: var(--stop-soft); }
+.alist { display: grid; gap: 4px; }
+.arow { display: grid; grid-template-columns: 18px minmax(0, 1fr) auto; gap: 8px; align-items: center; font-size: 13px; padding: 5px 8px; border: 1px solid var(--rule); border-radius: 3px; background: var(--paper); }
+.arow .mdot { width: 16px; height: 16px; border-radius: 3px; display: grid; place-items: center; font: 700 9px var(--mono); color: #fff; background: var(--muted); }
+.mdot.opus { background: var(--m-opus); } .mdot.sonnet { background: var(--m-sonnet); } .mdot.haiku { background: var(--m-haiku); } .mdot.none { background: transparent; border: 1px dashed var(--rule); color: var(--muted); }
+.arow b { font: 500 12.5px var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.arow .o { font: 500 11px var(--mono); color: var(--muted); white-space: nowrap; }
+.arow .o.bad { color: var(--stop); } .arow .o.good { color: var(--track); }
+.log { margin: 0; padding: 0; list-style: none; display: grid; gap: 1px; font-size: 13px; max-height: 260px; overflow-y: auto; }
+.log button { width: 100%; text-align: left; display: grid; grid-template-columns: 70px 66px minmax(0, 1fr); gap: 6px; align-items: baseline; padding: 4px 6px; border: 0; border-left: 3px solid transparent; background: transparent; cursor: pointer; border-radius: 2px; }
+.log button:hover { background: var(--paper); }
+.log button[aria-current="true"] { background: var(--live-soft); border-left-color: var(--live); }
+.log .lt { font: 500 11px var(--mono); color: var(--muted); font-variant-numeric: tabular-nums; }
+.log .lw { font: 600 10px/1.6 var(--mono); letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); }
+.log .lw.route { color: var(--live); } .log .lw.you { color: var(--signal); } .log .lw.agents { color: var(--track); } .log .lw.bad { color: var(--stop); } .log .lw.ok { color: var(--track); }
+.back { justify-self: start; border: 1px solid var(--rule); background: var(--paper); border-radius: 3px; padding: 4px 10px; cursor: pointer; font-size: 13px; }
+
+/* below the line */
+.below { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 14px; margin-top: 16px; }
+.below .panel { padding: 14px 16px; display: grid; gap: 10px; align-content: start; min-width: 0; }
+.below h3 { font: 800 18px/1 var(--display); text-transform: uppercase; }
+.tbl { width: 100%; border-collapse: collapse; font-size: 13px; }
+.tbl th { font: 500 10.5px var(--mono); letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); text-align: left; padding: 4px 6px 6px; border-bottom: 1px solid var(--rule); }
+.tbl td { padding: 6px; border-bottom: 1px solid var(--rule); vertical-align: top; }
+.tbl td.n { font-family: var(--mono); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.tblwrap { overflow-x: auto; }
+.sev { font: 600 10px var(--mono); text-transform: uppercase; letter-spacing: 0.06em; padding: 2px 5px; border-radius: 2px; border: 1px solid currentColor; white-space: nowrap; }
+.sev.blocker, .sev.major { color: var(--stop); } .sev.minor { color: var(--muted); }
+.stt { font: 500 11px var(--mono); }
+.stt.confirmed, .stt.fail { color: var(--stop); } .stt.refuted, .stt.done, .stt.pass { color: var(--track); }
+
+.empty { padding: 26px 20px; display: grid; gap: 12px; justify-items: start; margin-top: 16px; }
+.empty h2 { font: 800 28px/1 var(--display); text-transform: uppercase; }
+.empty p { margin: 0; color: var(--muted); max-width: 64ch; }
+.cmd { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.cmd code { background: var(--paper); border: 1px solid var(--rule); padding: 6px 10px; border-radius: 3px; font-size: 13px; }
+.cmd button, .linkbtn { border: 1px solid var(--rule); background: var(--sheet); border-radius: 3px; padding: 5px 10px; cursor: pointer; font-size: 13px; }
+
+/* ---------- recipe map (floor plan) */
+.toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px 18px; margin: 16px 0 10px; }
+.picker { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.picker button { border: 1px solid var(--rule); background: var(--sheet); padding: 5px 11px; border-radius: 999px; cursor: pointer; font: 500 12.5px/1.3 var(--mono); }
+.picker button[aria-pressed="true"] { border-color: var(--track); background: var(--track); color: var(--sheet); }
+.tools-row { display: flex; gap: 6px; flex-wrap: wrap; }
+.tools-row button { border: 1px solid var(--rule); background: var(--sheet); padding: 6px 11px; border-radius: 2px; cursor: pointer; font-weight: 500; min-width: 38px; }
+.tools-row button.primary { background: var(--ink); color: var(--paper); border-color: var(--ink); }
+.recipe-note { color: var(--muted); font-size: 14px; margin: 0 0 10px; }
+.plant { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 14px; align-items: stretch; }
+@media (max-width: 1000px) { .plant { grid-template-columns: minmax(0, 1fr); } }
+.canvas { position: relative; height: clamp(460px, 74vh, 860px); border: 1px solid var(--rule); border-radius: 3px; overflow: hidden; background: var(--paper);
+  background-image: radial-gradient(var(--rule) 1px, transparent 1px); background-size: 22px 22px; touch-action: pan-y; cursor: grab; }
+.canvas.dragging { cursor: grabbing; }
+.canvas svg { display: block; width: 100%; height: 100%; }
+.hint { position: absolute; left: 10px; top: 8px; font: 500 11px var(--mono); color: var(--muted); background: var(--sheet); padding: 3px 7px; border-radius: 2px; border: 1px solid var(--rule); pointer-events: none; }
+.nowcap { position: absolute; right: 10px; top: 8px; font: 600 12.5px var(--body); color: var(--paper); background: var(--ink); padding: 5px 10px; border-radius: 3px; pointer-events: none; max-width: calc(100% - 20px); }
+.side { padding: 16px; display: grid; gap: 12px; align-content: start; max-height: clamp(460px, 74vh, 860px); overflow-y: auto; }
+.side h3 { font: 600 18px/1.3 var(--body); }
+.side p { margin: 0; font-size: 14px; color: var(--muted); }
+.kindtag { display: inline-block; font: 500 10.5px/1 var(--mono); letter-spacing: 0.08em; text-transform: uppercase; padding: 4px 6px; border-radius: 2px; border: 1px solid currentColor; }
+.k-workflow { color: var(--track); } .k-gate, .k-you { color: var(--signal); } .k-cli { color: var(--live); } .k-skill { color: var(--skill); } .k-artifact, .k-stage { color: var(--muted); } .k-agent { color: var(--track); }
+.chips { display: flex; flex-wrap: wrap; gap: 5px; }
+.chip { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--rule); background: var(--paper); padding: 2px 8px; border-radius: 999px; font: 500 12px/1.6 var(--mono); }
+.chip.agent { border-color: var(--track); color: var(--track); background: var(--track-soft); }
+.chip.agent.read { border-style: dashed; }
+.chip.cli { border-color: var(--live); color: var(--live); background: var(--live-soft); }
+.chip.you { border-color: var(--signal); color: var(--signal); background: var(--signal-soft); }
+.chip.skill { border-color: var(--skill); color: var(--skill); background: var(--skill-soft); }
+.chip.off { opacity: 0.45; }
+.agentrow { display: grid; gap: 3px; padding: 8px 10px; border: 1px solid var(--rule); border-radius: 3px; background: var(--paper); }
+.agentrow b { font: 500 13px var(--mono); }
+.agentrow span { font-size: 12.5px; color: var(--muted); }
+.agentrow .t { font: 500 11px var(--mono); color: var(--muted); }
+.legend { display: flex; flex-wrap: wrap; gap: 8px 16px; font-size: 12.5px; color: var(--muted); margin-top: 10px; align-items: center; }
+.legend span { display: inline-flex; align-items: center; gap: 6px; }
+.sw { width: 14px; height: 10px; border-radius: 2px; border: 1.5px solid; display: inline-block; }
+svg text { font-family: var(--body); }
+.zone rect.bay { fill: var(--bay); stroke: var(--rule); }
+.zone.dim rect.bay { opacity: 0.45; }
+.zone.dim text { opacity: 0.5; }
+.zone .num { font: 800 30px var(--display); fill: var(--muted); opacity: .55; }
+.zone .zname { font: 800 22px var(--display); fill: var(--ink); text-transform: uppercase; letter-spacing: 0.02em; }
+.zone .zsub { font: 500 10.5px var(--mono); fill: var(--muted); }
+.zone .hit { fill: transparent; cursor: pointer; }
+.node { cursor: pointer; }
+.node .box { fill: var(--sheet); stroke-width: 1.5; }
+.node.workflow .box { stroke: var(--track); }
+.node.cli .box { stroke: var(--live); }
+.node.skill .box { stroke: var(--skill); }
+.node.you .box { stroke: var(--signal); fill: var(--signal-soft); }
+.node.artifact .box { stroke: var(--muted); stroke-dasharray: 4 3; fill: var(--paper); }
+.node.agentnode .box { stroke: var(--track); }
+.node.gate .box { fill: transparent; stroke: transparent; }
+.node .type { font: 500 9.5px var(--mono); letter-spacing: 0.1em; text-transform: uppercase; }
+.node.workflow .type, .node.agentnode .type { fill: var(--track); } .node.cli .type { fill: var(--live); } .node.skill .type { fill: var(--skill); }
+.node.you .type, .node.gate .type { fill: var(--signal); } .node.artifact .type { fill: var(--muted); }
+.node .title { font: 600 13px var(--body); fill: var(--ink); }
+.node .sub { font: 400 11.5px var(--body); fill: var(--muted); }
+.node .diamond { fill: var(--signal-soft); stroke: var(--signal); stroke-width: 2; }
+.node:hover .box, .node:focus-visible .box { stroke-width: 2.5; }
+.node.gate:hover .box, .node.gate:focus-visible .box { stroke: var(--signal); stroke-width: 1.5; stroke-dasharray: 3 3; }
+.node:focus { outline: none; }
+.node.sel .box, .node.sel .diamond { stroke: var(--live); stroke-width: 3; stroke-dasharray: none; }
+.node.dim { opacity: 0.25; }
+.node.token-here .box, .node.token-here .diamond { stroke: var(--live); stroke-width: 3; stroke-dasharray: none; }
+.pill rect { stroke-width: 1.2; }
+.pill.agent rect { fill: var(--track-soft); stroke: var(--track); }
+.pill.agent.read rect { stroke-dasharray: 3 2; }
+.pill.cli rect { fill: var(--live-soft); stroke: var(--live); }
+.pill.you rect { fill: var(--signal-soft); stroke: var(--signal); }
+.pill text { font: 500 10.5px var(--mono); }
+.pill.agent text { fill: var(--track); } .pill.cli text { fill: var(--live); } .pill.you text { fill: var(--signal); }
+.pill.off { opacity: 0.4; }
+.pill.off text { text-decoration: line-through; }
+.bus { fill: none; stroke: var(--muted); stroke-width: 1.2; }
+.edge { fill: none; stroke: var(--muted); stroke-width: 1.6; }
+.edge.loop { stroke: var(--stop); stroke-dasharray: 6 4; }
+.edge.human { stroke: var(--signal); stroke-dasharray: 5 4; }
+.edge.flow { stroke: var(--ink); stroke-width: 2.4; }
+.edge.dim, .wire.dim { opacity: 0.18; }
+.edge-g.dim { opacity: 0.18; }
+.elabel { font: 500 10.5px var(--mono); }
+.elabel.loop { fill: var(--stop); } .elabel.human { fill: var(--signal); } .elabel.plain { fill: var(--muted); }
+.elabel-bg { fill: var(--paper); }
+.rail rect.band { fill: var(--sheet); stroke: var(--ink); stroke-width: 1.5; }
+.rail .rname { font: 800 20px var(--display); fill: var(--ink); text-transform: uppercase; }
+.rail .rsub { font: 400 12px var(--body); fill: var(--muted); }
+.rail .tag rect { fill: var(--paper); stroke: var(--rule); }
+.rail .tag text { font: 500 11px var(--mono); fill: var(--ink); }
+.rail.enf rect.band { stroke: var(--stop); }
+.wire { stroke: var(--ink); stroke-dasharray: 2 4; stroke-width: 1.2; }
+.token circle.core { fill: var(--live); stroke: var(--sheet); stroke-width: 2; }
+.token circle.halo { fill: var(--live); opacity: 0.22; }
+
+/* ---------- crew */
+.crew { display: grid; gap: 22px; margin-top: 20px; }
+.crew-group h2 { font: 800 22px/1 var(--display); text-transform: uppercase; display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.crew-group h2 small { font: 500 12px var(--mono); text-transform: none; color: var(--muted); }
+.agents { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 10px; margin-top: 10px; }
+.agent-card { padding: 12px 14px; display: grid; gap: 8px; align-content: start; }
+.agent-card .name { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+.agent-card .name b { font: 500 14px var(--mono); }
+.badge { font: 500 10.5px/1 var(--mono); letter-spacing: 0.06em; text-transform: uppercase; padding: 4px 6px; border-radius: 2px; }
+.badge.write { color: var(--stop); background: var(--stop-soft); }
+.badge.read { color: var(--track); background: var(--track-soft); }
+.agent-card p { margin: 0; font-size: 13.5px; color: var(--muted); }
+.agent-card .used { font: 500 11.5px var(--mono); color: var(--track); }
+.agent-card .used.none { color: var(--muted); }
+.tools { display: flex; flex-wrap: wrap; gap: 4px; }
+.tools span { font: 500 11px var(--mono); border: 1px solid var(--rule); padding: 1px 6px; border-radius: 2px; }
+.foot { margin-top: 28px; padding-top: 14px; border-top: 1px solid var(--rule); color: var(--muted); font-size: 13px; max-width: 86ch; }
+
+@media (prefers-reduced-motion: reduce) {
+  .sig .halo, .sig .lamp, .sig .hand, .lamps i, .achip.pop, .odo b.tick { animation: none !important; }
+  .sig.is-waiting .lamp.amber, .sig.ped.is-waiting .hand { stroke: var(--ink); stroke-width: 1.5; }
+}
+</style>
+
+<div class="wrap">
+  <header class="top">
+    <div class="brand">
+      <div class="eyebrow"><span>Software Factory · read-only</span><span id="flags"></span></div>
+      <h1>Factory Console</h1>
+    </div>
+    <div class="tabs" role="tablist" aria-label="Views">
+      <button class="tab" role="tab" id="tab-live" aria-controls="view-live" aria-selected="true">Live line</button>
+      <button class="tab" role="tab" id="tab-plan" aria-controls="view-plan" aria-selected="false" tabindex="-1">Recipe map</button>
+      <button class="tab" role="tab" id="tab-crew" aria-controls="view-crew" aria-selected="false" tabindex="-1">The crew</button>
+    </div>
+  </header>
+
+  <!-- LIVE LINE -->
+  <section id="view-live" role="tabpanel" aria-labelledby="tab-live">
+    <div class="jobs" id="jobs" role="group" aria-label="Jobs"></div>
+    <div id="live-body">
+      <div class="jobhead">
+        <div>
+          <h2 id="j-title"></h2>
+          <div class="meta" id="j-meta"></div>
+        </div>
+        <div class="odo" id="odo" aria-live="off"></div>
+      </div>
+      <div class="siglegend" id="siglegend"></div>
+      <div class="line">
+        <div>
+          <div class="street" id="street" tabindex="0" aria-label="The job's flow: stages left to right, time top to bottom"></div>
+          <div class="panel transport">
+            <div class="tbtns">
+              <button type="button" id="t-prev" aria-label="Previous event" title="Previous event (←)">⏮</button>
+              <button type="button" id="t-play" class="primary">▶ Replay</button>
+              <button type="button" id="t-next" aria-label="Next event" title="Next event (→)">⏭</button>
+              <span class="speed" role="group" aria-label="Speed" id="speed"></span>
+              <button type="button" id="t-follow" aria-pressed="true" title="Keep the request in view">Follow</button>
+              <button type="button" id="t-zoom" aria-pressed="true" title="Fit the canvas to the width, or show it at full size">Fit</button>
+            </div>
+            <div class="scrub" id="scrub">
+              <div class="rail"></div><div class="fill" id="s-fill"></div>
+              <div id="s-ticks"></div>
+              <input type="range" id="s-range" min="0" max="1000" value="1000" aria-label="Timeline">
+              <div class="head" id="s-head"></div>
+            </div>
+            <div class="clock" id="clock"></div>
+          </div>
+        </div>
+        <aside class="panel now" id="now" aria-live="polite"></aside>
+      </div>
+      <div class="below" id="below"></div>
+    </div>
+    <div id="live-empty" hidden></div>
+  </section>
+
+  <!-- RECIPE MAP -->
+  <section id="view-plan" role="tabpanel" aria-labelledby="tab-plan" hidden>
+    <p class="lede">The same factory as a floor plan, for any recipe: each bay is a stage with the skills Claude follows, the workflows that put agents together, the CLI steps that decide and record, and the gates where you decide. Click anything to see what it does.</p>
+    <div class="toolbar">
+      <div class="picker" id="picker" role="group" aria-label="Recipe"></div>
+      <div class="tools-row">
+        <button type="button" id="z-out" aria-label="Zoom out">−</button>
+        <button type="button" id="z-in" aria-label="Zoom in">+</button>
+        <button type="button" id="z-fit">Fit</button>
+        <button type="button" id="z-play" class="primary">Run a request</button>
+      </div>
+    </div>
+    <p class="recipe-note" id="recipe-note"></p>
+    <div class="plant">
+      <div class="canvas" id="canvas">
+        <svg id="svg" role="group" aria-label="Factory floor plan">
+          <defs>
+            <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" style="fill: var(--muted)"></path></marker>
+            <marker id="arr-ink" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" style="fill: var(--ink)"></path></marker>
+            <marker id="arr-loop" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" style="fill: var(--stop)"></path></marker>
+            <marker id="arr-human" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" style="fill: var(--signal)"></path></marker>
+          </defs>
+          <g id="world"></g>
+        </svg>
+        <div class="hint">drag or shift + scroll to pan · ctrl + scroll or pinch to zoom · + − 0 keys</div>
+        <div class="nowcap" id="nowcap" hidden></div>
+      </div>
+      <aside class="panel side" id="side" aria-live="polite"></aside>
+    </div>
+    <div class="legend">
+      <span><span class="sw" style="border-color: var(--skill)"></span>skill: instructions Claude follows</span>
+      <span><span class="sw" style="border-color: var(--track)"></span>workflow and its agents</span>
+      <span><span class="sw" style="border-color: var(--track); border-style: dashed"></span>read-only agent</span>
+      <span><span class="sw" style="border-color: var(--live)"></span>factory CLI: decides and records</span>
+      <span><span class="sw" style="border-color: var(--signal)"></span>you: gates and replies</span>
+      <span><span class="sw" style="border-color: var(--stop); border-style: dashed"></span>loop back</span>
+    </div>
+  </section>
+
+  <!-- THE CREW -->
+  <section id="view-crew" role="tabpanel" aria-labelledby="tab-crew" hidden>
+    <p class="lede">Nineteen agents, each with one role and its own tool limits. Workflows start them by agent type, so a reviewer can't write and a builder can only touch its task's paths. The guard hook enforces the rest.</p>
+    <div class="crew" id="crew"></div>
+  </section>
+
+  <p class="foot" id="foot"></p>
+</div>
+
+<script>
+// ===================================================================== definitions
+const AGENTS = {
+  'intent-analyst': ['Clarify', 'Reads the draft contract from one angle and asks only what the repo can\'t answer.', ['Read', 'Grep', 'Glob', 'Bash'], false],
+  'judge': ['Clarify', 'Merges the analysts\' questions, dismisses with reasons, never re-asks.', ['Read'], false],
+  'god-eye': ['Critique', 'Cold reviewer of the contract, design or plan. Approves only what someone could act on without asking.', ['Read', 'Grep', 'Glob', 'Bash'], false],
+  'researcher': ['Ground', 'Grounds one topic; every claim is cited or marked UNVERIFIED.', ['Read', 'Grep', 'Glob', 'Bash', 'WebFetch', 'WebSearch'], false],
+  'option-generator': ['Decide', 'Proposes one design optimised for one prior, without hedging.', ['Read', 'Grep', 'Glob', 'Bash'], false],
+  'threat-modeler': ['Decide', 'Writes the threat model before the design is decided.', ['Read', 'Grep', 'Glob', 'Bash', 'Write'], true],
+  'architect': ['Decide', 'Decides from findings, options and threats; writes the ADR or no-adr note.', ['Read', 'Grep', 'Glob', 'Bash', 'Write', 'Edit'], true],
+  'planner': ['Plan', 'Writes task contracts and validates them with the CLI.', ['Read', 'Grep', 'Glob', 'Bash', 'Write', 'Edit'], true],
+  'slicer': ['Plan', 'Splits an epic into slices, S00 first.', ['Read', 'Grep', 'Glob', 'Bash', 'Write', 'Edit'], true],
+  'builder': ['Build', 'Builds one task in its own worktree, only inside its allowed paths, and commits on its branch.', ['Read', 'Grep', 'Glob', 'Bash', 'Write', 'Edit'], true],
+  'tester': ['Build', 'Runs factory task verify independently and never edits code.', ['Read', 'Grep', 'Glob', 'Bash'], false],
+  'integrator': ['Build', 'Merges task branches through the CLI; resolves only textual conflicts.', ['Read', 'Grep', 'Glob', 'Bash', 'Edit'], true],
+  'code-reviewer': ['Challenge', 'Correctness, error handling, fit with the codebase, accepted lessons.', ['Read', 'Grep', 'Glob', 'Bash'], false],
+  'test-reviewer': ['Challenge', 'Whether the tests really prove the criteria.', ['Read', 'Grep', 'Glob', 'Bash'], false],
+  'security-reviewer': ['Challenge', 'Injection, authorisation, secrets, dependencies, threat-model mitigations.', ['Read', 'Grep', 'Glob', 'Bash'], false],
+  'ux-reviewer': ['Challenge', 'States, accessibility and copy when UI files changed.', ['Read', 'Grep', 'Glob', 'Bash'], false],
+  'finding-verifier': ['Challenge', 'Confirms or refutes one serious finding, sceptical both ways.', ['Read', 'Grep', 'Glob', 'Bash'], false],
+  'epic-reviewer': ['Challenge', 'Checks merged slices against frozen contracts and ADRs.', ['Read', 'Grep', 'Glob', 'Bash'], false],
+  'lesson-writer': ['Learn', 'Turns confirmed problems into at most three scoped lessons.', ['Read', 'Grep', 'Glob', 'Bash'], false],
+};
+
+const RECIPES = {
+  'bug@low': { note: 'Small, low-risk fixes: one task built straight from the contract, code review only.', steps: ['clarify','H1','ground','decompose','realize','reconcile','prove','challenge','ship','H4','distill','close'], lanes: ['code'] },
+  'feature@low': { note: 'Low-risk features: a planned task graph, and God Eye\'s plan critique can approve H3 for you.', steps: ['clarify','H1','ground','decompose','H3','realize','reconcile','prove','challenge','ship','H4','distill','close'], lanes: ['code', 'tests'] },
+  'standard@medium': { note: 'The default at medium risk: a grounded design with critique, a validated plan, three review lanes.', steps: ['clarify','H1','ground','decide','H2','decompose','H3','realize','reconcile','prove','challenge','ship','H4','distill','close'], lanes: ['code', 'tests', 'security'] },
+  'full@high': { note: 'High risk: threat model, your approval of design and plan, every lane before merge, sign-off before ship.', steps: ['clarify','H1','ground','decide','H2','decompose','H3','realize','reconcile','prove','challenge','HS','ship','H4','distill','close'], lanes: ['code', 'tests', 'security', 'ux'], threat: true },
+  'hotfix@high': { note: 'Hotfix: high-risk floors, grounding scoped to the failing path, and a second review after merge.', steps: ['clarify','H1','ground','decide','H2','decompose','H3','realize','reconcile','prove','challenge','HS','ship','H4','post_merge_challenge','distill','close'], lanes: ['code', 'tests', 'security', 'ux'], threat: true },
+  'spike': { note: 'A research question: grounded findings and a recommendation you accept. No code ships.', steps: ['clarify','H1','ground','decide','HF','close'], lanes: [] },
+  'epic': { note: 'Too large for one job: contracts freeze first, then each slice runs as its own job with its own recipe.', steps: ['clarify','EH1','ground','decide','EH2','decompose','EH3','children','epic_gate','challenge','distill','close'], lanes: ['conformance'] },
+};
+
+// pill: [label, kind, role?, gate?]   gate: a key checked against the recipe (lane:x, threat)
+const P = (label, kind, role, gate) => ({ label, kind, role, gate });
+
+const STAGES = [
+  { id: 'request', name: 'Request', sub: 'skills: start · intake', gapAfter: 50,
+    what: 'You ask for something. Claude follows the start skill: it reads the repo, proposes a work type, a risk and job or epic, asks you one question, and the CLI creates the job and picks the recipe by rule.',
+    nodes: [
+      { id: 'you-request', type: 'you', title: 'You submit a request', sub: '/factory:start fix the rounding in invoice totals',
+        detail: { what: 'The only entry point. Everything after this is chosen by the router, never improvised.', you: ['/factory:start <request>'] } },
+      { id: 'skill-start', type: 'skill', title: 'factory:start', sub: 'The driver loop: run factory next, do what it says, repeat',
+        detail: { what: 'Claude\'s instructions for the whole run. It never picks the next step itself: it runs factory next and carries out the action (a workflow, a CLI command, a skill, a gate, a wait).', skills: ['factory:start'], cmds: ['factory doctor', 'factory init (first time)', 'factory next'] } },
+      { id: 'skill-intake', type: 'skill', title: 'factory:intake', sub: 'Classify work type, propose risk, job or epic; one question to you',
+        detail: { what: 'Reads the repo briefly, proposes a work type and risk with reasons, decides job or epic, and asks you one confirming question.', skills: ['factory:intake'], you: ['confirm or change type, risk, job vs epic'] } },
+      { id: 'cli-new', type: 'cli', title: 'factory job new', sub: 'Recipe chosen by rule from work type + risk; policy can only raise risk',
+        detail: { what: 'Creates the job branch, the contract template and a sealed snapshot of the rulebook the job promises to follow.', cmds: ['factory job new --title … --type … --risk …'], outputs: ['state.json (sealed)', 'recipe.lock.json (sealed rulebook)', 'contract.md template', 'branch factory/J-0007'] } },
+    ] },
+  { id: 'contract', name: 'Contract', sub: 'skill: clarify · workflow: fanout-judge', gapAfter: 50,
+    what: 'The request becomes an outcome contract: a goal, acceptance criteria with evidence types, allowed paths and verify commands. Agents only ask what the repo can\'t answer; you approve the exact text.',
+    nodes: [
+      { id: 'skill-clarify', type: 'skill', title: 'factory:clarify', sub: 'Claude drafts contract.md from your request and the repo', step: 'clarify',
+        detail: { what: 'Fills every section, answers what the repo can answer, and runs factory contract check before any agent sees it.', skills: ['factory:clarify'], cmds: ['factory contract check'], outputs: ['contract.md draft'] } },
+      { id: 'wf-clarify', type: 'workflow', title: 'fanout-judge · clarify', step: 'clarify',
+        groups: [[P('analyst · ambiguity', 'agent', 'intent-analyst'), P('analyst · constraints', 'agent', 'intent-analyst'), P('analyst · testability', 'agent', 'intent-analyst')], [P('judge', 'agent', 'judge')], [P('god-eye · intent', 'agent', 'god-eye')]],
+        detail: { what: 'Three analysts read the contract in parallel, each from one angle. The judge merges, dismisses with reasons and never re-asks. Only when no questions are left does God Eye read it cold.', agents: ['intent-analyst', 'judge', 'god-eye'], cmds: ['factory wfargs fanout-judge --config clarify', 'factory record'], outputs: ['questions for you, or an approved contract'], floors: 'contract_approved' } },
+      { id: 'you-answer', type: 'you', title: 'You answer questions', sub: 'Only what the repo can\'t answer; at most 7, then 3', step: 'clarify',
+        detail: { what: 'Your answers go into the contract and the round runs again. Rounds are capped; a contract that won\'t converge parks.', you: ['answers in chat'] } },
+      { id: 'gate-H1', type: 'gate', title: 'H1 · You approve the contract', step: 'H1', alt: 'EH1',
+        detail: { what: 'Approval is bound to the contract\'s hash, and risk is part of that hash. Change it later and the router sends you to an amendment.', you: ['approve', 'deny <what must change>'], floors: 'contract_approved' } },
+    ],
+    edges: [['wf-clarify', 'you-answer', 'human', 'questions'], ['you-answer', 'wf-clarify', 'loopR', 'answers'], ['wf-clarify', 'gate-H1', 'skipL', 'God Eye approves']],
+    noAuto: ['wf-clarify>you-answer', 'you-answer>gate-H1'] },
+  { id: 'design', name: 'Ground & design', sub: 'workflows: ground · fanout-judge', gapAfter: 50,
+    what: 'Facts before decisions. Researchers cite every claim; independent option generators propose designs; the architect decides and God Eye critiques the result cold.',
+    nodes: [
+      { id: 'wf-ground', type: 'workflow', title: 'ground', step: 'ground',
+        groups: [[P('researcher · codebase', 'agent', 'researcher'), P('researcher · interfaces', 'agent', 'researcher'), P('researcher · history', 'agent', 'researcher'), P('researcher · external', 'agent', 'researcher')], [P('CLI · findings.md', 'cli')]],
+        detail: { what: 'Probes run in parallel and retry once. Every claim is file:line, command output or URL, or it is marked UNVERIFIED. A blocking unknown comes to you as a question.', agents: ['researcher'], cmds: ['factory wfargs ground', 'factory record', 'factory answer'], outputs: ['findings.md'], floors: 'ground (medium and high)' } },
+      { id: 'wf-decide', type: 'workflow', title: 'fanout-judge · decide', step: 'decide',
+        groups: [[P('options · smallest', 'agent', 'option-generator'), P('options · robust', 'agent', 'option-generator'), P('options · repo-like', 'agent', 'option-generator'), P('threat-modeler', 'agent', 'threat-modeler', 'threat')], [P('architect', 'agent', 'architect')], [P('god-eye · design', 'agent', 'god-eye'), P('architect · revise', 'agent', 'architect')]],
+        detail: { what: 'Three generators each optimise for a different prior so the architect sees real alternatives. At high risk a threat modeler works alongside them. The architect writes the ADR (or explains why none is needed); God Eye critiques and the architect revises, up to two rounds.', agents: ['option-generator', 'threat-modeler', 'architect', 'god-eye'], cmds: ['factory wfargs fanout-judge --config decide', 'factory record'], outputs: ['adr-001-*.md or no-adr.md', 'threat-model.md (high risk)', 'critiques/design.json'], floors: 'design record + critique (medium+), threat model (high)' } },
+      { id: 'art-adr', type: 'artifact', title: 'ADR · threat model · critique', step: 'decide',
+        detail: { what: 'The design record, bound to its hash. Editing it later sends the job back through decide.', outputs: ['adr-001-*.md', 'threat-model.md', 'critiques/design.json'] } },
+      { id: 'gate-H2', type: 'gate', title: 'H2 · You approve the design', step: 'H2', alt: 'EH2', also: ['HF'],
+        detail: { what: 'Shown with God Eye\'s verdict and any open items. At medium risk only when there is a real decision (an ADR); always at high risk. Spikes stop here instead: HF, you accept the findings.', you: ['approve', 'deny <what must change>'], floors: 'H2 (high)' } },
+    ] },
+  { id: 'plan', name: 'Plan', sub: 'workflow: decompose', gapAfter: 50,
+    what: 'The design becomes task contracts the CLI validates: every criterion covered, no cycles, no protected paths, no two tasks in a wave touching the same files.',
+    nodes: [
+      { id: 'wf-decompose', type: 'workflow', title: 'decompose', step: 'decompose', except: ['bug@low'],
+        groups: [[P('planner', 'agent', 'planner')], [P('CLI · plan validate', 'cli')], [P('god-eye · plan', 'agent', 'god-eye')]],
+        detail: { what: 'The planner writes plan.json and runs factory plan validate until it passes (at most three rounds). The CLI computes the waves. At low risk God Eye critiques the plan and can approve H3 for you. Epics use the slicer instead.', agents: ['planner', 'slicer', 'god-eye'], cmds: ['factory wfargs decompose', 'factory plan validate', 'factory record'], outputs: ['plan.json with waves', 'slices.json (epic)'], floors: 'plan validated (medium+)' } },
+      { id: 'cli-fromcontract', type: 'cli', title: 'factory plan from-contract', sub: 'One task, T1, straight from the contract', step: 'decompose', only: ['bug@low'],
+        detail: { what: 'The bug fast path skips planning: the contract\'s allowed paths and verify commands become one task.', cmds: ['factory plan from-contract'], outputs: ['plan.json (T1)'] } },
+      { id: 'art-plan', type: 'artifact', title: 'plan.json · waves', sub: '[T1, T2] then [T3]', step: 'decompose',
+        detail: { what: 'Tasks with allowed paths, dependencies, the criteria each proves and the commands that prove them.', outputs: ['plan.json'] } },
+      { id: 'gate-H3', type: 'gate', title: 'H3 · You approve the plan', step: 'H3', alt: 'EH3',
+        detail: { what: 'Approval takes the path locks so no other job builds on the same files. In feature@low it is approved automatically when God Eye approves this exact plan.', you: ['approve', 'deny <what must change>'], floors: 'H3 (high)' } },
+    ] },
+  { id: 'build', name: 'Build', sub: 'workflows: realize · reconcile', gapAfter: 150,
+    what: 'Tasks build wave by wave, up to four at once, each in its own git worktree. Builders write and commit; independent testers run the CLI\'s verify. Then the integrator merges every task branch into the job branch.',
+    nodes: [
+      { id: 'wf-realize', type: 'workflow', title: 'realize · wave by wave', step: 'realize',
+        groups: [[P('builder · T1', 'agent', 'builder'), P('builder · T2', 'agent', 'builder')], [P('tester · T1', 'agent', 'tester'), P('tester · T2', 'agent', 'tester')], [P('builder · T3', 'agent', 'builder')], [P('tester · T3', 'agent', 'tester')]],
+        detail: { what: 'Each builder runs factory task start (its own worktree and branch), works only inside its allowed paths and commits. The tester runs factory task verify, which runs the verify commands and records evidence bound to that exact tree. Failures retry up to the task\'s limit, with an optional stronger model; a blocked task skips only its dependents.', agents: ['builder', 'tester'], cmds: ['factory wfargs realize', 'factory task start T1', 'factory task verify T1', 'factory record'], outputs: ['task branches factory/J-0007-T1…', 'evidence/*.json'], floors: 'isolation (all risks)' } },
+      { id: 'wf-reconcile', type: 'workflow', title: 'reconcile', step: 'reconcile',
+        groups: [[P('integrator', 'agent', 'integrator')], [P('CLI · reconcile run', 'cli')]],
+        detail: { what: 'The CLI merges task branches in dependency order. The integrator may resolve only textual conflicts inside the tasks\' scopes; a behavioural conflict aborts and parks the job.', agents: ['integrator'], cmds: ['factory reconcile run', 'factory reconcile continue', 'factory reconcile abort'], outputs: ['job branch factory/J-0007', 'build fingerprint'] } },
+      { id: 'cli-children', type: 'cli', title: 'factory epic spawn', sub: 'Each slice runs as its own job, in order', step: 'children', only: ['epic'],
+        detail: { what: 'Epic only: slices become child jobs with their own recipes. Tree depth is capped at 2. The epic waits until every slice has merged.', cmds: ['factory epic spawn', 'factory use J-…'] } },
+      { id: 'art-build', type: 'artifact', title: 'Job branch · fingerprint', sub: 'Everything later is bound to this exact build',
+        detail: { what: 'Any later change produces a new fingerprint, and proof and review on the old one become stale.', outputs: ['git tree fingerprint'] } },
+    ] },
+  { id: 'verify', name: 'Prove & challenge', sub: 'CLI: verify · workflow: fanout-judge', gapAfter: 50,
+    what: 'The CLI proves every criterion on the integrated build. Then reviewers attack it in parallel, and every serious finding is verified independently before it can cost a fix round.',
+    nodes: [
+      { id: 'cli-verify', type: 'cli', title: 'factory verify run', sub: 'Every command re-run; flaky passes don\'t count', step: 'prove',
+        detail: { what: 'Runs every task command, the contract\'s commands and the project checks on the integrated build, then maps results to acceptance criteria. Human-evidence criteria wait for "confirm AC-n".', cmds: ['factory verify run'], outputs: ['evidence: AC → proof'], floors: 'prove (all risks)' } },
+      { id: 'wf-challenge', type: 'workflow', title: 'fanout-judge · challenge', step: 'challenge',
+        groups: [[P('code-reviewer', 'agent', 'code-reviewer', 'lane:code'), P('test-reviewer', 'agent', 'test-reviewer', 'lane:tests'), P('security-reviewer', 'agent', 'security-reviewer', 'lane:security'), P('ux-reviewer', 'agent', 'ux-reviewer', 'lane:ux'), P('epic-reviewer', 'agent', 'epic-reviewer', 'lane:conformance')], [P('finding-verifier', 'agent', 'finding-verifier')], [P('CLI · lane verdicts', 'cli')]],
+        detail: { what: 'One reviewer per required lane. Each blocker or major finding goes to an independent verifier. The CLI, not the reviewers, decides each lane\'s verdict, and from round 2 a new major on unchanged code becomes a minor follow-up.', agents: ['code-reviewer', 'test-reviewer', 'security-reviewer', 'ux-reviewer', 'finding-verifier', 'epic-reviewer'], cmds: ['factory wfargs fanout-judge --config challenge', 'factory record'], outputs: ['reviews/round-N/scoreboard.json'], floors: 'code lane (all), tests + security (medium+), all lanes before merge (high)' } },
+      { id: 'art-review', type: 'artifact', title: 'Scoreboard', sub: 'Lanes pass · minor findings go into the report', step: 'challenge',
+        detail: { what: 'Confirmed blocker or major findings send the job back to Build for a fix round on the owning tasks only.', outputs: ['scoreboard.json'] } },
+    ],
+    cross: [['wf-challenge', 'wf-realize', 'confirmed finding', 'fix round'], ['cli-verify', 'wf-realize', 'criterion unproven', 'verify-fix round']] },
+  { id: 'ship', name: 'Ship', sub: 'skill: ship', gapAfter: 50,
+    what: 'Floors are checked before anything leaves. The CLI writes the completion report and opens the PR; CI re-verifies the merge result; only you merge.',
+    nodes: [
+      { id: 'gate-HS', type: 'gate', title: 'HS · You sign off the ship', step: 'HS',
+        detail: { what: 'High risk only: the completion report and floors table, before the irreversible step.', you: ['approve'], floors: 'irreversible sign-off (high)' } },
+      { id: 'skill-ship', type: 'skill', title: 'factory:ship', sub: 'Report, manifest, push, PR', step: 'ship',
+        detail: { what: 'factory ship refuses unless every pre-ship floor is met on this exact build. It writes completion-report.md, commits the verify manifest and opens the PR, or prepares a local merge.', skills: ['factory:ship'], cmds: ['factory ship', 'factory pr sync'], outputs: ['completion-report.md', '.factory-ship/J-0007.json', 'PR #142'] } },
+      { id: 'cli-ci', type: 'cli', title: 'CI · factory-gate', sub: 'Re-runs verify commands on the merge result', step: 'ship',
+        detail: { what: 'A GitHub check that re-verifies on the exact merge result. Without GitHub, factory ci verify does the same on your local merge.', cmds: ['factory ci verify'], floors: 'CI re-verify (all risks)' } },
+      { id: 'gate-H4', type: 'gate', title: 'H4 · You merge', step: 'H4',
+        detail: { what: 'Only you merge, on GitHub or locally then reply "merged <commit>". The merge commit is recorded.', you: ['merge on GitHub', 'merged <commit>'], floors: 'human merge (all risks)' } },
+      { id: 'wf-postmerge', type: 'workflow', title: 'post-merge review', step: 'post_merge_challenge',
+        groups: [[P('code-reviewer', 'agent', 'code-reviewer'), P('security-reviewer', 'agent', 'security-reviewer')], [P('finding-verifier', 'agent', 'finding-verifier')]],
+        detail: { what: 'Hotfix only: a fresh review of what actually landed. Confirmed problems open a linked follow-up job; the merged job is never reopened.', agents: ['code-reviewer', 'security-reviewer', 'finding-verifier'], cmds: ['factory followup'] } },
+    ] },
+  { id: 'learn', name: 'Learn & close', sub: 'skill: distill · CLI: close', gapAfter: 20,
+    what: 'Confirmed problems become scoped lessons you accept, every floor is checked on the final build, and the inspector audits the job from outside.',
+    nodes: [
+      { id: 'skill-distill', type: 'skill', title: 'factory:distill', sub: 'What went wrong, turned into rules', step: 'distill',
+        detail: { what: 'Gathers confirmed findings, verify-fix rounds and minors that recur across jobs, and starts the lesson-writer.', skills: ['factory:distill'], cmds: ['factory distill context', 'factory distill done'] } },
+      { id: 'ag-lessons', type: 'agentnode', title: 'lesson-writer', sub: 'At most 3 general, scoped lessons', step: 'distill', role: 'lesson-writer',
+        detail: { what: 'Writes lessons in the project\'s own terms with the globs they apply to. Accepted lessons reach the next plan, build and review.', agents: ['lesson-writer'], cmds: ['factory lessons add'] } },
+      { id: 'you-lesson', type: 'you', title: 'You accept or reject', sub: 'accept lesson L5 · reject lesson L5 <why>', step: 'distill',
+        detail: { what: 'Nothing is learned without you.', you: ['accept lesson L5', 'reject lesson L5 <why>'] } },
+      { id: 'cli-close', type: 'cli', title: 'factory close', sub: 'Every floor on the final build; worktrees removed', step: 'close',
+        detail: { what: 'Refuses to close unless every floor for the job\'s risk is met on the final build, including CI re-verify and your merge.', cmds: ['factory close'] } },
+      { id: 'inspector', type: 'cli', title: 'Inspector audits the job', sub: 'Optional plugin: right recipe? did Claude follow the router?',
+        detail: { what: 'An independent plugin reads the sealed rulebook and logs and reports deviations and ambiguities for you to decide on. It never blocks.', cmds: ['factory-inspect run', '/factory-inspector:inspect'] } },
+    ] },
+];
+
+const ROUTER = ['1 contract approved', '2 no drift', '3 floors so far', '4 no confirmed finding', '5 criteria proven', '6 no stale proof'];
+const ENFORCE = ['guard hook on every tool call', 'your replies applied by hook', 'Stop hook: no false "done"', 'sealed state · ledger · decisions', 'event log → inspector'];
+
+// ===================================================================== helpers
+const $ = (s, el = document) => el.querySelector(s);
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
+const NS = 'http://www.w3.org/2000/svg';
+function el(tag, attrs = {}, parent) {
+  const e = document.createElementNS(NS, tag);
+  for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, v);
+  if (parent) parent.appendChild(e);
+  return e;
+}
+const meas = document.createElement('canvas').getContext('2d');
+function textW(t, font) { meas.font = font; return meas.measureText(t).width; }
+function wrap(t, font, max) {
+  const words = String(t).split(' ');
+  const lines = [];
+  let line = '';
+  for (const w of words) {
+    const tryL = line ? `${line} ${w}` : w;
+    if (textW(tryL, font) > max && line) { lines.push(line); line = w; } else line = tryL;
+  }
+  if (line) lines.push(line);
+  return lines;
+}
+function fit(t, font, max) {
+  if (textW(t, font) <= max) return t;
+  let s = t;
+  while (s.length > 1 && textW(`${s}…`, font) > max) s = s.slice(0, -1);
+  return `${s}…`;
+}
+const FONT_T = '600 13px "IBM Plex Sans", system-ui, sans-serif';
+const FONT_S = '400 11.5px "IBM Plex Sans", system-ui, sans-serif';
+const FONT_P = '500 10.5px "IBM Plex Mono", ui-monospace, monospace';
+
+let recipe = 'standard@medium';
+try { recipe = localStorage.getItem('fc-recipe') || recipe; } catch (e) { /* storage unavailable */ }
+if (!RECIPES[recipe]) recipe = 'standard@medium';
+
+function nodeActive(n) {
+  const r = RECIPES[recipe];
+  if (n.only && !n.only.includes(recipe)) return false;
+  if (n.except && n.except.includes(recipe)) return false;
+  if (!n.step) return true;
+  return r.steps.includes(n.step) || (n.alt && r.steps.includes(n.alt)) || (n.also || []).some((s) => r.steps.includes(s));
+}
+function pillActive(p) {
+  const r = RECIPES[recipe];
+  if (!p.gate) return true;
+  if (p.gate === 'threat') return Boolean(r.threat);
+  if (p.gate.startsWith('lane:')) return r.lanes.includes(p.gate.slice(5));
+  return true;
+}
+
+// ===================================================================== layout
+const ZONE_TOP = 120;
+const HEADER = 78;
+const NODE_GAP = 34;
+const PAD = 16;
+const BASE_W = { request: 270, contract: 330, design: 360, plan: 300, build: 400, verify: 360, ship: 290, learn: 290 };
+let LAYOUT = null;
+
+function layout() {
+  const nodes = {};
+  let x = 24;
+  let maxBottom = 0;
+  for (const st of STAGES) {
+    st.x = x;
+    // a bay is as wide as its widest workflow needs, so no agent label is cut off
+    const need = Math.max(0, ...st.nodes.filter((n) => n.type === 'workflow').map((n) => {
+      n.colWs = n.groups.map((g) => Math.max(...g.map((p) => textW(p.label, FONT_P) + 20)));
+      return n.colWs.reduce((a, b) => a + b, 0) + (n.groups.length - 1) * 22 + 20 + PAD * 2;
+    }));
+    st.w = Math.ceil(Math.max(BASE_W[st.id], need));
+    const innerW = st.w - PAD * 2;
+    let y = ZONE_TOP + HEADER;
+    for (const n of st.nodes) {
+      n.stage = st.id;
+      n.x = st.x + PAD;
+      n.w = innerW;
+      if (n.type === 'gate') {
+        n.lines = wrap(n.title, FONT_T, innerW - 64);
+        n.h = Math.max(54, 18 + n.lines.length * 17 + 14);
+      } else if (n.type === 'workflow') {
+        n.titleLines = wrap(n.title, FONT_T, innerW - 20);
+        const cols = n.groups.length;
+        const colGap = 22;
+        n.colGap = colGap;
+        const spare = innerW - 20 - (cols - 1) * colGap - n.colWs.reduce((a, b) => a + b, 0);
+        n.colWs = n.colWs.map((w) => w + spare / cols);
+        const maxPills = Math.max(...n.groups.map((g) => g.length));
+        n.headH = 12 + 12 + n.titleLines.length * 17 + 8;
+        n.h = n.headH + maxPills * 28 - 6 + 14;
+      } else {
+        n.titleLines = wrap(n.title, FONT_T, innerW - 20);
+        n.subLines = n.sub ? wrap(n.sub, FONT_S, innerW - 20) : [];
+        n.h = 12 + 12 + n.titleLines.length * 17 + (n.subLines.length ? n.subLines.length * 15 + 2 : 0) + 10;
+      }
+      n.y = y;
+      y += n.h + NODE_GAP;
+      nodes[n.id] = n;
+    }
+    st.contentBottom = y - NODE_GAP;
+    maxBottom = Math.max(maxBottom, st.contentBottom);
+    x += st.w + st.gapAfter;
+  }
+  const zoneBottom = maxBottom + 26;
+  for (const st of STAGES) { st.y = ZONE_TOP; st.h = zoneBottom - ZONE_TOP; }
+  const width = x - STAGES[STAGES.length - 1].gapAfter + 24;
+  LAYOUT = { nodes, width, zoneBottom, height: zoneBottom + 120 };
+}
+
+// ===================================================================== render
+let selected = null;
+
+function drawNode(g, n, active) {
+  const ng = el('g', { class: `node ${n.type === 'agentnode' ? 'agentnode' : n.type}${active ? '' : ' dim'}${selected === n.id ? ' sel' : ''}`, tabindex: active ? 0 : -1, role: 'button', 'aria-label': `${n.title}${active ? '' : ' (not in this recipe)'}`, 'data-id': n.id }, g);
+  if (n.type === 'gate') {
+    el('rect', { class: 'box', x: n.x, y: n.y, width: n.w, height: n.h, rx: 4 }, ng);
+    const cx = n.x + 22;
+    const cy = n.y + n.h / 2;
+    el('path', { class: 'diamond', d: `M${cx},${cy - 17} L${cx + 17},${cy} L${cx},${cy + 17} L${cx - 17},${cy} Z` }, ng);
+    el('text', { class: 'type', x: n.x + 50, y: n.y + 16 }, ng).textContent = 'gate · you decide';
+    n.lines.forEach((l, i) => { el('text', { class: 'title', x: n.x + 50, y: n.y + 33 + i * 17 }, ng).textContent = l; });
+    return ng;
+  }
+  const rx = n.type === 'you' ? 16 : 4;
+  el('rect', { class: 'box', x: n.x, y: n.y, width: n.w, height: n.h, rx }, ng);
+  const typeLabel = { you: 'you', skill: 'skill', workflow: 'workflow', cli: 'factory cli', artifact: 'output', agentnode: 'agent' }[n.type];
+  el('text', { class: 'type', x: n.x + 10, y: n.y + 17 }, ng).textContent = typeLabel;
+  (n.titleLines || []).forEach((l, i) => { el('text', { class: 'title', x: n.x + 10, y: n.y + 34 + i * 17 }, ng).textContent = l; });
+  (n.subLines || []).forEach((l, i) => { el('text', { class: 'sub', x: n.x + 10, y: n.y + 34 + n.titleLines.length * 17 + i * 15 }, ng).textContent = l; });
+  if (n.type === 'workflow') drawGroups(ng, n);
+  return ng;
+}
+
+function drawGroups(g, n) {
+  const top = n.y + n.headH;
+  let cx = n.x + 10;
+  const cols = n.groups.map((grp, ci) => {
+    const x0 = cx;
+    cx += n.colWs[ci] + n.colGap;
+    const total = grp.length * 28 - 6;
+    const maxH = Math.max(...n.groups.map((gg) => gg.length)) * 28 - 6;
+    const y0 = top + (maxH - total) / 2;
+    return grp.map((p, i) => ({ p, x: x0, y: y0 + i * 28, w: n.colWs[ci], h: 22 }));
+  });
+  // buses between columns: fan-out and fan-in
+  for (let c = 0; c < cols.length - 1; c++) {
+    const a = cols[c];
+    const b = cols[c + 1];
+    const mx = a[0].x + a[0].w + n.colGap / 2;
+    const ys = [...a, ...b].map((q) => q.y + q.h / 2);
+    for (const q of a) el('path', { class: 'bus', d: `M${q.x + q.w},${q.y + 11} H${mx}` }, g);
+    el('path', { class: 'bus', d: `M${mx},${Math.min(...ys)} V${Math.max(...ys)}` }, g);
+    for (const q of b) el('path', { class: 'bus', d: `M${mx},${q.y + 11} H${q.x - 1}`, 'marker-end': 'url(#arr)' }, g);
+  }
+  for (const col of cols) {
+    for (const q of col) {
+      const ro = q.p.role && AGENTS[q.p.role] && !AGENTS[q.p.role][3];
+      const pg = el('g', { class: `pill ${q.p.kind}${ro ? ' read' : ''}${pillActive(q.p) ? '' : ' off'}` }, g);
+      el('rect', { x: q.x, y: q.y, width: q.w, height: q.h, rx: 11 }, pg);
+      el('text', { x: q.x + 9, y: q.y + 15 }, pg).textContent = fit(q.p.label, FONT_P, q.w - 14);
+      el('title', {}, pg).textContent = q.p.role ? `${q.p.label} — factory:${q.p.role}${ro ? ' · read-only' : ' · can write'}${pillActive(q.p) ? '' : ' · not in this recipe'}` : q.p.label;
+    }
+  }
+}
+
+function anchor(n, side) {
+  if (side === 'top') return [n.x + n.w / 2, n.y];
+  if (side === 'bottom') return [n.x + n.w / 2, n.y + n.h];
+  if (side === 'left') return [n.x, n.y + n.h / 2];
+  return [n.x + n.w, n.y + n.h / 2];
+}
+
+function label(g, x, y, text, kind) {
+  const w = textW(text, FONT_P) + 10;
+  el('rect', { class: 'elabel-bg', x: x - w / 2, y: y - 9, width: w, height: 16, rx: 2 }, g);
+  el('text', { class: `elabel ${kind}`, x, y: y + 3, 'text-anchor': 'middle' }, g).textContent = text;
+}
+
+function render() {
+  layout();
+  const world = $('#world');
+  world.innerHTML = '';
+  const N = LAYOUT.nodes;
+  const act = Object.fromEntries(Object.values(N).map((n) => [n.id, nodeActive(n)]));
+
+  // router rail
+  const rail = el('g', { class: 'rail' }, world);
+  el('rect', { class: 'band', x: 24, y: 14, width: LAYOUT.width - 48, height: 70, rx: 6 }, rail);
+  el('text', { class: 'rname', x: 42, y: 44 }, rail).textContent = 'Router · factory next';
+  el('text', { class: 'rsub', x: 42, y: 66 }, rail).textContent = 'Chooses every step from the job\'s sealed state. The first failing check wins; otherwise the recipe\'s next step.';
+  let tx = 42 + Math.max(textW('ROUTER · FACTORY NEXT', '800 20px "Big Shoulders Display", "Arial Narrow", "Roboto Condensed", sans-serif'), textW('Chooses every step from the job\'s sealed state. The first failing check wins; otherwise the recipe\'s next step.', '400 12px "IBM Plex Sans", "Segoe UI", system-ui, sans-serif')) + 44;
+  for (const t of ROUTER) {
+    const w = textW(t, '500 11px "IBM Plex Mono", monospace') + 18;
+    const tg = el('g', { class: 'tag' }, rail);
+    el('rect', { x: tx, y: 36, width: w, height: 24, rx: 12 }, tg);
+    el('text', { x: tx + 9, y: 52 }, tg).textContent = t;
+    tx += w + 8;
+  }
+
+  // bays
+  STAGES.forEach((st, si) => {
+    const live = st.nodes.some((n) => act[n.id]);
+    const zg = el('g', { class: `zone${live ? '' : ' dim'}`, 'data-stage': st.id }, world);
+    el('line', { class: `wire${live ? '' : ' dim'}`, x1: st.x + st.w / 2, y1: 84, x2: st.x + st.w / 2, y2: st.y }, world);
+    el('rect', { class: 'bay', x: st.x, y: st.y, width: st.w, height: st.h, rx: 6 }, zg);
+    el('text', { class: 'num', x: st.x + PAD, y: st.y + 36 }, zg).textContent = String(si + 1).padStart(2, '0');
+    el('text', { class: 'zname', x: st.x + PAD + 40, y: st.y + 33 }, zg).textContent = st.name;
+    el('text', { class: 'zsub', x: st.x + PAD, y: st.y + 58 }, zg).textContent = st.sub;
+    const hit = el('rect', { class: 'hit', x: st.x, y: st.y, width: st.w, height: 66, tabindex: 0, role: 'button', 'aria-label': `Stage ${st.name}` }, zg);
+    hit.addEventListener('click', (e) => { e.stopPropagation(); showStage(st); });
+    hit.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); showStage(st); } });
+    // hand-off chevron to the next bay
+    if (si < STAGES.length - 1) {
+      const nx = STAGES[si + 1].x;
+      const y = st.y + 30;
+      const nextLive = STAGES[si + 1].nodes.some((n) => act[n.id]);
+      el('path', { class: `edge flow${live && nextLive ? '' : ' dim'}`, d: `M${st.x + st.w + 4},${y} H${nx - 6}`, 'marker-end': 'url(#arr-ink)' }, world);
+    }
+  });
+
+  // edges inside bays
+  const edgeG = el('g', {}, world);
+  for (const st of STAGES) {
+    const auto = new Set(st.noAuto || []);
+    for (let i = 0; i < st.nodes.length - 1; i++) {
+      const a = st.nodes[i];
+      const b = st.nodes[i + 1];
+      if (auto.has(`${a.id}>${b.id}`)) continue;
+      const [x1, y1] = anchor(a, 'bottom');
+      const [, y2] = anchor(b, 'top');
+      const dim = !(act[a.id] && act[b.id]);
+      el('path', { class: `edge${dim ? ' dim' : ''}`, d: `M${x1},${y1 + 2} V${y2 - 3}`, 'marker-end': 'url(#arr)' }, edgeG);
+    }
+    for (const [from, to, kind, text] of st.edges || []) {
+      const a = N[from];
+      const b = N[to];
+      const dim = !(act[a.id] && act[b.id]);
+      if (kind === 'human') {
+        const [x1, y1] = anchor(a, 'bottom');
+        const [, y2] = anchor(b, 'top');
+        el('path', { class: `edge human${dim ? ' dim' : ''}`, d: `M${x1},${y1 + 2} V${y2 - 3}`, 'marker-end': 'url(#arr-human)' }, edgeG);
+        label(edgeG, x1, (y1 + y2) / 2, text, 'human');
+      } else if (kind === 'loopR') {
+        const [x1, y1] = anchor(a, 'right');
+        const [x2, y2] = anchor(b, 'right');
+        const mx = st.x + st.w - 5;
+        el('path', { class: `edge human${dim ? ' dim' : ''}`, d: `M${x1},${y1} H${mx} V${y2} H${x2 + 3}`, 'marker-end': 'url(#arr-human)' }, edgeG);
+        if (!dim) {
+          const lg = el('g', { transform: `translate(${mx},${(y1 + y2) / 2}) rotate(-90)` }, edgeG);
+          label(lg, 0, 0, text, 'human');
+        }
+      } else if (kind === 'skipL') {
+        const [x1, y1] = anchor(a, 'left');
+        const x2 = b.type === 'gate' ? b.x + 5 : b.x;
+        const y2 = b.y + b.h / 2;
+        const mx = st.x + 6;
+        el('path', { class: `edge${dim ? ' dim' : ''}`, d: `M${x1},${y1} H${mx} V${y2} H${x2 - 2}`, 'marker-end': 'url(#arr)' }, edgeG);
+        if (!dim) {
+          const lg = el('g', { transform: `translate(${mx},${y2 - 46}) rotate(-90)` }, edgeG);
+          label(lg, 0, 0, text, 'plain');
+        }
+      }
+    }
+  }
+  // loop-backs between bays
+  for (const st of STAGES) {
+    (st.cross || []).forEach(([from, to, why, what], ci) => {
+      const a = N[from];
+      const b = N[to];
+      const dim = !(act[a.id] && act[b.id]);
+      const [x1, y1] = anchor(a, 'left');
+      const [x2, y2c] = anchor(b, 'right');
+      const y2 = y2c + (ci === 0 ? -14 : 14);
+      const g = el('g', { class: dim ? 'edge-g dim' : 'edge-g' }, edgeG);
+      el('path', { class: 'edge loop', d: `M${x1 - 2},${y1} C${x1 - 70},${y1} ${x2 + 70},${y2} ${x2 + 4},${y2}`, 'marker-end': 'url(#arr-loop)' }, g);
+      const mx = (x1 + x2) / 2;
+      const my = (y1 + y2) / 2 + (ci === 0 ? -22 : 22);
+      if (!dim) { label(g, mx, my - 9, why, 'loop'); label(g, mx, my + 9, `→ ${what}`, 'loop'); }
+    });
+  }
+
+  // nodes on top
+  const nodeG = el('g', {}, world);
+  for (const st of STAGES) for (const n of st.nodes) {
+    const ng = drawNode(nodeG, n, act[n.id]);
+    ng.addEventListener('click', (e) => { e.stopPropagation(); select(n.id); });
+    ng.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); select(n.id); } });
+  }
+
+  // enforcement rail
+  const er = el('g', { class: 'rail enf' }, world);
+  const ey = LAYOUT.zoneBottom + 30;
+  el('rect', { class: 'band', x: 24, y: ey, width: LAYOUT.width - 48, height: 64, rx: 6 }, er);
+  el('text', { class: 'rname', x: 42, y: ey + 28 }, er).textContent = 'Always on · enforcement';
+  el('text', { class: 'rsub', x: 42, y: ey + 50 }, er).textContent = 'Agents propose; the CLI, hooks and CI decide.';
+  let ex = 42 + Math.max(textW('ALWAYS ON · ENFORCEMENT', '800 20px "Big Shoulders Display", "Arial Narrow", "Roboto Condensed", sans-serif'), textW('Agents propose; the CLI, hooks and CI decide.', '400 12px "IBM Plex Sans", "Segoe UI", system-ui, sans-serif')) + 44;
+  for (const t of ENFORCE) {
+    const w = textW(t, '500 11px "IBM Plex Mono", monospace') + 18;
+    const tg = el('g', { class: 'tag' }, er);
+    el('rect', { x: ex, y: ey + 20, width: w, height: 24, rx: 12 }, tg);
+    el('text', { x: ex + 9, y: ey + 36 }, tg).textContent = t;
+    ex += w + 8;
+  }
+
+  // token layer (for "Run a request")
+  el('g', { id: 'token-layer' }, world);
+  $('#svg').setAttribute('aria-label', `Factory floor plan for recipe ${recipe}`);
+}
+
+// ===================================================================== inspector panel
+function agentRows(names) {
+  return names.filter((a) => AGENTS[a]).map((a) => {
+    const [, role, tools, write] = AGENTS[a];
+    return `<div class="agentrow"><b>factory:${esc(a)}</b><span>${esc(role)}</span><span class="t">${tools.join(' · ')} — ${write ? 'can write' : 'read-only'}</span></div>`;
+  }).join('');
+}
+function inRecipes(n) {
+  return Object.keys(RECIPES).filter((r) => {
+    const keep = recipe;
+    recipe = r;
+    const ok = nodeActive(n);
+    recipe = keep;
+    return ok;
+  });
+}
+function showNode(n) {
+  const d = n.detail || {};
+  const st = STAGES.find((s) => s.id === n.stage);
+  const kind = n.type === 'agentnode' ? 'agent' : n.type;
+  const parts = [`<div><span class="kindtag k-${kind}">${kind === 'cli' ? 'factory cli' : kind}</span> <span class="label">stage ${STAGES.indexOf(st) + 1} · ${esc(st.name)}</span></div>`, `<h3>${esc(n.title)}</h3>`, `<p>${esc(d.what || '')}</p>`];
+  if (d.agents) parts.push(`<div class="label">Agents it puts together</div>${agentRows(d.agents)}`);
+  if (d.skills) parts.push(`<div class="label">Skills Claude follows</div><div class="chips">${d.skills.map((s) => `<span class="chip skill">${esc(s)}</span>`).join('')}</div>`);
+  if (d.cmds) parts.push(`<div class="label">Commands</div><div class="chips">${d.cmds.map((s) => `<span class="chip cli">${esc(s)}</span>`).join('')}</div>`);
+  if (d.you) parts.push(`<div class="label">Your part</div><div class="chips">${d.you.map((s) => `<span class="chip you">${esc(s)}</span>`).join('')}</div>`);
+  if (d.outputs) parts.push(`<div class="label">Produces</div><div class="chips">${d.outputs.map((s) => `<span class="chip">${esc(s)}</span>`).join('')}</div>`);
+  if (d.floors) parts.push(`<div class="label">Floor</div><p>${esc(d.floors)}</p>`);
+  const rs = inRecipes(n);
+  parts.push(`<div class="label">Runs in</div><div class="chips">${Object.keys(RECIPES).map((r) => `<span class="chip${rs.includes(r) ? '' : ' off'}">${esc(r)}</span>`).join('')}</div>`);
+  $('#side').innerHTML = parts.join('');
+}
+function showStage(st) {
+  selected = null;
+  document.querySelectorAll('.node.sel').forEach((x) => x.classList.remove('sel'));
+  const nodes = st.nodes.filter(nodeActive);
+  const agents = [...new Set(st.nodes.flatMap((n) => (n.detail && n.detail.agents) || []))];
+  const skills = [...new Set(st.nodes.flatMap((n) => (n.detail && n.detail.skills) || []))];
+  $('#side').innerHTML = `<div><span class="kindtag k-stage">stage ${STAGES.indexOf(st) + 1}</span></div><h3>${esc(st.name)}</h3><p>${esc(st.what)}</p>
+    <div class="label">In ${esc(recipe)}</div><div class="chips">${nodes.map((n) => `<span class="chip">${esc(n.title)}</span>`).join('') || '<span class="chip off">not used by this recipe</span>'}</div>
+    ${skills.length ? `<div class="label">Skills</div><div class="chips">${skills.map((s) => `<span class="chip skill">${esc(s)}</span>`).join('')}</div>` : ''}
+    ${agents.length ? `<div class="label">Agents</div>${agentRows(agents)}` : ''}`;
+}
+function showIntro() {
+  $('#side').innerHTML = `<div class="label">How to read it</div><h3>From your request to a merged change</h3>
+    <p>Left to right, eight stages. Inside each, top to bottom, what happens in order. Above them all, the router picks every step; along the bottom, enforcement that never switches off.</p>
+    <p>Workflow boxes show their agents: a column runs in parallel, the lines show fan-out and fan-in. Red dashed curves are the loops back to Build when review or proof fails.</p>
+    <p>Click a stage name or any box for details, or press <b>Run a request</b> to follow one through ${esc(recipe)}.</p>`;
+}
+function select(id) {
+  selected = id;
+  document.querySelectorAll('.node').forEach((x) => x.classList.toggle('sel', x.dataset.id === id));
+  showNode(LAYOUT.nodes[id]);
+  if (window.innerWidth <= 1000 && !run) $('#side').scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+}
+
+// ===================================================================== pan + zoom
+const view = { s: 1, x: 0, y: 0 };
+function apply() { $('#world').setAttribute('transform', `translate(${view.x},${view.y}) scale(${view.s})`); }
+function canvasBox() { return $('#canvas').getBoundingClientRect(); }
+function zoomAt(f, cx, cy) {
+  const s = Math.max(0.2, Math.min(2.2, view.s * f));
+  view.x = cx - ((cx - view.x) * s) / view.s;
+  view.y = cy - ((cy - view.y) * s) / view.s;
+  view.s = s;
+  apply();
+}
+function fitAll() {
+  const b = canvasBox();
+  view.s = Math.max(0.16, Math.min(b.width / LAYOUT.width, b.height / LAYOUT.height));
+  view.x = Math.max(8, (b.width - LAYOUT.width * view.s) / 2);
+  view.y = Math.max(0, (b.height - LAYOUT.height * view.s) / 2);
+  apply();
+}
+function startView() {
+  const b = canvasBox();
+  view.s = Math.max(0.42, Math.min(1, b.height / LAYOUT.height));
+  view.x = 8;
+  view.y = Math.max(0, (b.height - LAYOUT.height * view.s) / 2);
+  apply();
+}
+let camRaf = 0;
+function centerOn(n, { force = false, smooth = true } = {}) {
+  const b = canvasBox();
+  const cx = (n.x + n.w / 2) * view.s + view.x;
+  const cy = (n.y + n.h / 2) * view.s + view.y;
+  if (!force && cx > 80 && cx < b.width - 80 && cy > 60 && cy < b.height - 60) return;
+  const tx = view.x + b.width / 2 - cx;
+  const ty = view.y + b.height / 2 - cy;
+  cancelAnimationFrame(camRaf);
+  if (!smooth || reduce) { view.x = tx; view.y = ty; apply(); return; }
+  const fx = view.x;
+  const fy = view.y;
+  const t0 = performance.now();
+  const step = (now) => {
+    const k = Math.min(1, (now - t0) / 480);
+    const e = 1 - (1 - k) ** 3;
+    view.x = fx + (tx - fx) * e;
+    view.y = fy + (ty - fy) * e;
+    apply();
+    if (k < 1) camRaf = requestAnimationFrame(step);
+  };
+  camRaf = requestAnimationFrame(step);
+}
+(function bindPan() {
+  const c = $('#canvas');
+  const pts = new Map();
+  let last = null;
+  let pinch = null;
+  let moved = false;
+  c.addEventListener('pointerdown', (e) => {
+    pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    moved = false;
+    if (pts.size === 1) { last = { x: e.clientX, y: e.clientY }; }
+    if (pts.size === 2) { const [a, b] = [...pts.values()]; pinch = Math.hypot(a.x - b.x, a.y - b.y); }
+  });
+  c.addEventListener('pointermove', (e) => {
+    if (!pts.has(e.pointerId)) return;
+    pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (pts.size === 2 && pinch) {
+      const [a, b] = [...pts.values()];
+      const d = Math.hypot(a.x - b.x, a.y - b.y);
+      const box = canvasBox();
+      zoomAt(d / pinch, (a.x + b.x) / 2 - box.left, (a.y + b.y) / 2 - box.top);
+      pinch = d;
+      moved = true;
+    } else if (pts.size === 1 && last) {
+      const dx = e.clientX - last.x;
+      const dy = e.clientY - last.y;
+      if (Math.abs(dx) + Math.abs(dy) > 3) { moved = true; c.classList.add('dragging'); if (!c.hasPointerCapture(e.pointerId)) c.setPointerCapture(e.pointerId); }
+      if (moved) { view.x += dx; view.y += dy; apply(); }
+      last = { x: e.clientX, y: e.clientY };
+    }
+  });
+  const end = (e) => { pts.delete(e.pointerId); if (pts.size < 2) pinch = null; if (!pts.size) { last = null; c.classList.remove('dragging'); } };
+  c.addEventListener('pointerup', end);
+  c.addEventListener('pointercancel', end);
+  c.addEventListener('click', (e) => { if (moved) { e.stopPropagation(); e.preventDefault(); } }, true);
+  // A plain vertical wheel scrolls the page; shift or a sideways swipe pans; ctrl/cmd zooms.
+  c.addEventListener('wheel', (e) => {
+    const box = canvasBox();
+    if (e.ctrlKey || e.metaKey) { e.preventDefault(); zoomAt(Math.exp(-e.deltaY * 0.0022), e.clientX - box.left, e.clientY - box.top); return; }
+    if (e.shiftKey || Math.abs(e.deltaX) > Math.abs(e.deltaY)) {
+      e.preventDefault();
+      view.x -= e.shiftKey && !e.deltaX ? e.deltaY : e.deltaX;
+      if (!e.shiftKey) view.y -= e.deltaY;
+      apply();
+    }
+  }, { passive: false });
+  const zin = () => { const b = canvasBox(); zoomAt(1.2, b.width / 2, b.height / 2); };
+  const zout = () => { const b = canvasBox(); zoomAt(1 / 1.2, b.width / 2, b.height / 2); };
+  $('#z-in').addEventListener('click', zin);
+  $('#z-out').addEventListener('click', zout);
+  $('#z-fit').addEventListener('click', fitAll);
+  c.addEventListener('keydown', (e) => {
+    if (e.target.closest && e.target.closest('.node, .hit')) { if (!['+', '=', '-', '0'].includes(e.key)) return; }
+    if (e.key === '+' || e.key === '=') { e.preventDefault(); zin(); }
+    else if (e.key === '-') { e.preventDefault(); zout(); }
+    else if (e.key === '0') { e.preventDefault(); fitAll(); }
+    else if (e.key.startsWith('Arrow') && e.target === c) {
+      e.preventDefault();
+      const d = 60;
+      if (e.key === 'ArrowLeft') view.x += d; if (e.key === 'ArrowRight') view.x -= d;
+      if (e.key === 'ArrowUp') view.y += d; if (e.key === 'ArrowDown') view.y -= d;
+      apply();
+    }
+  });
+  c.tabIndex = 0;
+  c.addEventListener('focusin', (e) => {
+    const g = e.target.closest && e.target.closest('.node');
+    if (g && LAYOUT.nodes[g.dataset.id]) centerOn(LAYOUT.nodes[g.dataset.id]);
+  });
+})();
+
+// ===================================================================== run a request
+let run = null;
+const reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+function path() {
+  return STAGES.flatMap((st) => st.nodes.filter((n) => nodeActive(n) && n.type !== 'artifact' && n.id !== 'inspector'));
+}
+function stopRun() {
+  if (!run) return;
+  cancelAnimationFrame(run.raf);
+  clearTimeout(run.t);
+  run = null;
+  const layer = $('#token-layer');
+  if (layer) layer.innerHTML = '';
+  document.querySelectorAll('.token-here').forEach((x) => x.classList.remove('token-here'));
+  $('#z-play').textContent = 'Run a request';
+  $('#nowcap').hidden = true;
+  if (selected && LAYOUT.nodes[selected]) select(selected); else showIntro();
+}
+// The token drives along each bay's left margin, from stop to stop; between bays it
+// crosses under the bay headers, through the gutter, like the hand-off arrows.
+function hopPoints(a, b) {
+  const lane = (n) => n.x - 8;
+  const mid = (n) => n.y + n.h / 2;
+  if (a.stage === b.stage) return [[lane(a), mid(a)], [lane(b), mid(b)]];
+  const sa = STAGES.find((s) => s.id === a.stage);
+  const y = sa.y + 68;
+  return [[lane(a), mid(a)], [lane(a), y], [lane(b), y], [lane(b), mid(b)]];
+}
+function startRun() {
+  stopRun();
+  const stops = path();
+  const layer = $('#token-layer');
+  const tok = el('g', { class: 'token' }, layer);
+  const halo = el('circle', { class: 'halo', r: 13 }, tok);
+  const core = el('circle', { class: 'core', r: 6.5 }, tok);
+  run = { i: 0, raf: 0, t: 0 };
+  $('#z-play').textContent = 'Stop';
+  if (view.s < 0.8) { const b = canvasBox(); zoomAt(0.85 / view.s, b.width / 2, b.height / 2); }
+  const place = (x, y) => { for (const c of [halo, core]) { c.setAttribute('cx', x); c.setAttribute('cy', y); } };
+  const arrive = (k) => {
+    const n = stops[k];
+    document.querySelectorAll('.token-here').forEach((x) => x.classList.remove('token-here'));
+    const g = document.querySelector(`.node[data-id="${n.id}"]`);
+    if (g) g.classList.add('token-here');
+    const cap = $('#nowcap');
+    cap.hidden = false;
+    cap.textContent = `${k + 1}/${stops.length} · ${n.title}`;
+    showNode(n);
+    centerOn(n, { force: true });
+  };
+  place(stops[0].x - 8, stops[0].y + stops[0].h / 2);
+  arrive(0);
+  const hop = () => {
+    if (!run) return;
+    if (run.i >= stops.length - 1) { run.t = setTimeout(stopRun, 2400); return; }
+    const pts = hopPoints(stops[run.i], stops[run.i + 1]);
+    const lens = pts.slice(1).map((p, q) => Math.hypot(p[0] - pts[q][0], p[1] - pts[q][1]));
+    const total = lens.reduce((x, y) => x + y, 0) || 1;
+    if (reduce) { run.i += 1; place(...pts[pts.length - 1]); arrive(run.i); run.t = setTimeout(hop, 1500); return; }
+    const t0 = performance.now();
+    const dur = Math.max(500, Math.min(1500, total * 1.6));
+    const step = (now) => {
+      if (!run) return;
+      const k = Math.min(1, (now - t0) / dur);
+      let d = (k < 0.5 ? 4 * k * k * k : 1 - (-2 * k + 2) ** 3 / 2) * total;
+      let q = 0;
+      while (q < lens.length - 1 && d > lens[q]) { d -= lens[q]; q += 1; }
+      const f = lens[q] ? Math.min(1, d / lens[q]) : 1;
+      place(pts[q][0] + (pts[q + 1][0] - pts[q][0]) * f, pts[q][1] + (pts[q + 1][1] - pts[q][1]) * f);
+      if (k < 1) run.raf = requestAnimationFrame(step);
+      else { run.i += 1; arrive(run.i); run.t = setTimeout(hop, 1200); }
+    };
+    run.raf = requestAnimationFrame(step);
+  };
+  run.t = setTimeout(hop, 1200);
+}
+$('#z-play').addEventListener('click', () => (run ? stopRun() : startRun()));
+$('#canvas').addEventListener('click', () => { if (!run) { selected = null; document.querySelectorAll('.node.sel').forEach((x) => x.classList.remove('sel')); showIntro(); } });
+
+// ===================================================================== recipe picker
+function renderPicker() {
+  $('#picker').innerHTML = Object.keys(RECIPES).map((id) => `<button type="button" data-r="${id}" aria-pressed="${id === recipe}">${id}</button>`).join('');
+  $('#recipe-note').textContent = RECIPES[recipe].note;
+  $('#picker').querySelectorAll('button').forEach((b) => b.addEventListener('click', () => {
+    recipe = b.dataset.r;
+    try { localStorage.setItem('fc-recipe', recipe); } catch (e) { /* ignore */ }
+    stopRun();
+    renderPicker();
+    render();
+    apply();
+    if (selected && LAYOUT.nodes[selected]) select(selected); else showIntro();
+  }));
+}
+
+// ===================================================================== live line: real jobs
+// `factory console` writes the jobs into the slot below. Everything on the line is
+// a pure function of (job, playhead time): scrubbing back and forth always agrees.
+const DATA = /*__FACTORY_DATA__*/null;
+
+const ORDER = ['request', 'contract', 'design', 'plan', 'build', 'verify', 'ship', 'learn'];
+const STAGE_NAME = { request: 'Request', contract: 'Contract', design: 'Ground & design', plan: 'Plan', build: 'Build', verify: 'Prove & challenge', ship: 'Ship', learn: 'Learn & close' };
+const STEP_INFO = {
+  request: ['Request', 'You asked; the CLI opened the job and chose the recipe by rule.'],
+  clarify: ['Clarify', 'Claude drafts the contract; analysts ask only what the repo can\'t answer; God Eye reads it cold.'],
+  H1: ['H1 · contract', 'You approve the outcome contract. The approval is bound to its hash.'],
+  EH1: ['EH1 · contracts', 'You approve the epic\'s contract.'],
+  ground: ['Ground', 'Researchers in parallel; every claim cited or marked UNVERIFIED.'],
+  decide: ['Decide', 'Option generators, the architect\'s ADR, God Eye\'s critique.'],
+  H2: ['H2 · design', 'You approve the design (when there is a real decision, or always at high risk).'],
+  EH2: ['EH2 · design', 'You approve the frozen interface contracts.'],
+  HF: ['HF · findings', 'You accept the spike\'s findings and recommendation.'],
+  decompose: ['Plan', 'Task contracts the CLI validates, in waves.'],
+  H3: ['H3 · plan', 'You approve the plan, or God Eye does at low risk.'],
+  EH3: ['EH3 · slices', 'You approve the slices.'],
+  realize: ['Build', 'Builders and independent testers, task by task, each in its own worktree.'],
+  reconcile: ['Integrate', 'Task branches merged into the job branch; the build gets a fingerprint.'],
+  children: ['Slices', 'Each slice runs as its own job.'],
+  prove: ['Prove', 'Every acceptance criterion proven on this exact build.'],
+  challenge: ['Challenge', 'One reviewer per lane; serious findings verified independently.'],
+  epic_gate: ['Epic gate', 'All slices merged; the epic branch passes its checks.'],
+  HS: ['HS · ship', 'You sign off before anything leaves.'],
+  ship: ['Ship', 'Floors checked, completion report written, PR opened or a local merge prepared.'],
+  H4: ['H4 · merge', 'Only you merge. The merge commit is recorded.'],
+  post_merge_challenge: ['Post-merge', 'A fresh review of what actually landed.'],
+  distill: ['Learn', 'Confirmed problems become scoped lessons you accept.'],
+  close: ['Close', 'Every floor met on the final build; worktrees removed.'],
+};
+const RULES = {
+  'row1.contract_not_approved': 'The contract isn\'t approved yet',
+  'row2.drift_scope': 'Work drifted outside the contract\'s paths',
+  'row2.epic_replan': 'The epic needs a new plan',
+  'row3.floor_missing': 'A floor for this risk isn\'t met yet',
+  'row4.confirmed_serious': 'A confirmed serious finding: back to Build for a fix round',
+  'row5.acs_unproven': 'A criterion isn\'t proven: back to Build for a verify-fix round',
+  'row6.stale_evidence': 'The build changed, so the old proof is stale: prove again',
+  'order.next_step': 'Every check passes: the recipe\'s next step',
+  'order.complete': 'The recipe is complete',
+  'cap.budget': 'Agent budget reached: parked',
+  'cap.review_rounds': 'Review rounds used up: parked',
+  'cap.verify_fix_rounds': 'Verify-fix rounds used up: parked',
+  'cap.clarify_rounds': 'Clarify rounds used up: parked',
+  'cap.decompose_rounds': 'The plan still fails validation: parked',
+  'cap.repeat_guard': 'Same decision twice with no progress: parked',
+};
+const CHECKS = [['contract_approved', 'contract approved'], ['no_drift', 'no drift'], ['floors_satisfied_so_far', 'floors so far'], ['no_confirmed_serious', 'no confirmed finding'], ['acs_proven', 'criteria proven'], ['no_stale_evidence', 'no stale proof']];
+const WORD = { done: 'Clear', auto: 'Auto-approved', running: 'Running', waiting: 'Your turn', failed: 'Stopped', blocked: 'Blocked', pending: 'Ahead', again: 'Runs again', skipped: 'Not needed', none: 'Not in recipe' };
+const KIND_LABEL = { start: 'you · request', skill: 'skill', workflow: 'workflow', cli: 'factory cli', gate: 'gate · you', merge: 'merge · you' };
+const BAD_OUTCOME = new Set(['fail', 'no_result', 'blocked', 'failed', 'exhausted', 'error']);
+const reduceMotion = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+const stepName = (id) => (STEP_INFO[id] ? STEP_INFO[id][0] : id || '—');
+const modelFamily = (m) => (!m ? 'none' : /opus/i.test(m) ? 'opus' : /sonnet/i.test(m) ? 'sonnet' : /haiku/i.test(m) ? 'haiku' : 'other');
+const modelLetter = (m) => (!m ? '·' : { opus: 'O', sonnet: 'S', haiku: 'H' }[modelFamily(m)] || String(m)[0].toUpperCase());
+const fmtClock = (iso) => { const d = new Date(iso); return Number.isNaN(+d) ? '' : d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23' }); };
+const fmtDate = (iso) => { const d = new Date(iso); return Number.isNaN(+d) ? '' : d.toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }); };
+function fmtDur(ms) {
+  if (!(ms >= 0)) return '—';
+  if (ms > 0 && ms < 1000) return '<1s';
+  const s = Math.round(ms / 1000);
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m ${String(s % 60).padStart(2, '0')}s`;
+  const h = Math.floor(m / 60);
+  if (h < 48) return `${h}h ${String(m % 60).padStart(2, '0')}m`;
+  return `${Math.floor(h / 24)}d ${h % 24}h`;
+}
+function ago(iso) {
+  const ms = Date.now() - Date.parse(iso);
+  if (!(ms >= 0)) return '';
+  return ms < 60000 ? 'just now' : `${fmtDur(ms).split(' ')[0]} ago`;
+}
+
+// ---------- fold: the job's state after each timeline item
+function initState(job) {
+  const s = { pos: 'start', steps: {}, loops: [], lap: 0, parked: null, stopped: null, finished: false, lastRoute: null, entered: {}, guards: 0 };
+  for (const st of job.steps) s.steps[st.id] = { status: 'pending', visits: 0, text: null, note: null };
+  return s;
+}
+function cloneState(s) {
+  const steps = {};
+  for (const [k, v] of Object.entries(s.steps)) steps[k] = { ...v };
+  return { ...s, steps, loops: s.loops.slice(), entered: { ...s.entered } };
+}
+function applyItem(job, S, it, i) {
+  const idx = (id) => job.steps.findIndex((s) => s.id === id);
+  const def = (id) => job.steps[idx(id)];
+  const set = (id, status, note) => { if (S.steps[id]) { S.steps[id].status = status; if (note) S.steps[id].note = note; } };
+  switch (it.type) {
+    case 'created':
+      set('request', 'done');
+      S.steps.request.visits = 1;
+      S.pos = 'request';
+      S.entered.request = it.t;
+      break;
+    case 'route': {
+      S.lastRoute = it;
+      if (it.action === 'parked') { set(S.pos, 'blocked'); break; }
+      if (!it.step) break;
+      const ti = idx(it.step);
+      const pi = S.pos === 'start' ? 0 : idx(S.pos);
+      if (ti < pi) {
+        S.lap += 1;
+        S.loops.push({ from: S.pos, to: it.step, rule: it.rule, item: i, lap: S.lap, scope: it.scope });
+        for (let k = ti + 1; k <= pi; k++) { const s = S.steps[job.steps[k].id]; if (['done', 'auto', 'failed', 'waiting', 'running'].includes(s.status)) s.status = 'again'; }
+      } else if (ti > pi) {
+        const prev = S.steps[S.pos];
+        if (prev && (prev.status === 'running' || prev.status === 'waiting')) prev.status = 'done';
+        for (let k = pi + 1; k < ti; k++) {
+          const d = job.steps[k];
+          const s = S.steps[d.id];
+          if (s.status === 'pending') s.status = d.auto ? 'auto' : 'skipped';
+          else if (s.status === 'again') s.status = 'done';
+        }
+      }
+      const d = job.steps[ti];
+      S.steps[it.step].status = d.human || it.action === 'gate' || it.action === 'wait' ? 'waiting' : 'running';
+      S.steps[it.step].visits += 1;
+      S.pos = it.step;
+      if (!S.entered[d.stage]) S.entered[d.stage] = it.t;
+      break;
+    }
+    case 'human':
+      if (it.action === 'approve' && it.step) set(it.step, 'done', `approved${it.via ? ` via ${it.via}` : ''}`);
+      else if (it.action === 'deny' && it.step) set(it.step, 'failed', 'you asked for changes');
+      else if (it.action === 'merged') set('H4', 'done', `merged ${it.commit || ''}`.trim());
+      else if (it.action === 'resume') { S.parked = null; if (S.steps[S.pos]) S.steps[S.pos].status = 'running'; }
+      else if (it.action === 'cancelled' || it.action === 'abandoned') { S.stopped = it; set(S.pos, 'blocked'); }
+      break;
+    case 'result': {
+      if (!it.step) break;
+      const id = it.step;
+      const st = S.steps[id];
+      if (!st) break;
+      st.text = it.text;
+      const d = def(id);
+      st.status = it.ok ? (d && d.auto ? 'auto' : 'done') : it.outcome === 'ask' ? 'waiting' : 'failed';
+      break;
+    }
+    case 'agents': {
+      const st = S.steps[it.step || S.pos];
+      if (st && st.status === 'pending') st.status = 'running';
+      break;
+    }
+    case 'error': set(S.pos, 'failed', 'workflow error'); break;
+    case 'park': S.parked = it; set(S.pos, 'blocked'); break;
+    case 'stopped': S.stopped = it; set(S.pos, 'blocked'); break;
+    case 'guard': S.guards += 1; break;
+    case 'amend': S.amendments = (S.amendments || 0) + (it.phase === 'start' ? 1 : 0); break;
+    case 'spawn': S.spawned = it.job; break;
+    case 'end':
+      if (job.status === 'closed') {
+        for (const st of Object.values(S.steps)) {
+          if (st.status === 'pending' || st.status === 'again') st.status = 'skipped';
+          if (st.status === 'running' || st.status === 'waiting') st.status = 'done';
+        }
+        S.pos = 'finish';
+        S.finished = true;
+      }
+      break;
+    default: break;
+  }
+}
+function stageStatus(job, S, stage) {
+  const ids = job.steps.filter((s) => s.stage === stage).map((s) => s.id);
+  if (!ids.length) return 'none';
+  const sts = ids.map((id) => S.steps[id].status);
+  const settled = (x) => ['done', 'auto', 'skipped'].includes(x);
+  if (ids.includes(S.pos)) {
+    const p = S.steps[S.pos].status;
+    if (p === 'done' || p === 'auto') return sts.every(settled) ? 'done' : 'running';
+    return p === 'again' ? 'running' : p;
+  }
+  if (sts.some((x) => x === 'blocked')) return 'blocked';
+  if (sts.some((x) => x === 'failed')) return 'failed';
+  if (sts.every(settled)) return sts.every((x) => x === 'skipped') ? 'skipped' : 'done';
+  return 'pending';
+}
+
+const isFixLoop = (lp) => /^row[45]\./.test(lp.rule || '');
+function loopLabel(lp, loops) {
+  const kind = /^row4\./.test(lp.rule) ? 'FIX ROUND' : /^row5\./.test(lp.rule) ? 'VERIFY-FIX ROUND' : null;
+  if (!kind) return /^row6\./.test(lp.rule) ? 'RE-PROVE' : `BACK TO ${stepName(lp.to).toUpperCase()}`;
+  return `${kind} ${loops.filter((x) => x.lap <= lp.lap && isFixLoop(x)).length}`;
+}
+
+// ---------- geometry: the flow canvas
+// Stages are columns (each step a lane inside its stage); time runs down. Every visit
+// to a step is a row: moving on is a line to the right, going back is a red line to the
+// left, repeating a step drops straight down. Agents, results, your replies, guard
+// blocks and inspector findings sit on the row where they happened.
+const FG = { TIME_W: 84, STEP_W: 78, EMPTY_W: 44, STAGE_GAP: 12, PAD: 14, HEAD_H: 70, NODE_Y: 14, TITLE_H: 20, LINE_H: 16, CHIP_H: 20, CHIP_GAP: 4, LABEL_W: 380, TRANSIT: 26, INSP_W: 260, BOTTOM: 36 };
+const BODY_FONT = '400 12.5px "IBM Plex Sans", "Segoe UI", system-ui, sans-serif';
+const TITLE_FONT = '600 13.5px "IBM Plex Sans", "Segoe UI", system-ui, sans-serif';
+const CHIP_FONT = '500 10.5px "IBM Plex Mono", ui-monospace, monospace';
+
+function geometry(job) {
+  const stages = [];
+  const col = {};
+  let x = FG.TIME_W + FG.PAD;
+  for (const id of ORDER) {
+    const steps = job.steps.filter((s) => s.stage === id);
+    const w = steps.length ? steps.length * FG.STEP_W : FG.EMPTY_W;
+    steps.forEach((s, k) => { col[s.id] = x + FG.STEP_W / 2 + k * FG.STEP_W; });
+    stages.push({ id, x, w, steps });
+    x += w + FG.STAGE_GAP;
+  }
+  const gridRight = x - FG.STAGE_GAP + FG.PAD;
+  const insp = Boolean(job.inspector && job.inspector.length);
+  return { stages, col, gridRight, insp, inspX: gridRight + 18, width: gridRight + (insp ? FG.INSP_W + 36 : 24) };
+}
+
+// ---------- live state
+const LV = { fit: true, zoom: 1, jobs: [], job: null, geo: null, items: [], states: [], sched: [], crew: [], rows: [], rowOf: [], END: 1, t: 0, playing: false, speed: 1, follow: true, raf: 0, last: 0, shown: -2, sel: null, chipsSeen: new Set(), userScrollAt: -1e9 };
+try { LV.speed = Number(localStorage.getItem('fc-speed')) || 1; LV.fit = localStorage.getItem('fc-fit') !== '0'; } catch (e) { LV.fit = true; }
+if (![0.5, 1, 2, 4].includes(LV.speed)) LV.speed = 1;
+
+function prepare(job) {
+  const items = job.timeline.slice();
+  items.push({ t: job.closed_at || job.updated_at || (items.length ? items[items.length - 1].t : job.created_at), type: 'end' });
+  const states = [];
+  let S = initState(job);
+  items.forEach((it, i) => { S = cloneState(S); applyItem(job, S, it, i); states.push(S); });
+  const crew = [];
+  items.forEach((it, i) => {
+    if (it.type !== 'agents') return;
+    const step = it.step || (i > 0 ? states[i - 1].pos : null);
+    for (const a of it.agents || []) crew.push({ ...a, step, item: i, workflow: it.workflow, config: it.config });
+  });
+  return { items, states, crew };
+}
+function finalState(job) { const p = prepare(job); return p.states[p.states.length - 1]; }
+
+function jobSummary(job, S) {
+  if (job.status === 'closed') return ['done', job.pr && job.pr.merged ? 'Merged · closed' : 'Closed'];
+  if (job.status === 'cancelled') return ['blocked', 'Cancelled'];
+  if (job.status === 'abandoned') return ['blocked', 'Abandoned'];
+  if (job.status === 'parked') return ['blocked', `Parked at ${stepName(S.pos)}`];
+  const p = S.steps[S.pos];
+  if (!p) return ['pending', 'Starting'];
+  if (p.status === 'waiting') return ['waiting', `Your turn · ${stepName(S.pos)}`];
+  if (p.status === 'failed') return ['failed', `Stopped at ${stepName(S.pos)}`];
+  return ['running', `${stepName(S.pos)} running`];
+}
+const SORT = { waiting: 0, running: 1, failed: 2, blocked: 3, pending: 4, done: 5 };
+
+// ---------- svg helpers
+function sv(tag, attrs, parent) { return el(tag, attrs || {}, parent); }
+function signal(parent, kind, x, y, label) {
+  const g = sv('g', { class: `sig sig-${kind}${kind === 'ped' ? ' ped' : ''}`, transform: `translate(${x},${y})` }, parent);
+  if (kind === 'ped') {
+    sv('rect', { class: 'housing', width: 20, height: 21, rx: 3 }, g);
+    sv('use', { href: '#g-hand', x: 5, y: 2, class: 'hand' }, g);
+    sv('use', { href: '#g-walk', x: 5, y: 11.5, class: 'walk' }, g);
+    sv('rect', { class: 'bag', x: -2, y: -2, width: 24, height: 25, rx: 4 }, g);
+  } else if (kind === 'v') {
+    sv('rect', { class: 'plate', x: -2, y: -2, width: 18, height: 42, rx: 5 }, g);
+    sv('rect', { class: 'pole', x: 6, y: 38, width: 2, height: 12 }, g);
+    sv('rect', { class: 'housing', width: 14, height: 38, rx: 4 }, g);
+    ['red', 'amber', 'green'].forEach((c, i) => {
+      const cy = 7.5 + i * 11.5;
+      sv('circle', { class: `halo ${c}`, cx: 7, cy, r: 7.4 }, g);
+      sv('circle', { class: `lamp ${c}`, cx: 7, cy, r: 4.2 }, g);
+      sv('path', { class: 'visor', d: `M${7 - 5.3},${cy - 1.9} A5.6,5.6 0 0 1 ${7 + 5.3},${cy - 1.9}` }, g);
+    });
+    sv('rect', { class: 'bag', x: -3, y: -3, width: 20, height: 44, rx: 5 }, g);
+  } else {
+    sv('rect', { class: 'housing', width: 26, height: 10, rx: 5 }, g);
+    ['red', 'amber', 'green'].forEach((c, i) => {
+      sv('circle', { class: `halo ${c}`, cx: 5.5 + i * 7.5, cy: 5, r: 4.6 }, g);
+      sv('circle', { class: `lamp ${c}`, cx: 5.5 + i * 7.5, cy: 5, r: 2.7 }, g);
+    });
+    sv('rect', { class: 'bag', x: -2, y: -2, width: 30, height: 14, rx: 6 }, g);
+  }
+  if (label) g.appendChild(document.createElementNS(NS, 'title')).textContent = label;
+  return g;
+}
+const setSig = (g, status) => { if (g) g.setAttribute('class', g.getAttribute('class').replace(/\bis-\S+/g, '').trim() + ` is-${status}`); };
+function roundPath(pts, r = 10) {
+  let d = `M${pts[0][0]},${pts[0][1]}`;
+  for (let i = 1; i < pts.length - 1; i++) {
+    const [x0, y0] = pts[i - 1];
+    const [x1, y1] = pts[i];
+    const [x2, y2] = pts[i + 1];
+    const l1 = Math.hypot(x1 - x0, y1 - y0);
+    const l2 = Math.hypot(x2 - x1, y2 - y1);
+    if (!l1 || !l2) continue;
+    const rr = Math.min(r, l1 / 2, l2 / 2);
+    const a = [x1 - ((x1 - x0) / l1) * rr, y1 - ((y1 - y0) / l1) * rr];
+    const b = [x1 + ((x2 - x1) / l2) * rr, y1 + ((y2 - y1) / l2) * rr];
+    d += ` L${a[0]},${a[1]} Q${x1},${y1} ${b[0]},${b[1]}`;
+  }
+  const last = pts[pts.length - 1];
+  return `${d} L${last[0]},${last[1]}`;
+}
+
+// ---------- rows: one per visit, park, resume, amendment, stop or finish
+function buildRows(job, items) {
+  const idx = (id) => job.steps.findIndex((s) => s.id === id);
+  const rows = [];
+  const rowOf = [];
+  let cur = null;
+  const start = (kind, step, i, extra) => { cur = { kind, step, first: i, items: [], ...(extra || {}) }; rows.push(cur); };
+  const visits = {};
+  let fixRounds = 0;
+  items.forEach((it, i) => {
+    if (it.type === 'created') start('start', 'request', i);
+    else if (it.type === 'route' && it.step) {
+      const from = cur ? cur.step : 'request';
+      const back = idx(it.step) < idx(from);
+      const same = it.step === from && cur && cur.kind === 'stop';
+      visits[it.step] = (visits[it.step] || 0) + 1;
+      if (back && /^row[45]\./.test(it.rule || '')) fixRounds += 1;
+      start('stop', it.step, i, { back, same, rule: it.rule, scope: it.scope, visit: visits[it.step], fixRound: back && /^row[45]\./.test(it.rule || '') ? fixRounds : 0 });
+    } else if (it.type === 'park') start('park', cur ? cur.step : 'request', i);
+    else if (it.type === 'human' && it.action === 'resume') start('resume', cur ? cur.step : 'request', i);
+    else if (it.type === 'stopped' || (it.type === 'human' && (it.action === 'cancelled' || it.action === 'abandoned'))) {
+      if (!cur || cur.kind !== 'halt') start('halt', cur ? cur.step : 'request', i, { how: it.action || job.status });
+      else if (it.action) cur.how = it.action;
+    } else if (it.type === 'amend' && it.phase === 'start') start('amend', (job.steps.find((s) => s.stage === 'contract') || job.steps[0]).id, i, { id: it.id });
+    else if (it.type === 'end' && job.status === 'closed') start('finish', job.steps[job.steps.length - 1].id, i);
+    if (!cur) start('start', 'request', i);
+    cur.items.push(i);
+    rowOf[i] = rows.length - 1;
+  });
+  return { rows, rowOf };
+}
+
+function rowTitle(job, row) {
+  const name = stepName(row.step);
+  switch (row.kind) {
+    case 'start': return ['Request submitted', [`${job.work_type} · ${job.risk} risk → ${job.recipe}`]];
+    case 'park': return ['Parked', []];
+    case 'resume': return ['Resumed by you', []];
+    case 'halt': return [row.how === 'abandoned' ? 'Abandoned by you' : row.how === 'cancelled' ? 'Cancelled by you' : 'Stopped', []];
+    case 'amend': return [`Amendment ${row.id || ''}`.trim(), ['contract changed mid-job']];
+    case 'finish': return [job.pr && job.pr.merged ? 'Closed · merged' : 'Closed', []];
+    default: {
+      const tags = [];
+      if (row.back) tags.push(row.fixRound ? `${/^row5/.test(row.rule) ? 'verify-fix' : 'fix'} round ${row.fixRound}` : /^row6/.test(row.rule) ? 'prove again' : 'back');
+      else if (row.same) tags.push('again');
+      if (row.visit > 1 && !row.back) tags.push(`visit ${row.visit}`);
+      return [name, tags];
+    }
+  }
+}
+
+// Content lines of a row, each tied to the timeline item it came from.
+function rowLines(job, row) {
+  const lines = [];
+  const items = LV.items;
+  const t0 = Date.parse(items[row.first].t);
+  const add = (i, text, cls, extra) => lines.push({ i, text, cls, ...(extra || {}) });
+  if (row.kind === 'stop' && row.rule && row.rule !== 'order.next_step') add(row.first, `Why: ${RULES[row.rule] || row.rule}`, row.back ? 'why back' : 'why');
+  if (row.kind === 'start') add(row.first, `“${job.title}”`, 'quote');
+  for (const i of row.items) {
+    const it = items[i];
+    if (i === row.first && it.type !== 'park' && it.type !== 'amend' && it.type !== 'stopped') continue;
+    switch (it.type) {
+      case 'agents': add(i, `${it.workflow ? `${it.workflow}${it.config ? ` · ${it.config}` : ''}${it.mode ? ` (${it.mode})` : ''}` : 'agents seen by the hooks'} · ${it.runs} agent run${it.runs === 1 ? '' : 's'} · ${fmtDur(Date.parse(it.t) - t0)}`, 'wf', { agents: it.agents }); break;
+      case 'result': {
+        add(i, `${it.ok ? '✓' : it.outcome === 'ask' ? '?' : '✕'} ${it.text}`, it.ok ? 'ok' : it.outcome === 'ask' ? 'ask' : 'bad');
+        for (const f of (it.findings || []).filter((x) => x.status === 'confirmed' || x.status === 'unverified').slice(0, 3)) add(i, `⚑ ${f.id} · ${f.severity} · ${f.status}: ${f.summary}`, f.status === 'confirmed' ? 'bad find' : 'ask find');
+        break;
+      }
+      case 'human': {
+        const g = it.gate || stepName(it.step);
+        const wait = fmtDur(Date.parse(it.t) - t0);
+        if (it.action === 'approve') add(i, `✓ You approved ${g}${it.via ? ` (${it.via})` : ''} · after ${wait}`, 'you');
+        else if (it.action === 'deny') add(i, `✕ You denied ${g}${it.reason ? `: ${it.reason}` : ''}`, 'you bad');
+        else if (it.action === 'merged') add(i, `⇢ You merged${it.commit ? ` ${it.commit}` : ''} · after ${wait}`, 'you');
+        else if (it.action === 'resume') add(i, `▶ You resumed the job${row.kind === 'resume' ? '' : ''}`, 'you');
+        else if (it.action === 'cancelled' || it.action === 'abandoned') add(i, `${it.reason || ''}`, 'you bad');
+        else add(i, `You: ${it.action}${it.reason ? ` — ${it.reason}` : ''}`, 'you');
+        break;
+      }
+      case 'park': add(i, `⏸ ${it.text}`, 'park'); break;
+      case 'stopped': if (it.text) add(i, it.text, 'bad'); break;
+      case 'amend': add(i, it.phase === 'start' ? `✎ ${it.text}` : it.phase === 'submit' ? `↗ ${it.text}` : `⟲ ${it.text}`, 'amend'); break;
+      case 'spawn': add(i, `→ ${it.text}`, 'link', { job: it.job }); break;
+      case 'guard': {
+        // repeats of the same block on one row are counted, not listed
+        const prev = lines.find((l) => l.guardKey === `${it.who}|${it.text}|${it.target}`);
+        if (prev) { prev.times += 1; prev.text = `⚠ ${prev.base} (×${prev.times})`; break; }
+        const base = `${it.text}${it.who ? ` — by ${it.who}` : ''}`;
+        add(i, `⚠ ${base}`, 'warn', { guardKey: `${it.who}|${it.text}|${it.target}`, base, times: 1 });
+        if (it.target) add(i, `$ ${it.target}`, 'cmd');
+        break;
+      }
+      case 'refused': add(i, `⚠ ${it.text}`, 'warn'); break;
+      case 'error': add(i, `✕ ${it.text}`, 'bad'); break;
+      case 'route': if (it.action === 'parked') add(i, `Router parked the job: ${RULES[it.rule] || it.rule}`, 'bad'); break;
+      default: break;
+    }
+  }
+  return lines;
+}
+
+// chips: one per role in one agents item
+function chipsFor(agents) {
+  const by = new Map();
+  for (const a of agents || []) {
+    const c = by.get(a.role) || { role: a.role, n: 0, models: [], retries: 0, fails: 0 };
+    c.n += 1;
+    if (a.model && !c.models.includes(a.model)) c.models.push(a.model);
+    if (a.retry || /^build \S+ #([2-9]|\d{2,})/.test(a.label || '')) c.retries += 1;
+    if (BAD_OUTCOME.has(a.outcome)) c.fails += 1;
+    by.set(a.role, c);
+  }
+  return [...by.values()].map((c) => {
+    const suffix = `${c.retries ? ` ↻${c.retries}` : ''}${c.fails ? ` ✕${c.fails}` : ''}${c.models.length > 1 ? ` ↑${modelLetter(c.models[c.models.length - 1])}` : ''} ×${c.n}`;
+    const w = Math.ceil(textW(c.role + suffix, CHIP_FONT)) + (c.models.length ? 30 : 18);
+    return { ...c, suffix, w };
+  });
+}
+
+function measureRow(job, row, geo) {
+  const x = geo.col[row.step] || geo.col.request;
+  const lw = FG.LABEL_W;
+  const left = x + 18 + lw > geo.gridRight + (geo.insp ? 0 : 10) && x - 18 - lw > FG.TIME_W;
+  const [title, tags] = rowTitle(job, row);
+  const lines = rowLines(job, row);
+  const laid = [];
+  let h = FG.NODE_Y + 6;
+  for (const ln of lines) {
+    if (ln.agents) {
+      laid.push({ ...ln, y: h, kind: 'text', wrapped: [ln.text] });
+      h += FG.LINE_H;
+      let cx = 0;
+      let cy = h;
+      const chips = chipsFor(ln.agents).map((c) => {
+        if (cx + c.w > lw && cx > 0) { cx = 0; cy += FG.CHIP_H + FG.CHIP_GAP; }
+        const o = { ...c, dx: cx, y: cy };
+        cx += c.w + 5;
+        return o;
+      });
+      laid.push({ ...ln, kind: 'chips', chips, y: h });
+      h = cy + FG.CHIP_H + FG.CHIP_GAP + 2;
+    } else {
+      const wrapped = wrap(ln.text, BODY_FONT, lw).slice(0, 3);
+      laid.push({ ...ln, kind: 'text', wrapped, y: h });
+      h += wrapped.length * FG.LINE_H;
+    }
+  }
+  return { x, left, title, tags, laid, h: Math.max(h + 6, 34) + FG.TRANSIT };
+}
+
+// ---------- build the canvas for one job
+function buildFlow(job) {
+  const geo = geometry(job);
+  LV.geo = geo;
+  const { items, states, crew } = prepare(job);
+  Object.assign(LV, { job, items, states, crew, shown: -2, sel: null, chipsSeen: new Set() });
+  const { rows, rowOf } = buildRows(job, items);
+  LV.rows = rows;
+  LV.rowOf = rowOf;
+  // crew band per stage (final size, so the layout never jumps during replay)
+  const stageCrew = {};
+  for (const st of geo.stages) {
+    const roles = [...new Set(crew.filter((c) => st.steps.some((s) => s.id === c.step)).map((c) => c.role))];
+    stageCrew[st.id] = roles;
+  }
+  const crewRows = Math.max(1, ...Object.values(stageCrew).map((r) => r.length));
+  const CREW_TOP = 10;
+  const crewH = CREW_TOP + crewRows * (FG.CHIP_H + 4) + 14;
+  let y = crewH + 12;
+  for (const r of rows) {
+    Object.assign(r, measureRow(job, r, geo));
+    r.top = y;
+    r.ny = y + FG.NODE_Y;
+    y += r.h;
+  }
+  const H = y + FG.BOTTOM;
+  const W = geo.width;
+  LV.crewH = crewH;
+
+  const host = $('#street');
+  host.innerHTML = '';
+  // sticky header: stage plates, step lanes and their signals
+  const head = sv('svg', { width: W, height: FG.HEAD_H, class: 'st-street flowhead', role: 'group', 'aria-label': 'Stages and steps' });
+  host.appendChild(head);
+  sv('rect', { class: 'headbg', x: 0, y: 0, width: W, height: FG.HEAD_H }, head);
+  const defs = sv('defs', {}, head);
+  defs.innerHTML = `<symbol id="g-hand" viewBox="0 0 10 10" width="10" height="9"><path d="M2.2 4.2V1.6a.8.8 0 0 1 1.6 0V4h.4V.9a.8.8 0 0 1 1.6 0V4h.4V1.4a.8.8 0 0 1 1.6 0V5h.3V3.1a.8.8 0 0 1 1.5 0v3.2C9.6 8.4 8.2 10 6.2 10H5.4C3.9 10 2.9 9.2 2.4 8L1 5.6a.8.8 0 0 1 1.2-.9z"/></symbol>
+    <symbol id="g-walk" viewBox="0 0 10 10" width="10" height="9"><circle cx="5.6" cy="1.3" r="1.3"/><path d="M4.3 3.2h2.2l1.4 2.4-.9.5-1-1.6-.5 2.1 1.6 1.7V10H6V8.6L4.6 7.2 4 10H2.9l1-5.2-1 .7V7H1.9V5z"/></symbol>`;
+  sv('text', { class: 'colhead', x: 12, y: 22 }, head).textContent = 'TIME';
+  LV.stageBar = {};
+  LV.stepSig = {};
+  geo.stages.forEach((st, i) => {
+    const num = String(i + 1).padStart(2, '0');
+    const g = sv('g', {}, head);
+    sv('rect', { class: 'signpost', x: st.x + 2, y: 8, width: st.w - 4, height: 22, rx: 3 }, g);
+    const full = `${num} ${STAGE_NAME[st.id].toUpperCase()}`;
+    sv('text', { class: 'signtext', x: st.x + 9, y: 23.5 }, g).textContent = fit(full, '800 12px Overpass, "Arial Narrow", sans-serif', st.w - 16);
+    el('title', {}, g).textContent = `Stage ${num}: ${STAGE_NAME[st.id]}`;
+    LV.stageBar[st.id] = sv('rect', { class: 'stagebar', x: st.x + 2, y: 32, width: st.w - 4, height: 3, rx: 1.5 }, g);
+    for (const s of st.steps) {
+      const cx = geo.col[s.id];
+      const sg = sv('g', { class: 'stephead', tabindex: 0, role: 'button', 'data-step': s.id }, head);
+      sv('text', { class: 'steplabel', x: cx, y: 49, 'text-anchor': 'middle' }, sg).textContent = fit((s.id === 'request' ? 'REQUEST' : stepName(s.id).replace(/ · .*/, '')).toUpperCase(), '600 9.5px "IBM Plex Mono", monospace', FG.STEP_W - 6);
+      LV.stepSig[s.id] = (s.human || s.kind === 'gate') ? signal(sg, 'ped', cx - 10, 52 - 2, 'Your gate') : signal(sg, 'mini', cx - 13, 55);
+      el('title', {}, sg).textContent = `${stepName(s.id)}: ${(STEP_INFO[s.id] || [, ''])[1]}`;
+      sg.addEventListener('click', () => selectStep(s.id));
+      sg.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); selectStep(s.id); } });
+    }
+  });
+  if (geo.insp) {
+    sv('rect', { class: 'signpost insp', x: geo.inspX, y: 8, width: FG.INSP_W, height: 22, rx: 3 }, head);
+    sv('text', { class: 'signtext', x: geo.inspX + 9, y: 23.5 }, head).textContent = 'INSPECTOR';
+    sv('text', { class: 'steplabel', x: geo.inspX + 4, y: 49 }, head).textContent = 'FINDINGS · ANCHORED TO WHERE THEY HAPPENED';
+  }
+
+  // body
+  const svg = sv('svg', { width: W, height: H, viewBox: `0 0 ${W} ${H}`, class: 'st-street flowbody', role: 'group', 'aria-label': `Flow of ${job.id}` });
+  host.appendChild(svg);
+  const bdefs = sv('defs', {}, svg);
+  bdefs.innerHTML = '<marker id="fl-arr" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0,0 L10,5 L0,10 z" style="fill: var(--live)"/></marker><marker id="fl-back" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0,0 L10,5 L0,10 z" style="fill: var(--stop)"/></marker>';
+  // stage bands and step lanes
+  const bands = sv('g', {}, svg);
+  geo.stages.forEach((st, i) => {
+    sv('rect', { class: `band${i % 2 ? ' alt' : ''}`, x: st.x, y: 0, width: st.w, height: H }, bands);
+    for (const s of st.steps) sv('line', { class: 'lane', x1: geo.col[s.id], x2: geo.col[s.id], y1: crewH, y2: H }, bands);
+  });
+  if (geo.insp) sv('rect', { class: 'band insp', x: geo.inspX - 6, y: 0, width: FG.INSP_W + 12, height: H }, bands);
+  sv('line', { class: 'crewrule', x1: FG.TIME_W, x2: geo.gridRight, y1: crewH, y2: crewH }, bands);
+  sv('text', { class: 'colhead', x: 12, y: 24 }, bands).textContent = 'CREW';
+  sv('text', { class: 'colsub', x: 12, y: 38 }, bands).textContent = 'by stage';
+  LV.crewG = sv('g', {}, svg);
+  LV.stageCrew = stageCrew;
+
+  // time column: clock per row, day breaks, long waits
+  const timeG = sv('g', {}, svg);
+  let lastDay = '';
+  rows.forEach((r, k) => {
+    const t = new Date(items[r.first].t);
+    const day = t.toDateString();
+    const g = sv('g', { class: 'trow', 'data-r': k }, timeG);
+    if (day !== lastDay) {
+      sv('line', { class: 'dayline', x1: 6, x2: geo.gridRight, y1: r.top - 4, y2: r.top - 4 }, g);
+      sv('text', { class: 'daylabel', x: 10, y: r.top - 8 }, g).textContent = t.toLocaleDateString([], { weekday: 'short', day: 'numeric', month: 'short' });
+      lastDay = day;
+    }
+    sv('text', { class: 'tclock', x: FG.TIME_W - 8, y: r.ny + 4, 'text-anchor': 'end' }, g).textContent = t.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
+    if (k > 0) {
+      const gap = Date.parse(items[r.first].t) - Date.parse(items[rows[k - 1].first].t);
+      if (gap > 30 * 60000) sv('text', { class: 'gap', x: FG.TIME_W - 8, y: r.ny + 17, 'text-anchor': 'end' }, g).textContent = `+${fmtDur(gap)}`;
+    }
+  });
+
+  // the route between rows
+  LV.trailG = sv('g', {}, svg);
+  LV.segs = rows.map((r, k) => {
+    if (k === 0) return null;
+    const p = rows[k - 1];
+    const xa = p.x;
+    const ya = p.ny + 8;
+    const xb = r.x;
+    const yb = r.ny - 8;
+    const ty = r.top - 10;
+    const pts = xa === xb ? [[xa, ya], [xb, yb]] : [[xa, ya], [xa, ty], [xb, ty], [xb, yb]];
+    const kind = r.kind === 'stop' && r.back ? 'back' : r.kind === 'halt' ? 'halt' : r.kind === 'park' || r.kind === 'resume' ? 'park' : r.kind === 'amend' ? 'amendl' : 'fwd';
+    const g = sv('g', { class: `seg ${kind}` }, LV.trailG);
+    sv('path', { class: 'ghost', d: roundPath(pts) }, g);
+    const path = sv('path', { class: 'line', d: roundPath(pts), 'marker-end': kind === 'back' ? 'url(#fl-back)' : 'url(#fl-arr)' }, g);
+    let label = null;
+    if (kind === 'back' || kind === 'amendl') {
+      const denied = rows[k - 1].items.map((q) => LV.items[q]).find((q) => q.type === 'human' && q.action === 'deny');
+      const txt = kind === 'amendl' ? '↩ amendment: back to the contract' : denied ? `↩ back · you denied ${denied.gate || stepName(denied.step)}` : `↩ ${r.fixRound ? `${/^row5/.test(r.rule) ? 'verify-fix' : 'fix'} round ${r.fixRound}` : /^row6/.test(r.rule) ? 'prove again' : 'back'} · ${(RULES[r.rule] || r.rule || '').split(':')[0].toLowerCase()}`;
+      const lx = (xa + xb) / 2;
+      const w = textW(txt, '600 10.5px "IBM Plex Mono", monospace') + 12;
+      label = sv('g', { class: `seglabel ${kind}` }, g);
+      sv('rect', { x: lx - w / 2, y: ty - 9, width: w, height: 17, rx: 3 }, label);
+      sv('text', { x: lx, y: ty + 3.5, 'text-anchor': 'middle' }, label).textContent = txt;
+    }
+    const len = path.getTotalLength();
+    path.style.strokeDasharray = `${len}`;
+    return { g, path, len, label };
+  });
+
+  // rows
+  const rowsG = sv('g', {}, svg);
+  LV.rowEls = rows.map((r, k) => {
+    const g = sv('g', { class: `frow k-${r.kind}`, 'data-r': k }, rowsG);
+    const hl = sv('rect', { class: 'rowhl', x: FG.TIME_W - 2, y: r.top - 2, width: geo.gridRight - FG.TIME_W + 2, height: r.h - FG.TRANSIT + 4, rx: 4 }, g);
+    const def = job.steps.find((s) => s.id === r.step);
+    const gate = def && (def.human || def.kind === 'gate');
+    const node = sv('g', { class: 'fnode', transform: `translate(${r.x},${r.ny})`, tabindex: 0, role: 'button', 'aria-label': `${r.title} at ${fmtClock(items[r.first].t)}` }, g);
+    sv('circle', { class: 'pulse', r: 13 }, node);
+    if (r.kind === 'halt') { sv('rect', { class: 'nshape', x: -8, y: -8, width: 16, height: 16, rx: 3 }, node); sv('path', { class: 'nglyph', d: 'M-4,-4 L4,4 M4,-4 L-4,4' }, node); }
+    else if (r.kind === 'finish') { sv('circle', { class: 'nshape', r: 9 }, node); sv('path', { class: 'nglyph', d: 'M-4,0 L-1,3 L4,-3' }, node); }
+    else if (r.kind === 'park') { sv('circle', { class: 'nshape', r: 8 }, node); sv('path', { class: 'nglyph', d: 'M-2.5,-4 V4 M2.5,-4 V4' }, node); }
+    else if (r.kind === 'amend') { sv('path', { class: 'nshape', d: 'M0,-10 L10,0 L0,10 L-10,0 Z' }, node); sv('text', { class: 'nletter', y: 3.6, 'text-anchor': 'middle' }, node).textContent = 'A'; }
+    else if (gate) sv('path', { class: 'nshape', d: 'M0,-9 L9,0 L0,9 L-9,0 Z' }, node);
+    else sv('circle', { class: 'nshape', r: 7 }, node);
+    node.addEventListener('click', () => seekItem(r.items[r.items.length - 1]));
+    node.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); seekItem(r.items[r.items.length - 1]); } });
+    // label block
+    const lx = r.left ? r.x - 18 : r.x + 18;
+    const anchor = r.left ? 'end' : 'start';
+    const tg = sv('text', { class: 'rtitle', x: lx, y: r.ny + 5, 'text-anchor': anchor }, g);
+    tg.textContent = r.title;
+    let tagX = lx + (r.left ? -1 : 1) * (textW(r.title, TITLE_FONT) + 8);
+    for (const tag of r.tags) {
+      const w = textW(tag.toUpperCase(), '600 9.5px "IBM Plex Mono", monospace') + 10;
+      const x0 = r.left ? tagX - w : tagX;
+      const tgg = sv('g', { class: `rtag${/round|back|again|prove/.test(tag) ? ' hot' : ''}` }, g);
+      sv('rect', { x: x0, y: r.ny - 7, width: w, height: 15, rx: 2 }, tgg);
+      sv('text', { x: x0 + 5, y: r.ny + 4 }, tgg).textContent = tag.toUpperCase();
+      tagX += (r.left ? -1 : 1) * (w + 4);
+    }
+    const lines = [];
+    for (const ln of r.laid) {
+      const lg = sv('g', { class: `rline ${ln.cls || ''}`, 'data-i': ln.i }, g);
+      if (ln.kind === 'text') {
+        ln.wrapped.forEach((txt, q) => { sv('text', { x: lx, y: r.top + ln.y + 12 + q * FG.LINE_H, 'text-anchor': anchor }, lg).textContent = txt; });
+        if (ln.job) { lg.classList.add('linkable'); lg.addEventListener('click', () => openJob(ln.job, true)); el('title', {}, lg).textContent = `Open ${ln.job}`; }
+      } else {
+        const total = Math.max(...ln.chips.map((c) => c.dx + c.w));
+        for (const c of ln.chips) {
+          const x0 = r.left ? lx - total + c.dx : lx + c.dx;
+          drawChip(lg, x0, r.top + c.y, c);
+        }
+      }
+      lines.push({ el: lg, i: ln.i });
+    }
+    return { g, node, hl, lines };
+  });
+
+  // inspector findings, anchored to the row they cite
+  LV.inspEls = [];
+  if (geo.insp) {
+    const ig = sv('g', {}, svg);
+    let floor = 0;
+    const anchored = job.inspector.map((f) => {
+      let k = f.anchor_decision ? items.findIndex((it) => it.type === 'route' && it.id === f.anchor_decision) : -1;
+      if (k < 0 && f.anchor_t) { const at = Date.parse(f.anchor_t); for (let q = 0; q < items.length; q++) if (Date.parse(items[q].t) <= at + 1000) k = q; }
+      if (k < 0) k = items.length - 1;
+      return { f, k, row: rowOf[k] };
+    }).sort((a, b) => a.row - b.row);
+    for (const { f, k, row } of anchored) {
+      const r = rows[row];
+      const lines = wrap(f.summary, '400 11.5px "IBM Plex Sans", system-ui, sans-serif', FG.INSP_W - 22).slice(0, 4);
+      const h = 34 + lines.length * 14 + 8;
+      const y0 = Math.max(r.ny - 12, floor);
+      floor = y0 + h + 8;
+      const g = sv('g', { class: `icard sev-${f.severity} st-${f.status}`, 'data-i': k }, ig);
+      sv('path', { class: 'iconn', d: `M${r.x + 12},${r.ny} H${geo.inspX - 10} L${geo.inspX},${y0 + 14}` }, g);
+      sv('rect', { class: 'ibox', x: geo.inspX, y: y0, width: FG.INSP_W, height: h, rx: 4 }, g);
+      sv('rect', { class: 'ibar', x: geo.inspX, y: y0, width: 4, height: h, rx: 2 }, g);
+      sv('text', { class: 'ihead', x: geo.inspX + 12, y: y0 + 16 }, g).textContent = `⚑ ${f.id} · ${f.severity} · ${f.class}`;
+      sv('text', { class: 'irule', x: geo.inspX + FG.INSP_W - 8, y: y0 + 16, 'text-anchor': 'end' }, g).textContent = f.status;
+      lines.forEach((l, q) => { sv('text', { class: 'itext', x: geo.inspX + 12, y: y0 + 34 + q * 14 }, g).textContent = l; });
+      sv('text', { class: 'irule', x: geo.inspX + 12, y: y0 + h - 6 }, g).textContent = fit(f.rule, '500 9.5px "IBM Plex Mono", monospace', FG.INSP_W - 24);
+      el('title', {}, g).textContent = `${f.id}: ${f.summary}\n${f.question}`;
+      LV.inspEls.push({ g, k });
+    }
+  }
+
+  // the job's puck
+  const puck = sv('g', { class: 'puck' }, svg);
+  sv('circle', { class: 'halo', r: 15 }, puck);
+  sv('circle', { class: 'core', r: 6 }, puck);
+  const plate = sv('g', { class: 'plate' }, svg);
+  const pw = textW(job.id, '600 10px "IBM Plex Mono", monospace') + 12;
+  sv('rect', { x: -pw / 2, y: -31, width: pw, height: 15, rx: 2 }, plate);
+  sv('text', { x: 0, y: -20.5, 'text-anchor': 'middle' }, plate).textContent = job.id;
+  LV.puck = puck;
+  LV.plate = plate;
+  buildSchedule();
+  buildScrubber();
+  buildLog();
+  applyZoom();
+}
+
+function drawChip(parent, x, y, c, maxW) {
+  const ro = AGENTS[c.role] && !AGENTS[c.role][3];
+  const g = sv('g', { class: `achip${ro ? ' ro' : ''}${c.fails ? ' failed' : ''}` }, parent);
+  sv('rect', { class: 'abox', x, y, width: c.w, height: FG.CHIP_H, rx: 10 }, g);
+  let lx = x + 7;
+  if (c.models.length) {
+    const mg = sv('g', { class: `mdl ${modelFamily(c.models[0])}` }, g);
+    sv('rect', { x: lx - 2, y: y + 3, width: 14, height: 14, rx: 3 }, mg);
+    sv('text', { x: lx + 5, y: y + 13.4, 'text-anchor': 'middle' }, mg).textContent = modelLetter(c.models[0]);
+    lx += 16;
+  }
+  const t = sv('text', { class: 'aname', x: lx, y: y + 14 }, g);
+  t.textContent = maxW ? fit(c.role, CHIP_FONT, Math.max(20, x + maxW - lx - textW(c.suffix, CHIP_FONT) - 8)) : c.role;
+  const s = sv('tspan', { class: c.fails ? 'afailt' : 'acount' }, t);
+  s.textContent = c.suffix;
+  el('title', {}, g).textContent = `factory:${c.role} · ${c.n} run(s)${c.models.length ? ` · ${c.models.join(' → ')}` : ' · session model'}${c.retries ? ` · ${c.retries} retry` : ''}${c.fails ? ` · ${c.fails} failed` : ''}${ro ? ' · read-only' : ' · can write'}`;
+  return g;
+}
+
+// ---------- schedule: moves between rows and dwells, on one playhead
+function buildSchedule() {
+  const { items, rowOf } = LV;
+  const sched = [];
+  let t = 0;
+  items.forEach((it, i) => {
+    const r = rowOf[i];
+    const entering = i > 0 && LV.rows[r].first === i && r > 0;
+    const seg = entering ? LV.segs[r] : null;
+    const move = seg ? Math.max(380, Math.min(2200, seg.len / 0.34)) : 0;
+    const dwell = { created: 900, route: 600, human: 1000, result: 800, agents: 650 + 90 * Math.min((it.agents || []).length, 10), park: 1400, stopped: 1400, amend: 1100, spawn: 1100, end: 700 }[it.type] || 550;
+    sched.push({ t0: t, tm: t + move, t1: t + move + dwell, seg, row: r });
+    t += move + dwell;
+  });
+  LV.sched = sched;
+  LV.END = Math.max(1, t);
+}
+const ease = (k) => (k < 0.5 ? 4 * k * k * k : 1 - (-2 * k + 2) ** 3 / 2);
+function locate(t) {
+  const s = LV.sched;
+  let j = -1;
+  let lo = 0;
+  let hi = s.length - 1;
+  while (lo <= hi) { const m = (lo + hi) >> 1; if (s[m].t0 <= t) { j = m; lo = m + 1; } else hi = m - 1; }
+  if (j < 0) return { j: -1, idx: -1, moving: false, k: 0 };
+  const e = s[j];
+  if (t < e.tm) return { j, idx: j - 1, moving: true, k: (t - e.t0) / (e.tm - e.t0) };
+  return { j, idx: j, moving: false, k: 1 };
+}
+
+// ---------- render at playhead t (pure)
+function renderAt(t) {
+  if (!LV.job) return;
+  LV.t = Math.max(0, Math.min(LV.END, t));
+  const loc = locate(LV.t);
+  const idx = loc.idx;
+  const curRow = loc.j >= 0 ? LV.sched[loc.j].row : 0;
+  // route: full for rows reached, partial for the row being entered
+  LV.segs.forEach((s, r) => {
+    if (!s) return;
+    const first = LV.rows[r].first;
+    let k = 0;
+    if (first <= idx) k = 1;
+    else if (loc.moving && first === loc.j) k = ease(loc.k);
+    s.path.style.strokeDashoffset = `${s.len * (1 - k)}`;
+    s.g.style.visibility = k > 0 ? 'visible' : 'hidden';
+    if (s.label) s.label.style.opacity = k >= 1 ? 1 : 0;
+  });
+  // puck
+  let x;
+  let y;
+  if (loc.j >= 0 && loc.moving && LV.sched[loc.j].seg) {
+    const { path: p, len } = LV.sched[loc.j].seg;
+    const a = p.getPointAtLength(ease(loc.k) * len);
+    x = a.x; y = a.y;
+  } else {
+    const r = LV.rows[Math.max(0, curRow)];
+    x = r.x; y = r.ny;
+  }
+  LV.puck.setAttribute('transform', `translate(${x.toFixed(1)},${y.toFixed(1)})`);
+  LV.plate.setAttribute('transform', `translate(${x.toFixed(1)},${y.toFixed(1)})`);
+  if (idx !== LV.shown) { LV.shown = idx; paintState(idx, curRow); }
+  paintScrub();
+  if (LV.follow) followCar(x, y);
+}
+
+function paintState(i, curRow) {
+  const job = LV.job;
+  const S = i >= 0 ? LV.states[i] : initState(job);
+  // rows and their lines appear as they happen
+  LV.rowEls.forEach((re, r) => {
+    const row = LV.rows[r];
+    const on = row.first <= i;
+    re.g.style.visibility = on ? 'visible' : 'hidden';
+    re.g.classList.toggle('current', on && r === curRow);
+    for (const ln of re.lines) ln.el.style.visibility = ln.i <= i ? 'visible' : 'hidden';
+    // node colour from that step's state when the row ended (or now, for the current row)
+    const last = Math.min(i, row.items[row.items.length - 1]);
+    const st = row.kind === 'halt' ? 'blocked' : row.kind === 'finish' ? 'done' : row.kind === 'park' ? (r === curRow && S.parked ? 'blocked' : 'parked') : row.kind === 'resume' || row.kind === 'amend' ? 'done' : row.kind === 'start' ? 'done' : (LV.states[Math.max(0, last)].steps[row.step] || {}).status || 'pending';
+    re.node.setAttribute('class', `fnode s-${st}${r === curRow ? ' here' : ''}`);
+  });
+  document.querySelectorAll('#street .trow').forEach((g) => { g.style.visibility = LV.rows[+g.dataset.r].first <= i ? 'visible' : 'hidden'; });
+  LV.inspEls.forEach((c) => { c.g.style.visibility = c.k <= i ? 'visible' : 'hidden'; });
+  // header signals
+  for (const s of job.steps) {
+    const st = S.steps[s.id];
+    setSig(LV.stepSig[s.id], st.status === 'again' ? 'pending' : st.status);
+  }
+  for (const id of ORDER) {
+    const ss = stageStatus(job, S, id);
+    LV.stageBar[id].setAttribute('class', `stagebar is-${ss}`);
+  }
+  paintCrew(i);
+  paintOdo(i, S);
+  paintNow(i, S);
+  paintLog(i);
+}
+
+function crewAt(i, step) {
+  const by = new Map();
+  for (const c of LV.crew) {
+    if (c.item > i || (step && c.step !== step)) continue;
+    const k = c.role;
+    const a = by.get(k) || { role: k, n: 0, models: [], retries: 0, fails: 0, ms: 0, labels: [] };
+    a.n += 1;
+    if (c.model && !a.models.includes(c.model)) a.models.push(c.model);
+    if (c.retry || /^build \S+ #([2-9]|\d{2,})/.test(c.label || '')) a.retries += 1;
+    if (BAD_OUTCOME.has(c.outcome)) a.fails += 1;
+    a.ms += c.ms || 0;
+    a.labels.push(c);
+    by.set(k, a);
+  }
+  return [...by.values()];
+}
+// the crew band: every agent that has worked in each stage so far
+function paintCrew(i) {
+  const g = LV.crewG;
+  g.innerHTML = '';
+  const seen = new Set();
+  for (const st of LV.geo.stages) {
+    if (!st.steps.length) continue;
+    const by = new Map();
+    for (const c of LV.crew) {
+      if (c.item > i || !st.steps.some((s) => s.id === c.step)) continue;
+      const a = by.get(c.role) || { role: c.role, n: 0, models: [], retries: 0, fails: 0 };
+      a.n += 1;
+      if (c.model && !a.models.includes(c.model)) a.models.push(c.model);
+      if (c.retry || /^build \S+ #([2-9]|\d{2,})/.test(c.label || '')) a.retries += 1;
+      if (BAD_OUTCOME.has(c.outcome)) a.fails += 1;
+      by.set(c.role, a);
+    }
+    [...by.values()].forEach((a, q) => {
+      const suffix = ` ×${a.n}`;
+      const w = st.w - 6;
+      const key = `${st.id}:${a.role}:${a.n}`;
+      seen.add(key);
+      const y = 10 + q * (FG.CHIP_H + 4);
+      const cg = drawChip(g, st.x + 3, y, { ...a, suffix: `${a.retries ? ` ↻${a.retries}` : ''}${a.fails ? ` ✕${a.fails}` : ''}${suffix}`, w }, w);
+      if (!LV.chipsSeen.has(key) && !reduceMotion) { cg.classList.add('pop'); cg.style.animationDelay = `${q * 80}ms`; }
+    });
+  }
+  LV.chipsSeen = seen;
+}
+
+function paintOdo(i, S) {
+  const upto = LV.items.slice(0, i + 1);
+  const decisions = upto.filter((x) => x.type === 'route').length;
+  const runs = upto.filter((x) => x.type === 'agents').reduce((n, x) => n + (x.runs || 0), 0);
+  const backs = LV.rows.filter((r) => r.first <= i && ((r.kind === 'stop' && r.back) || r.kind === 'amend')).length;
+  const finds = (LV.job.inspector || []).length ? LV.inspEls.filter((c) => c.k <= i).length : null;
+  const first = LV.items[0] ? Date.parse(LV.items[0].t) : 0;
+  const cur = i >= 0 ? Date.parse(LV.items[i].t) : first;
+  const vals = [['decisions', decisions], ['agent runs', runs], ['went back', backs], ['elapsed', fmtDur(cur - first)]];
+  if (finds !== null) vals.push(['inspector', finds]);
+  const host = $('#odo');
+  if (host.children.length !== vals.length) host.innerHTML = vals.map(([k]) => `<div><b data-k="${k}">0</b><span>${k}</span></div>`).join('');
+  for (const [k, v] of vals) {
+    const b = host.querySelector(`[data-k="${k}"]`);
+    if (b.textContent !== String(v)) { b.textContent = String(v); if (!reduceMotion) { b.classList.remove('tick'); void b.getBoundingClientRect(); b.classList.add('tick'); } }
+  }
+}
+
+// ---------- the panel
+function describe(it) {
+  const job = LV.job;
+  switch (it.type) {
+    case 'created': return [`Request submitted`, `“${job.title}” · ${job.work_type}, ${job.risk} risk${job.risk_proposed && job.risk_proposed !== job.risk ? ` (proposed ${job.risk_proposed})` : ''} → recipe ${job.recipe}`];
+    case 'route': {
+      const where = it.step ? stepName(it.step) : it.raw_step || it.chosen;
+      const head = it.action === 'wait' ? `Waiting for you: ${where}` : it.action === 'gate' ? `Gate ${where}: your turn` : it.action === 'parked' ? 'Router parked the job' : it.action === 'done' ? 'Recipe complete' : `Router → ${where}${it.scope && it.scope !== 'all' ? ` (${it.scope} round)` : ''}`;
+      return [head, `${RULES[it.rule] || it.rule}${it.reason ? ` — ${it.reason}` : ''}`];
+    }
+    case 'human': {
+      const g = it.gate || stepName(it.step);
+      const t = { approve: `You approved ${g}${it.via ? ` (${it.via})` : ''}`, deny: `You asked for changes at ${g}`, merged: `You merged${it.commit ? ` ${it.commit}` : ''}`, resume: 'You resumed the job', waive: 'You waived a floor', confirm_ac: 'You confirmed a criterion', cancelled: 'You cancelled the job', abandoned: 'You abandoned the job' }[it.action] || `You: ${it.action}`;
+      return [t, it.reason || ''];
+    }
+    case 'result': return [`${stepName(it.step || it.raw_step)}: ${it.ok ? 'passed' : it.outcome === 'ask' ? 'needs you' : 'not passed'}`, it.text];
+    case 'agents': return [`${it.workflow ? `${it.workflow}${it.config ? ` · ${it.config}` : ''}` : 'Agents (seen by the hooks)'} ran ${it.runs} agent run${it.runs === 1 ? '' : 's'}`, it.from === 'hooks' ? 'Seen through the hooks (no roster in the envelope)' : `Workflow status: ${it.status}`];
+    case 'park': return ['Parked', it.text];
+    case 'stopped': return ['Stopped', it.text];
+    case 'error': return ['Workflow error', it.text];
+    case 'guard': return [`Guard blocked ${it.who || 'a tool call'}`, `${it.text}${it.target ? ` — command: ${it.target}` : ''}`];
+    case 'refused': return ['A reply was refused', it.text];
+    case 'amend': return [it.phase === 'start' ? `Amendment ${it.id || ''} started`.replace('  ', ' ') : it.phase === 'submit' ? 'Amendment submitted' : 'Amendment applied', it.text];
+    case 'spawn': return [`Follow-up ${it.job} opened`, it.text];
+    case 'end': return job.status === 'closed' ? ['Off the line', `Closed ${fmtDate(job.closed_at || it.t)}`] : ['Now', `Last activity ${ago(it.t)}`];
+    default: return [it.type, it.text || ''];
+  }
+}
+function who(it) {
+  if (it.type === 'route') return ['router', 'route'];
+  if (it.type === 'human') return ['you', 'you'];
+  if (it.type === 'agents') return ['agents', 'agents'];
+  if (it.type === 'result') return [it.ok ? 'passed' : it.outcome === 'ask' ? 'asks' : 'failed', it.ok ? 'ok' : it.outcome === 'ask' ? 'you' : 'bad'];
+  if (['park', 'error', 'guard', 'stopped', 'refused'].includes(it.type)) return [it.type, 'bad'];
+  if (it.type === 'created') return ['request', 'you'];
+  if (it.type === 'amend') return ['amend', 'you'];
+  if (it.type === 'spawn') return ['follow-up', 'route'];
+  return [it.type === 'end' ? (LV.job.status === 'closed' ? 'closed' : 'now') : it.type, ''];
+}
+function agentRowsHtml(list) {
+  return `<div class="alist">${list.map((a) => {
+    const fam = modelFamily(a.model);
+    const bad = BAD_OUTCOME.has(a.outcome);
+    return `<div class="arow"><span class="mdot ${fam}" title="${esc(a.model || 'session model')}">${esc(modelLetter(a.model))}</span><b title="${esc(a.label)}">${esc(a.label)}</b><span class="o ${bad ? 'bad' : a.outcome && a.outcome !== 'ok' ? 'good' : ''}">${esc(a.outcome || '')}${a.ms ? ` · ${fmtDur(a.ms)}` : ''}</span></div>`;
+  }).join('')}</div>`;
+}
+function paintNow(i, S) {
+  if (LV.sel) return paintStep(LV.sel);
+  const job = LV.job;
+  const it = i >= 0 ? LV.items[i] : null;
+  const pos = S.pos;
+  const def = job.steps.find((s) => s.id === pos);
+  const status = def ? S.steps[pos].status : job.status === 'closed' && pos === 'finish' ? 'done' : 'pending';
+  const [head, sub] = it ? describe(it) : ['Ready', 'Press Replay to drive this job down the line.'];
+  const first = LV.items[0] ? Date.parse(LV.items[0].t) : 0;
+  const parts = [];
+  parts.push(`<div class="nowtop"><span class="label">${def ? `stage ${ORDER.indexOf(def.stage) + 1} · ${esc(STAGE_NAME[def.stage])}` : pos === 'finish' ? 'off the line' : 'start'}</span><span class="state-word w-${status}">${esc(WORD[status] || status)}</span></div>`);
+  parts.push(`<h3>${esc(head)}</h3>`);
+  if (sub) parts.push(`<p>${esc(sub)}</p>`);
+  if (it) parts.push(`<p class="mono">${esc(fmtDate(it.t))} · +${esc(fmtDur(Date.parse(it.t) - first))} from the request</p>`);
+  const r = S.lastRoute;
+  if (r && r.alignment) {
+    parts.push(`<div class="label">Router checks at ${esc(r.id || '')}</div><div class="checks">${CHECKS.map(([k, n], q) => { const v = r.alignment[k]; return `<span class="${v === true ? 'pass' : v === false ? (r.first_failing === k ? 'fail' : '') : ''}" title="${v === null ? 'not applicable yet' : v ? 'passes' : 'fails'}">${q + 1} ${esc(n)}</span>`; }).join('')}</div>`);
+  }
+  if (it && it.type === 'agents') parts.push(`<div class="label">Agents in this run</div>${agentRowsHtml(it.agents)}`);
+  else if (def) {
+    const here = LV.crew.filter((c) => c.item <= i && c.step === pos);
+    if (here.length) parts.push(`<div class="label">Agents at ${esc(stepName(pos))} so far</div>${agentRowsHtml(here.slice(-8))}`);
+  }
+  if (it && it.type === 'result' && it.findings && it.findings.length) parts.push(`<div class="label">Findings</div>${findingsHtml(it.findings)}`);
+  if (i === LV.items.length - 1 && job.running_agents && job.running_agents.length) parts.push(`<div class="label">Running now</div><div class="chips">${job.running_agents.map((a) => `<span class="chip agent">${esc(a.agent_type)}</span>`).join('')}</div>`);
+  if (i === LV.items.length - 1 && job.pending_gate && job.pending_gate.id !== 'P') parts.push(`<div class="label">Your move</div><p>Reply <b>approve</b> or <b>deny &lt;what must change&gt;</b> in chat to answer ${esc(job.pending_gate.id)}.</p>`);
+  if (i === LV.items.length - 1 && job.status === 'parked') parts.push(`<div class="label">Your move</div><p>Fix what the reason names, then reply <b>resume</b>.</p>`);
+  $('#now').innerHTML = parts.join('');
+}
+function findingsHtml(list) {
+  return `<div class="tblwrap"><table class="tbl"><tr><th>Lane</th><th>Severity</th><th>Status</th><th>Finding</th></tr>${list.map((f) => `<tr><td class="n">${esc(f.lane || '')}</td><td><span class="sev ${esc(f.severity)}">${esc(f.severity)}</span></td><td class="stt ${esc(f.status || '')}">${esc(f.status || '')}</td><td>${esc(f.summary)}${f.file ? ` <span class="mono">${esc(f.file)}${f.line ? `:${esc(f.line)}` : ''}</span>` : ''}</td></tr>`).join('')}</table></div>`;
+}
+function paintStep(id) {
+  const job = LV.job;
+  const def = job.steps.find((s) => s.id === id);
+  const i = LV.shown;
+  const S = i >= 0 ? LV.states[i] : initState(job);
+  const st = S.steps[id];
+  const parts = [`<button type="button" class="back" id="back">← Now</button>`];
+  parts.push(`<div class="nowtop"><span class="label">stage ${ORDER.indexOf(def.stage) + 1} · ${esc(STAGE_NAME[def.stage])}</span><span class="state-word w-${st.status}">${esc(WORD[st.status] || st.status)}</span></div>`);
+  parts.push(`<h3>${esc(stepName(id))}</h3><p>${esc((STEP_INFO[id] || [, ''])[1])}</p>`);
+  parts.push(`<p class="mono">${esc(def.run)}${def.lanes ? ` · lanes ${esc(def.lanes.join(', '))}` : ''}${st.visits ? ` · ${st.visits} visit${st.visits > 1 ? 's' : ''}` : ''}${st.note ? ` · ${esc(st.note)}` : ''}</p>`);
+  if (st.text) parts.push(`<p>${esc(st.text)}</p>`);
+  const here = LV.crew.filter((c) => c.item <= i && c.step === id);
+  if (here.length) parts.push(`<div class="label">Agents (${here.length} runs)</div>${agentRowsHtml(here)}`);
+  else if (def.kind === 'workflow') parts.push('<p>No agents have run here yet at this point in the replay.</p>');
+  const evs = LV.items.map((it, k) => ({ it, k })).filter(({ it }) => (it.step || (it.type === 'route' ? it.raw_step : null)) === id);
+  if (evs.length) parts.push(`<div class="label">Events here</div><ul class="log">${evs.map(({ it, k }) => logRow(it, k)).join('')}</ul>`);
+  $('#now').innerHTML = parts.join('');
+  $('#back').addEventListener('click', () => { LV.sel = null; LV.shown = -2; renderAt(LV.t); });
+  $('#now').querySelectorAll('[data-k]').forEach((b) => b.addEventListener('click', () => seekItem(+b.dataset.k)));
+}
+function selectStep(id) {
+  LV.sel = LV.sel === id ? null : id;
+  LV.shown = -2;
+  renderAt(LV.t);
+  if (window.innerWidth < 1780) $('#now').scrollIntoView({ block: 'nearest', behavior: reduceMotion ? 'auto' : 'smooth' });
+}
+
+// ---------- log, scrubber, transport
+function logRow(it, k) {
+  const first = LV.items[0] ? Date.parse(LV.items[0].t) : 0;
+  const [w, cls] = who(it);
+  const [head] = describe(it);
+  return `<li><button type="button" data-k="${k}"><span class="lt">+${esc(fmtDur(Date.parse(it.t) - first))}</span><span class="lw ${cls}">${esc(w)}</span><span>${esc(head)}</span></button></li>`;
+}
+function buildLog() {
+  LV.logHtml = `<div class="logwrap"><div class="label">Every event (${LV.items.length})</div><ul class="log" id="log">${LV.items.map(logRow).join('')}</ul></div>`;
+}
+function paintLog(i) {
+  if (LV.sel) return;
+  $('#now').insertAdjacentHTML('beforeend', LV.logHtml);
+  const log = $('#log');
+  log.querySelectorAll('button').forEach((b) => {
+    b.addEventListener('click', () => seekItem(+b.dataset.k));
+    if (+b.dataset.k === i) { b.setAttribute('aria-current', 'true'); const top = b.offsetTop - log.offsetTop; if (top < log.scrollTop || top > log.scrollTop + log.clientHeight - 30) log.scrollTop = top - 60; }
+  });
+}
+function buildScrubber() {
+  const ticks = $('#s-ticks');
+  const stages = {};
+  ticks.innerHTML = LV.items.map((it, k) => {
+    const e = LV.sched[k];
+    const pct = (e.tm / LV.END) * 100;
+    const S = LV.states[k];
+    const def = LV.job.steps.find((s) => s.id === S.pos);
+    if (def && stages[def.stage] === undefined) stages[def.stage] = pct;
+    const cls = it.type === 'human' || (it.type === 'route' && S.steps[S.pos] && S.steps[S.pos].status === 'waiting') ? 'gate' : it.type === 'route' && S.loops.length && S.loops[S.loops.length - 1].item === k ? 'loop' : (it.type === 'result' && !it.ok) || ['park', 'error', 'stopped'].includes(it.type) ? 'fail' : it.type === 'agents' ? 'agents' : '';
+    return `<span class="tk ${cls}" style="left:${pct.toFixed(2)}%"></span>`;
+  }).join('') + Object.entries(stages).map(([id, pct]) => `<span class="st" style="left:${pct.toFixed(2)}%">${String(ORDER.indexOf(id) + 1).padStart(2, '0')}</span>`).join('');
+}
+function paintScrub() {
+  const pct = (LV.t / LV.END) * 100;
+  $('#s-fill').style.width = `${pct}%`;
+  $('#s-head').style.left = `${pct}%`;
+  $('#s-range').value = String(Math.round((LV.t / LV.END) * 1000));
+  const loc = locate(LV.t);
+  $('#clock').textContent = `${Math.max(0, loc.idx) + 1} / ${LV.items.length}`;
+  $('#t-play').textContent = LV.playing ? '❚❚ Pause' : LV.t >= LV.END ? '▶ Replay' : '▶ Play';
+}
+function seekItem(k) {
+  k = Math.max(0, Math.min(LV.items.length - 1, k));
+  stopPlay();
+  renderAt(LV.sched[k].tm + 1);
+}
+function curIndex() { return locate(LV.t).idx; }
+function frame(now) {
+  if (!LV.playing) return;
+  const dt = Math.min(64, now - LV.last);
+  LV.last = now;
+  let t = LV.t + dt * LV.speed;
+  if (reduceMotion) {
+    // jump stop to stop: skip the moving part of each segment
+    const loc = locate(t);
+    if (loc.moving) t = LV.sched[loc.j].tm;
+  }
+  if (t >= LV.END) { renderAt(LV.END); stopPlay(); return; }
+  renderAt(t);
+  LV.raf = requestAnimationFrame(frame);
+}
+function play() {
+  if (LV.t >= LV.END) { LV.t = 0; LV.shown = -2; }
+  LV.playing = true;
+  LV.sel = null;
+  LV.last = performance.now();
+  LV.raf = requestAnimationFrame(frame);
+  paintScrub();
+}
+function stopPlay() { LV.playing = false; cancelAnimationFrame(LV.raf); paintScrub(); }
+function applyZoom() {
+  const host = $('#street');
+  if (!LV.geo) return;
+  const fitZ = Math.min(1, (host.clientWidth - 2) / LV.geo.width);
+  LV.zoom = LV.fit && fitZ >= 0.72 ? fitZ : 1;
+  host.querySelectorAll('svg').forEach((g) => { g.style.zoom = String(LV.zoom); });
+  $('#t-zoom').setAttribute('aria-pressed', String(LV.fit));
+  $('#t-zoom').textContent = LV.fit ? 'Fit' : '1:1';
+}
+function followCar(x, y) {
+  const host = $('#street');
+  x *= LV.zoom || 1;
+  y *= LV.zoom || 1;
+  if (performance.now() - LV.userScrollAt < 2500) return;
+  const head = FG.HEAD_H * (LV.zoom || 1);
+  const vx = host.scrollLeft;
+  const vy = host.scrollTop;
+  const w = host.clientWidth;
+  const h = host.clientHeight - head;
+  let tx = vx;
+  let ty = vy;
+  if (x < vx + w * 0.12 || x > vx + w * 0.7) tx = Math.max(0, x - w * 0.3);
+  if (y < vy + 30 || y > vy + h * 0.72) ty = Math.max(0, y - h * 0.35);
+  if (tx !== vx || ty !== vy) host.scrollTo({ left: tx, top: ty, behavior: LV.playing && !reduceMotion ? 'smooth' : 'auto' });
+}
+function bindTransport() {
+  $('#t-play').addEventListener('click', () => (LV.playing ? stopPlay() : play()));
+  $('#t-prev').addEventListener('click', () => { const i = curIndex(); seekItem(i - 1); });
+  $('#t-next').addEventListener('click', () => { const i = curIndex(); seekItem(i + 1); });
+  $('#t-zoom').addEventListener('click', () => { LV.fit = !LV.fit; try { localStorage.setItem('fc-fit', LV.fit ? '1' : '0'); } catch (e) { /* ignore */ } applyZoom(); LV.userScrollAt = -1e9; renderAt(LV.t); });
+  window.addEventListener('resize', () => { if (LV.job) applyZoom(); });
+  $('#t-follow').addEventListener('click', () => { LV.follow = !LV.follow; LV.userScrollAt = -1e9; $('#t-follow').setAttribute('aria-pressed', String(LV.follow)); if (LV.follow) renderAt(LV.t); });
+  $('#speed').innerHTML = [0.5, 1, 2, 4].map((s) => `<button type="button" data-s="${s}" aria-pressed="${s === LV.speed}">${s === 0.5 ? '½' : s}×</button>`).join('');
+  $('#speed').querySelectorAll('button').forEach((b) => b.addEventListener('click', () => {
+    LV.speed = +b.dataset.s;
+    try { localStorage.setItem('fc-speed', String(LV.speed)); } catch (e) { /* ignore */ }
+    $('#speed').querySelectorAll('button').forEach((x) => x.setAttribute('aria-pressed', String(+x.dataset.s === LV.speed)));
+  }));
+  const range = $('#s-range');
+  range.addEventListener('input', () => { stopPlay(); renderAt((+range.value / 1000) * LV.END); });
+  range.addEventListener('keydown', (e) => {
+    if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') { e.preventDefault(); const i = curIndex(); seekItem(e.key === 'ArrowLeft' ? i - 1 : i + 1); }
+    if (e.key === ' ') { e.preventDefault(); LV.playing ? stopPlay() : play(); }
+  });
+  const host = $('#street');
+  const userScroll = () => { LV.userScrollAt = performance.now(); };
+  host.addEventListener('wheel', userScroll, { passive: true });
+  host.addEventListener('touchstart', userScroll, { passive: true });
+  host.addEventListener('pointerdown', userScroll);
+  host.addEventListener('keydown', (e) => {
+    if (e.target !== host) return;
+    if (e.key === ' ') { e.preventDefault(); LV.playing ? stopPlay() : play(); }
+    if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') { userScroll(); }
+  });
+}
+
+// ---------- page: picker, header, below
+function siglegend() {
+  const items = [['done', 'v', 'clear'], ['running', 'v', 'running'], ['waiting', 'ped', 'your turn (flashing)'], ['failed', 'v', 'stopped · blocked'], ['pending', 'v', 'ahead'], ['skipped', 'v', 'not needed']];
+  $('#siglegend').innerHTML = items.map(([s, , w], k) => `<span><svg width="${18}" height="${44}" viewBox="-3 -3 20 46" id="lg${k}" aria-hidden="true"></svg>${esc(w)}</span>`).join('')
+    + '<span class="mono">agents: <span class="mdot opus" style="display:inline-grid;width:14px;height:14px;border-radius:3px;place-items:center;color:#fff;font:700 9px var(--mono);vertical-align:middle">O</span> opus <span class="mdot sonnet" style="display:inline-grid;width:14px;height:14px;border-radius:3px;place-items:center;color:#fff;font:700 9px var(--mono);vertical-align:middle">S</span> sonnet <span class="mdot haiku" style="display:inline-grid;width:14px;height:14px;border-radius:3px;place-items:center;color:#fff;font:700 9px var(--mono);vertical-align:middle">H</span> haiku · ×runs ↻retries ✕failed ↑escalated</span>';
+  items.forEach(([s, kind], k) => {
+    const host = $(`#lg${k}`);
+    if (kind === 'ped') { host.setAttribute('viewBox', '-3 -12 26 46'); }
+    const g = signal(host, kind, 0, 0);
+    setSig(g, s);
+  });
+}
+function renderJobs() {
+  const host = $('#jobs');
+  host.innerHTML = LV.jobs.map(({ job, S, sum }) => `<button type="button" class="jobcard" data-id="${esc(job.id)}" aria-pressed="${LV.job && LV.job.id === job.id}">
+      <span class="jt"><span class="jid">${esc(job.id)}</span><span class="jr">${esc(job.recipe || '')}</span></span>
+      <span class="jn">${esc(job.title)}</span>
+      <span class="jb"><span class="jw w-${sum[0]}">${esc(sum[1])}</span><span class="lamps" aria-hidden="true">${ORDER.map((st) => `<i class="${stageStatus(job, S, st)}"></i>`).join('')}</span></span>
+    </button>`).join('');
+  host.querySelectorAll('.jobcard').forEach((b) => b.addEventListener('click', () => openJob(b.dataset.id, true)));
+}
+function renderHead(job) {
+  $('#j-title').textContent = `${job.id} · ${job.title}`;
+  const S = LV.states[LV.states.length - 1];
+  const sum = jobSummary(job, S);
+  const models = Object.entries(job.models || {});
+  $('#j-meta').innerHTML = [
+    `<span>recipe <b class="mono">${esc(job.recipe)}</b></span>`,
+    `<span>${esc(job.work_type)} · ${esc(job.risk)} risk</span>`,
+    `<span class="w-${sum[0]}"><b>${esc(sum[1])}</b></span>`,
+    `<span>opened ${esc(fmtDate(job.created_at))}</span>`,
+    job.pr ? `<span>${job.pr.mode === 'github' ? 'PR' : 'local merge'}${job.pr.merged ? ' · merged' : ''}</span>` : '',
+    models.length ? `<span title="policy.agents.models">models: ${esc(models.map(([r, m]) => `${r}=${m}`).join(', '))}${job.escalation && job.escalation.length ? ` · builder retries → ${esc(job.escalation.join(', '))}` : ''}</span>` : '<span>models: session default</span>',
+  ].join('');
+  $('#odo').innerHTML = '';
+}
+function renderBelow(job) {
+  const S = LV.states[LV.states.length - 1];
+  const tasks = job.tasks || [];
+  const lastChallenge = [...LV.items].reverse().find((x) => x.type === 'result' && x.findings);
+  const crew = crewAt(LV.items.length, null).sort((a, b) => b.n - a.n);
+  const totalMs = crew.reduce((n, a) => n + a.ms, 0);
+  const html = [];
+  html.push(`<section class="panel"><h3>Crew used</h3>${crew.length ? `<div class="tblwrap"><table class="tbl"><tr><th>Agent</th><th>Runs</th><th>Model</th><th>Retries</th><th>Failed</th><th>Time</th></tr>${crew.map((a) => `<tr><td class="n">${esc(a.role)}</td><td class="n">${a.n}</td><td class="n">${esc(a.models.join(' → ') || 'session')}</td><td class="n">${a.retries || ''}</td><td class="n">${a.fails ? `<span class="stt fail">${a.fails}</span>` : ''}</td><td class="n">${a.ms ? esc(fmtDur(a.ms)) : '—'}</td></tr>`).join('')}</table></div><p class="label">${crew.reduce((n, a) => n + a.n, 0)} runs · ${crew.length} agent types${totalMs ? ` · ${esc(fmtDur(totalMs))} of agent time` : ''}</p>` : '<p class="lede" style="margin:0">No agents have run for this job yet.</p>'}</section>`);
+  if (tasks.length) html.push(`<section class="panel"><h3>Tasks</h3><div class="tblwrap"><table class="tbl"><tr><th>Task</th><th>Objective</th><th>Tries</th><th>Outcome</th></tr>${tasks.map((t) => `<tr><td class="n">${esc(t.id)}${t.depends_on.length ? `<br><span class="label">after ${esc(t.depends_on.join(', '))}</span>` : ''}</td><td>${esc(t.objective)}</td><td class="n">${t.attempts || '—'}</td><td class="stt ${t.outcome === 'done' ? 'done' : t.outcome ? 'fail' : ''}">${esc(t.outcome || 'not started')}</td></tr>`).join('')}</table></div></section>`);
+  if (lastChallenge) html.push(`<section class="panel"><h3>Latest review</h3><p>${esc(lastChallenge.text)}</p>${findingsHtml(lastChallenge.findings)}</section>`);
+  if ((job.lessons || []).length) html.push(`<section class="panel"><h3>Lessons</h3>${job.lessons.map((l) => `<p><span class="mono">${esc(l.id)} · ${esc(l.status)}</span><br>${esc(l.text)}</p>`).join('')}</section>`);
+  if ((job.inspector || []).length) html.push(`<section class="panel"><h3>Inspector</h3><p>An independent audit of this job against the rulebook it promised to follow. Findings are questions for you, not blocks.</p><div class="tblwrap"><table class="tbl"><tr><th>Finding</th><th>Severity</th><th>What it saw</th><th>Status</th></tr>${job.inspector.map((f) => `<tr><td class="n">${esc(f.id)}<br><span class="label">${esc(f.rule)}</span></td><td><span class="sev ${f.severity === 'high' || f.severity === 'critical' ? 'major' : 'minor'}">${esc(f.severity)}</span></td><td>${esc(f.summary)}<br><span class="label" style="text-transform:none;letter-spacing:0">${esc(f.question)}</span></td><td class="stt">${esc(f.status)}</td></tr>`).join('')}</table></div><p class="label" style="text-transform:none;letter-spacing:0">Settle one by replying in chat: <code>ack finding ${esc(job.inspector[0].id)}</code>, <code>fixed finding ${esc(job.inspector[0].id)}</code> or <code>wontfix finding ${esc(job.inspector[0].id)} &lt;why&gt;</code>.</p></section>`);
+  if (S.guards) html.push(`<section class="panel"><h3>Guard</h3><p>The guard hook blocked ${S.guards} tool call(s) during this job. They show in the event log.</p></section>`);
+  $('#below').innerHTML = html.join('');
+}
+function openJob(id, user) {
+  const entry = LV.jobs.find((x) => x.job.id === id) || LV.jobs[0];
+  if (!entry) return;
+  stopPlay();
+  buildFlow(entry.job);
+  renderJobs();
+  renderHead(entry.job);
+  renderBelow(entry.job);
+  const host = $('#street');
+  host.scrollLeft = 0;
+  renderAt(LV.END);
+  if (user) { try { history.replaceState(null, '', `#${id}`); } catch (e) { /* sandboxed */ } }
+}
+function liveEmpty(kind) {
+  $('#live-body').hidden = true;
+  const e = $('#live-empty');
+  e.hidden = false;
+  e.innerHTML = kind === 'template'
+    ? `<div class="panel empty"><h2>No factory data in this page</h2><p>This is the console's template. Run <code>factory console</code> in a repository that uses the factory: it writes <code>.factory/console.html</code> with every job, and this tab replays them on the line.</p><div class="cmd"><code>factory console</code><button type="button" data-copy="factory console">Copy</button></div><p>Meanwhile the recipe map shows the whole factory.</p><button type="button" class="linkbtn" data-go="plan">Open the recipe map</button></div>`
+    : `<div class="panel empty"><h2>No jobs on the floor yet</h2><p>Start one in Claude Code, then run <code>factory console</code> again to see it drive down the line.</p><div class="cmd"><code>/factory:start &lt;what you want&gt;</code><button type="button" data-copy="/factory:start ">Copy</button></div><button type="button" class="linkbtn" data-go="plan">Open the recipe map</button></div>`;
+  e.querySelectorAll('[data-copy]').forEach((b) => b.addEventListener('click', () => {
+    const txt = b.dataset.copy;
+    const done = () => { b.textContent = 'Copied'; setTimeout(() => { b.textContent = 'Copy'; }, 1400); };
+    try { navigator.clipboard.writeText(txt).then(done, () => { b.textContent = 'Select the text to copy'; }); } catch (err) { b.textContent = 'Select the text to copy'; }
+  }));
+  e.querySelectorAll('[data-go]').forEach((b) => b.addEventListener('click', () => show(b.dataset.go)));
+}
+function bootLive() {
+  const flags = [];
+  if (DATA && DATA.label) flags.push(`<span class="flag sample" title="${esc(DATA.label)}">${esc(DATA.label)}</span>`);
+  if (DATA) {
+    const s = DATA.integrity && DATA.integrity.status;
+    flags.push(s === 'verified' ? `<span class="flag ok" title="${DATA.integrity.valid} sealed records checked">seals verified</span>` : s === 'tampered' ? `<span class="flag bad" title="${DATA.integrity.invalid} records fail their seal">seal mismatch</span>` : '<span class="flag unk" title="This machine has no factory key, so seals were not checked">seals not checked</span>');
+  }
+  $('#flags').innerHTML = flags.join('');
+  $('#foot').innerHTML = DATA
+    ? `Generated ${esc(fmtDate(DATA.generated_at))} by <code>factory console</code>${DATA.plugin_version ? ` (factory ${esc(DATA.plugin_version)})` : ''} from <code>${esc(DATA.project)}/.factory/</code>: routing decisions, the ledger, the event log and job state, read without changing anything. Re-run it to refresh.`
+    : 'Built from the factory\'s own definitions: recipes, skills, workflows, agents and the router\'s checks. Generate it with <code>factory console</code> to see real jobs.';
+  bindTransport();
+  siglegend();
+  if (!DATA) { liveEmpty('template'); return; }
+  if (!DATA.jobs || !DATA.jobs.length) { liveEmpty('none'); return; }
+  LV.jobs = DATA.jobs.map((job) => { const S = finalState(job); return { job, S, sum: jobSummary(job, S) }; })
+    .sort((a, b) => (SORT[a.sum[0]] - SORT[b.sum[0]]) || (a.job.updated_at < b.job.updated_at ? 1 : -1));
+  const hash = (location.hash || '').replace('#', '');
+  const pick = LV.jobs.find((x) => x.job.id === hash) ? hash : LV.jobs[0].job.id;
+  openJob(pick, false);
+}
+
+// ===================================================================== crew
+function renderCrew() {
+  const used = {};
+  if (DATA && DATA.jobs) {
+    for (const job of DATA.jobs) for (const it of job.timeline) if (it.type === 'agents') for (const a of it.agents || []) {
+      const u = (used[a.role] = used[a.role] || { n: 0, jobs: new Set(), models: new Set() });
+      u.n += 1; u.jobs.add(job.id); if (a.model) u.models.add(a.model);
+    }
+  }
+  const groups = [...new Set(Object.values(AGENTS).map((a) => a[0]))];
+  $('#crew').innerHTML = groups.map((g) => {
+    const list = Object.entries(AGENTS).filter(([, a]) => a[0] === g);
+    return `<section class="crew-group"><h2>${esc(g)} <small>${list.length} agent${list.length > 1 ? 's' : ''}</small></h2><div class="agents">${list.map(([name, [, role, tools, write]]) => {
+      const u = used[name];
+      const usedLine = DATA ? (u ? `<span class="used">ran ${u.n}× in ${u.jobs.size} job${u.jobs.size > 1 ? 's' : ''}${u.models.size ? ` · ${esc([...u.models].join(', '))}` : ''}</span>` : '<span class="used none">not used in these jobs</span>') : '';
+      return `<div class="panel agent-card"><div class="name"><b>factory:${esc(name)}</b><span class="badge ${write ? 'write' : 'read'}">${write ? 'can write' : 'read-only'}</span></div>
+      <p>${esc(role)}</p>${usedLine}<div class="tools">${tools.map((t) => `<span>${esc(t)}</span>`).join('')}</div></div>`;
+    }).join('')}</div></section>`;
+  }).join('');
+}
+
+// ===================================================================== tabs + boot
+const TABS = ['live', 'plan', 'crew'];
+let planReady = false;
+function show(name) {
+  TABS.forEach((t) => {
+    const on = t === name;
+    $(`#tab-${t}`).setAttribute('aria-selected', String(on));
+    $(`#tab-${t}`).tabIndex = on ? 0 : -1;
+    $(`#view-${t}`).hidden = !on;
+  });
+  if (name !== 'plan') stopRun();
+  if (name !== 'live') stopPlay();
+  if (name === 'plan') {
+    if (LV.job && RECIPES[LV.job.recipe] && !planReady) { recipe = LV.job.recipe; renderPicker(); render(); }
+    planReady = true;
+    requestAnimationFrame(startView);
+  }
+}
+TABS.forEach((t, i) => {
+  const b = $(`#tab-${t}`);
+  b.addEventListener('click', () => show(t));
+  b.addEventListener('keydown', (e) => {
+    const d = e.key === 'ArrowRight' ? 1 : e.key === 'ArrowLeft' ? -1 : 0;
+    if (!d) return;
+    e.preventDefault();
+    const n = TABS[(i + d + TABS.length) % TABS.length];
+    show(n);
+    $(`#tab-${n}`).focus();
+  });
+});
+
+function boot() {
+  renderPicker();
+  render();
+  startView();
+  showIntro();
+  renderCrew();
+  bootLive();
+  const hash = (location.hash || '').replace('#', '');
+  if (hash === 'map' || hash === 'plan') show('plan');
+  else if (hash === 'crew') show('crew');
+}
+boot();
+// Text is measured for layout; redraw once the web fonts have loaded.
+if (document.fonts && document.fonts.ready) document.fonts.ready.then(() => {
+  stopRun();
+  render();
+  apply();
+  if (selected) select(selected);
+  if (LV.job) { const t = LV.t; const sl = $('#street').scrollLeft; buildFlow(LV.job); LV.shown = -2; renderAt(t); $('#street').scrollLeft = sl; }
+});
+window.addEventListener('resize', () => { if (!$('#view-plan').hidden) apply(); });
+</script>

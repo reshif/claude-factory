@@ -1,0 +1,12 @@
+{
+  "id": "clarify",
+  "description": "Turn a request into an approvable contract: three independent analysts, a judge that merges and never re-asks, then a cold God Eye critique once nothing is open.",
+  "fanout": [
+    { "role": "intent-analyst", "focus": "ambiguity", "brief": "Where could two competent engineers read this contract differently?" },
+    { "role": "intent-analyst", "focus": "constraints", "brief": "What limits (compatibility, performance, security, data, style) does the repo impose that the contract doesn't state?" },
+    { "role": "intent-analyst", "focus": "testability", "brief": "Can every acceptance criterion be proven by its stated evidence type? What would the test actually check?" }
+  ],
+  "judge": { "role": "judge", "schema": "judge" },
+  "critique": { "role": "god-eye", "focus": "intent", "when": "no_questions" },
+  "limits": { "early_questions": 7, "later_questions": 3, "early_rounds": 2 }
+}

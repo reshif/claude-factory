@@ -1,0 +1,8 @@
+{
+  "name": "factory-inspector",
+  "version": "0.1.0",
+  "description": "Independent auditor for the Software Factory: checks each job against the rulebook it declared — right recipe, right order, gates, evidence chain, caps, and whether Claude did what the router said — and keeps a register of deviations and ambiguities for you. Never blocks or changes a job. Disable the plugin to turn it off.",
+  "author": { "name": "Firdous" },
+  "keywords": ["software-factory", "audit", "conformance", "inspector"],
+  "license": "MIT"
+}

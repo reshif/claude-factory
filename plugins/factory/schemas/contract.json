@@ -1,0 +1,8 @@
+{ "$comment": "Shape of a parsed contract.md (factory contract show).",
+  "type": "object", "required": ["goal", "acs"], "properties": {
+  "title": { "type": "string" }, "goal": { "type": "string" },
+  "nonGoals": { "type": "array", "items": { "type": "string" } },
+  "acs": { "type": "array", "minItems": 1, "items": { "type": "object", "required": ["id", "text", "evidence"], "properties": {
+    "id": { "type": "string", "pattern": "^(E-)?AC-\\d+$" }, "text": { "type": "string" },
+    "evidence": { "type": "array", "items": { "enum": ["test", "run", "diff", "doc", "human"] } } } } },
+  "constraints": { "type": "array" }, "allowedPaths": { "type": "array" }, "verifyCommands": { "type": "array" }, "assumptions": { "type": "array" } } }
