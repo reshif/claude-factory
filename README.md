@@ -41,7 +41,7 @@ The first run initialises the repo (`factory init`): a `.factory/` folder kept o
 
 ### Your replies (exact, whole message)
 
-The UserPromptSubmit hook applies these before Claude sees them; nothing else counts as approval.
+The UserPromptSubmit hook applies these before Claude sees them; nothing else counts as approval. Case and trailing punctuation or emoji don't matter (`Approve!`, `approve 👍`), but the reply must be the whole message: a short message that only looks like one (`aprove`, `approve the plan please`) is **not applied**, and Claude is told so, with the exact forms.
 
 | Reply | Effect |
 |---|---|

@@ -2,8 +2,8 @@
 // PreToolUse guard: see guard-rules.js for what is denied and why.
 
 const path = require('path');
-const { safe, findRoot, realpath } = require('./lib');
-const { checkWrite, checkRead, checkBash, checkContent, deny, loadPolicy } = require('./guard-rules');
+const { safe, findRoot, traceError } = require('./lib');
+const { checkWrite, checkReadTool, checkBash, checkContent, deny, loadPolicy, READ_TOOLS } = require('./guard-rules');
 
 safe((input) => {
   const tool = input.tool_name;
@@ -21,17 +21,14 @@ safe((input) => {
       why = checkContent(text, absFile);
     }
   }
-  else if (['Read', 'Grep'].includes(tool) && absFile) {
-    if (realpath(absFile) === realpath(require('../cli/lib/seal').secretFile())) why = 'The factory seal secret is off limits.';
-    else if (root) why = checkRead(root, absFile, policy);
-  }
+  else if (READ_TOOLS.has(tool)) why = checkReadTool(root, tool, ti, absFile, cwd, policy);
   else if (tool === 'Bash' && root) why = checkBash(root, ti.command, policy);
   if (why) {
     deny(why);
     try {
       require('./activity-log').log(input, 'guard_deny', { reason: why });
-    } catch {
-      /* logging never blocks */
+    } catch (e) {
+      traceError(input, e); // logging never blocks
     }
   }
 });

@@ -165,13 +165,16 @@ function confirmAc(root, { jobId, ac, channel }) {
   return { job: state.id, message: `Confirmed ${ac.toUpperCase()} for ${state.id} on the current build. Run factory verify run to include it.` };
 }
 
+// Trailing punctuation, emoji and spaces are tone, not content: "Approve!", "approve 👍".
+const TRAILING = /[\s.!,;:…\p{Extended_Pictographic}\p{Emoji_Modifier}‍️]+$/u;
+
 // Parse a chat reply. Only a whole message that is exactly a factory command counts.
 function parseReply(text) {
-  const t = String(text || '').trim();
+  const t = String(text || '').trim().replace(TRAILING, '');
   if (!t || t.includes('\n')) return null;
   let m;
   const J = '(J-\\d+)';
-  if ((m = t.match(new RegExp(`^approve(?:\\s+${J})?(?:\\s+(${GATE_IDS.join('|')}))?\\s*\\.?$`, 'i')))) return { cmd: 'approve', jobId: m[1] && m[1].toUpperCase(), gate: m[2] && m[2].toUpperCase() };
+  if ((m = t.match(new RegExp(`^approve(?:\\s+${J})?(?:\\s+(${GATE_IDS.join('|')}))?$`, 'i')))) return { cmd: 'approve', jobId: m[1] && m[1].toUpperCase(), gate: m[2] && m[2].toUpperCase() };
   if ((m = t.match(new RegExp(`^deny(?:\\s+${J})?(?:\\s+(.*))?$`, 'i')))) return { cmd: 'deny', jobId: m[1] && m[1].toUpperCase(), reason: (m[2] || '').trim() };
   if ((m = t.match(new RegExp(`^resume(?:\\s+${J})?(?:\\s+(.*))?$`, 'i')))) return { cmd: 'resume', jobId: m[1] && m[1].toUpperCase(), step: (m[2] || '').trim() || null };
   if ((m = t.match(new RegExp(`^(cancel|abandon)\\s+job(?:\\s+${J})?(?:\\s+(.*))?$`, 'i')))) return { cmd: m[1].toLowerCase() === 'cancel' ? 'cancel' : 'abandon', jobId: m[2] && m[2].toUpperCase(), reason: (m[3] || '').trim() };
@@ -180,6 +183,30 @@ function parseReply(text) {
   if ((m = t.match(new RegExp(`^merged(?:\\s+${J})?\\s+([0-9a-f]{7,40})$`, 'i')))) return { cmd: 'merged', jobId: m[1] && m[1].toUpperCase(), commit: m[2] };
   if ((m = t.match(new RegExp(`^confirm\\s+((?:E-)?AC-\\d+)(?:\\s+${J})?$`, 'i')))) return { cmd: 'confirm', ac: m[1], jobId: m[2] && m[2].toUpperCase() };
   return null;
+}
+
+// The exact forms, for "that was not applied" hints.
+const REPLY_FORMS = ['approve [J-0001] [H1]', 'deny [J-0001] <reason>', 'resume [J-0001] [step]', 'cancel job [J-0001] [reason]', 'abandon job [J-0001] [reason]', 'waive [J-0001] <floor> <reason>', 'merged [J-0001] <sha>', 'confirm AC-1 [J-0001]', 'accept lesson L4', 'reject lesson L4 [reason]'];
+const VERBS = ['approve', 'approved', 'deny', 'denied', 'resume', 'cancel', 'abandon', 'waive', 'merged', 'merge', 'confirm', 'accept', 'reject', 'lgtm'];
+
+function editDistance(a, b) {
+  const d = Array.from({ length: a.length + 1 }, (_, i) => [i, ...Array(b.length).fill(0)]);
+  for (let j = 1; j <= b.length; j++) d[0][j] = j;
+  for (let i = 1; i <= a.length; i++) for (let j = 1; j <= b.length; j++) d[i][j] = Math.min(d[i - 1][j] + 1, d[i][j - 1] + 1, d[i - 1][j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+  return d[a.length][b.length];
+}
+
+// A short message that looks like a reply but isn't one ("aprove", "approve the plan
+// please", "cancel"): { word, verb, forms } or null. It never applies anything.
+function nearMiss(text) {
+  const t = String(text || '').trim().replace(TRAILING, '');
+  if (!t || t.includes('\n') || parseReply(t)) return null;
+  const words = t.split(/\s+/);
+  if (words.length > 6) return null;
+  const w = words[0].toLowerCase().replace(/[^a-z]/g, '');
+  if (w.length < 4) return null;
+  const verb = VERBS.find((v) => v === w || (v.length >= 5 && editDistance(v, w) <= (v.length >= 7 ? 2 : 1)));
+  return verb ? { word: words[0], verb, forms: REPLY_FORMS } : null;
 }
 
 function applyReply(root, parsed, channel = 'chat') {
@@ -210,4 +237,4 @@ function applyReply(root, parsed, channel = 'chat') {
   }
 }
 
-module.exports = { snapshot, GATE_IDS, requireHumanChannel, approve, deny, resume, stop, waive, merged, confirmAc, parseReply, applyReply, sha256 };
+module.exports = { snapshot, GATE_IDS, requireHumanChannel, approve, deny, resume, stop, waive, merged, confirmAc, parseReply, nearMiss, REPLY_FORMS, applyReply, sha256 };
