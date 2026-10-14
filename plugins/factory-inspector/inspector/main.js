@@ -79,6 +79,35 @@ function run(root, { job: only, all = false } = {}) {
   return result;
 }
 
+// Cheap check for hooks that run often: closed/cancelled/abandoned jobs whose current status
+// the register hasn't seen yet. Reads only each job's state.json, not the logs.
+function pending(root) {
+  const L = require('./io').layout(root);
+  const { readJson } = require('./io');
+  const reg = register.load(root);
+  let ids = [];
+  try { ids = require('fs').readdirSync(L.jobs).filter((d) => /^J-\d+$/.test(d)); } catch { return []; }
+  return ids.filter((id) => {
+    const st = readJson(L.job(id).state, null);
+    const status = st && st.status;
+    if (!['closed', 'cancelled', 'abandoned'].includes(status)) return false;
+    const prior = reg.inspected[id];
+    return !(prior && prior.status === status);
+  });
+}
+
+// One line for a run's result, or null when it found nothing worth saying.
+function summary(r) {
+  if (!r.inspected.length && !r.added.length && !r.reopened.length && !r.rearmed.length) return null;
+  const parts = [];
+  if (r.inspected.length) parts.push(`inspected ${r.inspected.map((i) => i.job).join(', ')}`);
+  if (r.added.length || r.reopened.length) parts.push(`${r.added.length} new finding(s)${r.reopened.length ? `, ${r.reopened.length} came back` : ''} — ${r.open.open} open (${r.open.high} high)`);
+  else parts.push('no new findings');
+  if (r.rearmed.length) parts.push(`rules changed for ${r.rearmed.map((x) => x.recipe).join(', ')}: inspecting every job again`);
+  if (r.suggestions.length) parts.push(`suggestion: ${r.suggestions[0].suggest} (${r.suggestions[0].why})`);
+  return `[inspector] ${parts.join('; ')}.`;
+}
+
 function counts(reg) {
   const open = reg.findings.filter((x) => x.status === 'open');
   return { open: open.length, high: open.filter((x) => x.severity === 'high').length, deviations: open.filter((x) => x.class === 'deviation').length, ambiguities: open.filter((x) => x.class === 'ambiguity').length, gaps: open.filter((x) => x.class === 'gap').length };
@@ -229,4 +258,4 @@ function main(argv) {
   }
 }
 
-module.exports = { main, cli, run, report, reportMd, status, mark, setMode, trace, parseReply, applyReply, counts };
+module.exports = { main, cli, run, pending, summary, report, reportMd, status, mark, setMode, trace, parseReply, applyReply, counts };

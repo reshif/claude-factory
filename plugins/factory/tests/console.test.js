@@ -99,3 +99,40 @@ test('console: never creates a factory key on a machine without one', () => {
   assert.equal(JSON.parse(r.stdout).integrity, 'not_checked');
   assert.ok(!fs.existsSync(key), 'no key file was created');
 });
+
+test('console --serve: streams fresh data when the factory writes, only to this machine', async () => {
+  const root = F.makeRepo();
+  const J = F.cli(root, ['job', 'new', '--title', 'Live one', '--type', 'bug', '--risk', 'low']).job;
+  const http = require('http');
+  const { url, close } = await new Promise((resolve) => require('../cli/core/console').serve(root, { port: 0, interval: 50, onReady: resolve }));
+  try {
+    const get = (p, headers = {}) => new Promise((res, rej) => http.get(url + p, { headers }, (r) => { let b = ''; r.on('data', (c) => { b += c; }); r.on('end', () => res({ status: r.statusCode, body: b })); }).on('error', rej));
+    const page = await get('');
+    assert.equal(page.status, 200);
+    assert.match(page.body, /"live":true/);
+    assert.equal((await get('data.json', { host: 'attacker.example' })).status, 403, 'a rebound foreign host is refused');
+
+    const events = [];
+    let wake = () => {};
+    const req = http.get(`${url}events`, (r) => {
+      let buf = '';
+      r.on('data', (c) => {
+        buf += c;
+        let i;
+        while ((i = buf.indexOf('\n\n')) !== -1) {
+          const block = buf.slice(0, i);
+          buf = buf.slice(i + 2);
+          const line = block.split('\n').find((l) => l.startsWith('data: '));
+          if (line) { events.push(JSON.parse(line.slice(6))); wake(); }
+        }
+      });
+    });
+    const nextEvent = (n) => new Promise((res, rej) => { const t = setTimeout(() => rej(new Error('no event')), 5000); const check = () => { if (events.length >= n) { clearTimeout(t); res(events[n - 1]); } }; wake = check; check(); });
+    assert.equal((await nextEvent(1)).jobs.find((j) => j.id === J).status, 'active', 'connecting sends the current data');
+    F.cli(root, ['park', '--reason', 'Waiting on the API owners']);
+    assert.equal((await nextEvent(2)).jobs.find((j) => j.id === J).status, 'parked', 'a CLI write reaches the open page');
+    req.destroy();
+  } finally {
+    close();
+  }
+});

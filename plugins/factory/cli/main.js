@@ -8,7 +8,7 @@ const path = require('path');
 const { FactoryError, fail, readText, writeJson } = require('./lib/util');
 const { requireRoot, findRoot, PLUGIN_ROOT } = require('./lib/paths');
 
-const BOOL = new Set(['epic', 'local', 'check', 'json', 'plan-fields', 'help', 'threat-model', 'plan-critique', 'no-threat-model', 'accept-degraded']);
+const BOOL = new Set(['epic', 'local', 'check', 'json', 'plan-fields', 'help', 'threat-model', 'plan-critique', 'no-threat-model', 'accept-degraded', 'serve']);
 
 function parseArgs(argv) {
   const pos = [];
@@ -63,10 +63,13 @@ Epic       epic spawn · epic gate
 Learning   distill context · distill done · lessons list · lessons add --text "…" --scope "glob,…"
            telemetry report [--since 30] [--format md] · recipe list|show <id>|check|select --type t --risk r [--epic]
 Console    console [--out file.html] [--job J] [--label "…"] [--data data.json]   (read-only page of every job)
+           console --serve [--port 4477] [--job J]   (the same page, live: updates as Claude works)
 Human only (your terminal, or reply in chat):
            approve [gate] · deny --reason "…" · resume [step] · cancel · abandon · waive <floor> --reason "…"
            merged <commit> · confirm <AC> · lessons accept|reject <L> · lessons promote <L> --check "cmd" · reseal
 Global     --root <repo> · --job <J-0001>`;
+
+const LONG_RUNNING = Symbol('long-running'); // the command reports for itself (console --serve)
 
 function out(obj, opt) {
   if (opt.format === 'md' && typeof obj === 'string') process.stdout.write(obj + '\n');
@@ -92,6 +95,7 @@ function run(argv) {
     case 'doctor':
       return C('setup').doctor(opt.root || process.cwd());
     case 'console':
+      if (opt.serve) { C('console').runServe(R(), { port: opt.port, job: J, label: opt.label }); return LONG_RUNNING; } // prints its own URL once listening
       return C('console').run(R(), { out: opt.out, job: J, label: opt.label, data: opt.data });
     case 'job': {
       const job = C('job');
@@ -349,7 +353,7 @@ function main(argv) {
   try {
     res = run(argv);
     if (typeof res === 'string') process.stdout.write(res + '\n');
-    else out(res, opt);
+    else if (res !== LONG_RUNNING) out(res, opt);
   } catch (e) {
     err = e;
     if (e instanceof FactoryError) {

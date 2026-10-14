@@ -309,9 +309,9 @@ function build(root, { job: only } = {}) {
 
 // The data goes into the page as JSON in a script tag; "<" is escaped so no string in a
 // job title can close the tag.
-function render(data, { label } = {}) {
+function render(data, { label, live } = {}) {
   const tpl = fs.readFileSync(pluginPath('console', 'console.html'), 'utf8');
-  const json = JSON.stringify({ ...data, label: label || null }).replace(/</g, '\\u003c').replace(/\u2028/g, '\\u2028').replace(/\u2029/g, '\\u2029');
+  const json = JSON.stringify({ ...data, label: label || null, live: Boolean(live) }).replace(/</g, '\\u003c').replace(/\u2028/g, '\\u2028').replace(/\u2029/g, '\\u2029');
   if (!tpl.includes('/*__FACTORY_DATA__*/null')) fail('console.html has no data slot', 'internal');
   return tpl.replace('/*__FACTORY_DATA__*/null', () => json);
 }
@@ -331,4 +331,89 @@ function run(root, { out, job, label, data: dataFile } = {}) {
   };
 }
 
-module.exports = { build, render, run, STAGE_OF };
+// What the page is built from. A cheap fingerprint (size + mtime of each file) so the
+// server can poll every few hundred ms without re-reading the logs.
+function watchedFiles(root) {
+  const p = project(root);
+  const files = [p.eventsFile, p.decisionsFile, p.currentFile, p.lessonsFile, path.join(p.dir, 'inspect', 'register.json')];
+  let ids = [];
+  try { ids = fs.readdirSync(p.jobsDir).filter((d) => /^J-\d+$/.test(d)); } catch { /* no jobs yet */ }
+  for (const id of ids) {
+    const dir = path.join(p.jobsDir, id);
+    try { for (const f of fs.readdirSync(dir)) files.push(path.join(dir, f)); } catch { /* removed meanwhile */ }
+  }
+  return files;
+}
+function fingerprint(root) {
+  return watchedFiles(root).map((f) => { try { const st = fs.statSync(f); return `${f}:${st.size}:${st.mtimeMs}`; } catch { return `${f}:-`; } }).join('|');
+}
+
+// factory console --serve: the same page over http://127.0.0.1, kept current. Hooks and the
+// CLI append to .factory/ as Claude works; the server notices within `interval` ms and
+// pushes the rebuilt data to every open page over server-sent events. Still read-only.
+function serve(root, { port = 4477, job, label, interval = 400, onReady } = {}) {
+  const http = require('http');
+  const p = project(root);
+  if (!fs.existsSync(p.dir)) fail('No .factory/ folder here. Run factory init first.', 'no_root');
+  const clients = new Set();
+  let data = build(root, { job });
+  let body = JSON.stringify(data);
+  let print = fingerprint(root);
+  const same = (a, b) => JSON.stringify({ ...a, generated_at: 0 }) === JSON.stringify({ ...b, generated_at: 0 });
+  const send = (res, d) => res.write(`event: data\ndata: ${d}\n\n`);
+  const tick = () => {
+    const now = fingerprint(root);
+    if (now === print) return;
+    print = now;
+    let next;
+    try { next = build(root, { job }); } catch { return; } // a file mid-write: try again next tick
+    if (same(next, data)) return;
+    data = next;
+    body = JSON.stringify(data);
+    for (const res of clients) send(res, body);
+  };
+  const server = http.createServer((req, res) => {
+    // Only this machine, by name: a page on another site can't rebind its DNS to read .factory/.
+    const host = String(req.headers.host || '').replace(/:\d+$/, '');
+    if (!['127.0.0.1', 'localhost', '[::1]'].includes(host)) { res.writeHead(403); res.end('forbidden'); return; }
+    const url = String(req.url || '/').split('?')[0];
+    if (req.method !== 'GET') { res.writeHead(405); res.end(); return; }
+    if (url === '/' || url === '/index.html') {
+      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
+      res.end(render(data, { label, live: true }));
+    } else if (url === '/data.json') {
+      res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' });
+      res.end(body);
+    } else if (url === '/events') {
+      res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-store', connection: 'keep-alive' });
+      res.write('retry: 2000\n\n');
+      send(res, body); // whatever changed between page load and connect
+      clients.add(res);
+      req.on('close', () => clients.delete(res));
+    } else { res.writeHead(404); res.end('not found'); }
+  });
+  const poll = setInterval(tick, interval);
+  const ping = setInterval(() => { for (const res of clients) res.write(': ping\n\n'); }, 15000);
+  server.on('close', () => { clearInterval(poll); clearInterval(ping); });
+  const close = () => { for (const res of clients) res.end(); server.close(); };
+  server.listen(port, '127.0.0.1', () => {
+    const url = `http://127.0.0.1:${server.address().port}/`;
+    if (onReady) onReady({ url, server, close });
+  });
+  return { server, close };
+}
+
+function runServe(root, { port, job, label }) {
+  const p = port === undefined || port === true ? 4477 : Number(port);
+  if (!Number.isInteger(p) || p < 0 || p > 65535) fail('--port must be a number from 0 to 65535', 'bad_input');
+  serve(root, {
+    port: p, job, label,
+    onReady: ({ url }) => process.stdout.write(JSON.stringify({ serving: url, jobs: job ? [job] : 'all', message: `Open ${url} to watch the factory live. It updates as Claude works; Ctrl-C stops it.` }, null, 2) + '\n'),
+  }).server.on('error', (e) => {
+    process.stdout.write(JSON.stringify({ error: true, code: e.code === 'EADDRINUSE' ? 'port_in_use' : 'internal', message: e.code === 'EADDRINUSE' ? `Port ${p} is in use: is a console already serving? Try --port 0 for any free port.` : e.message }, null, 2) + '\n');
+    process.exitCode = 1;
+  });
+  return null;
+}
+
+module.exports = { build, render, run, serve, runServe, fingerprint, STAGE_OF };

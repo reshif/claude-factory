@@ -94,6 +94,7 @@ Run `factory console`, or `/factory:console` in Claude Code, then open `.factory
 - **Replay.** Replay drives the job down the canvas one event at a time. You can scrub, step, change speed and follow. Fit and 1:1 switch the zoom. The panel shows the router's six checks at each decision, the agents in each run and every event.
 - **Other tabs.** *Recipe map* is the whole factory for any recipe. *The crew* lists the 19 agents and how often each ran.
 - **Where the data comes from.** Each workflow returns a roster of every agent it started, and `factory record` seals it into the ledger as an `agents` entry tied to the routing decision. Hooks add timings. Parks, amendments and follow-ups come from the event log and the job's own records.
+- **Live.** `factory console --serve` serves the same page at `http://127.0.0.1:4477/` and streams updates to it (server-sent events) as the hooks and CLI write to `.factory/`, so you watch a job move while Claude works. It listens on this machine only, refuses foreign `Host` headers, and stays read-only. `--port 0` picks a free port.
 - **Options.** `--job J-0003` makes the page for one job, `--out file.html` writes it elsewhere, `--label "…"` adds a banner, and `--data file.json` also writes the data as JSON.
 - **Sample.** `node plugins/factory/console/dev/make-sample.js <dir>` builds a realistic sample: nine jobs over about three days on a simulated clock. They run through the real CLI, workflows, hooks and inspector, with scripted agents.
 
@@ -105,7 +106,7 @@ Run `factory console`, or `/factory:console` in Claude Code, then open `.factory
 claude plugin install factory-inspector@software-factory
 ```
 
-It runs when a job closes, and on demand with `/factory-inspector:inspect`. Once a recipe has a long clean streak it suggests sampling, then off. Disable the plugin to turn it off completely; the factory keeps logging either way. See [`plugins/factory-inspector/README.md`](plugins/factory-inspector/README.md).
+It runs whenever a job ends — closed, cancelled or abandoned — however it ended: right after Claude runs the command, at the end of the turn when you ended it with a chat reply, or at the next session start when you ended it from your own terminal. Also on demand with `/factory-inspector:inspect`. Once a recipe has a long clean streak it suggests sampling, then off. Disable the plugin to turn it off completely; the factory keeps logging either way. See [`plugins/factory-inspector/README.md`](plugins/factory-inspector/README.md).
 
 ## CI re-verify (recommended)
 
@@ -133,7 +134,7 @@ Recipes and floors live in the plugin ([`recipes/`](plugins/factory/recipes), [`
 
 ```bash
 cd plugins/factory
-npm test          # 42 tests (plus 10 in plugins/factory-inspector): end-to-end jobs, decision table, caps, guard, seals, hooks, workflows, schemas
+npm test          # 45 tests (plus 11 in plugins/factory-inspector): end-to-end jobs, decision table, caps, guard, seals, hooks, workflows, schemas
 ./bin/factory help
 ```
 

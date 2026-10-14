@@ -231,6 +231,22 @@ test('hooks: after-close reports, session start mentions open findings, replies 
   assert.equal(spawnSync('node', [path.join(PLUGIN, 'hooks', 'guard.js')], { input: 'garbage', encoding: 'utf8' }).status, 0);
 });
 
+test('hooks: a job that ends outside Claude\'s Bash is caught at the end of the turn and at session start', () => {
+  const root = F.makeRepo();
+  const run = (hook, input) => spawnSync('node', [path.join(PLUGIN, 'hooks', hook)], { input: JSON.stringify({ cwd: root, ...input }), encoding: 'utf8' });
+  const J = F.cli(root, ['job', 'new', '--title', 'Never mind', '--type', 'bug', '--risk', 'low']).job;
+  assert.equal(run('catch-up.js', {}).stdout, '', 'an active job is not inspected');
+  F.reply(root, 'cancel job'); // applied by the factory's prompt hook: no Bash, no PostToolUse
+  assert.deepEqual(I.pending(root), [J]);
+  assert.match(JSON.parse(run('catch-up.js', {}).stdout).systemMessage, new RegExp(`inspected ${J}`));
+  assert.deepEqual(I.pending(root), []);
+  assert.equal(run('catch-up.js', {}).stdout, '', 'nothing pending: silent');
+
+  const J2 = F.cli(root, ['job', 'new', '--title', 'Also not', '--type', 'bug', '--risk', 'low']).job;
+  F.reply(root, `abandon job ${J2}`);
+  assert.match(JSON.parse(run('session-start.js', {}).stdout).hookSpecificOutput.additionalContext, new RegExp(`inspected ${J2}`));
+});
+
 test('independence: the inspector imports nothing from the factory', () => {
   for (const dir of ['inspector', 'hooks', 'bin']) {
     for (const f of fs.readdirSync(path.join(PLUGIN, dir))) {

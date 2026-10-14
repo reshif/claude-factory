@@ -87,6 +87,9 @@ button { font: inherit; color: inherit; }
 .flag { display: inline-block; font: 600 10.5px/1.35 var(--mono); letter-spacing: 0.08em; padding: 3px 7px; border-radius: 2px; border: 1px solid currentColor; }
 .flag.sample { color: var(--signal); }
 .flag.ok { color: var(--track); } .flag.bad { color: var(--stop); } .flag.unk { color: var(--muted); }
+.flag.live { color: var(--track); } .flag.live::before { content: ''; display: inline-block; width: 6px; height: 6px; margin-right: 5px; border-radius: 50%; background: currentColor; vertical-align: 1px; animation: livepulse 1.6s ease-in-out infinite; }
+.flag.live.off { color: var(--muted); } .flag.live.off::before { animation: none; }
+@keyframes livepulse { 50% { opacity: 0.25; } }
 .tabs { display: flex; gap: 4px; flex-wrap: wrap; }
 .tab { border: 1px solid var(--rule); background: var(--sheet); padding: 8px 14px; border-radius: 2px; cursor: pointer; font-weight: 500; }
 .tab[aria-selected="true"] { background: var(--ink); color: var(--paper); border-color: var(--ink); }
@@ -1349,7 +1352,7 @@ function renderPicker() {
 // ===================================================================== live line: real jobs
 // `factory console` writes the jobs into the slot below. Everything on the line is
 // a pure function of (job, playhead time): scrubbing back and forth always agrees.
-const DATA = /*__FACTORY_DATA__*/null;
+let DATA = /*__FACTORY_DATA__*/null;
 
 const ORDER = ['request', 'contract', 'design', 'plan', 'build', 'verify', 'ship', 'learn'];
 const STAGE_NAME = { request: 'Request', contract: 'Contract', design: 'Ground & design', plan: 'Plan', build: 'Build', verify: 'Prove & challenge', ship: 'Ship', learn: 'Learn & close' };
@@ -2515,26 +2518,85 @@ function liveEmpty(kind) {
   }));
   e.querySelectorAll('[data-go]').forEach((b) => b.addEventListener('click', () => show(b.dataset.go)));
 }
-function bootLive() {
+function paintFlags() {
   const flags = [];
   if (DATA && DATA.label) flags.push(`<span class="flag sample" title="${esc(DATA.label)}">${esc(DATA.label)}</span>`);
   if (DATA) {
     const s = DATA.integrity && DATA.integrity.status;
     flags.push(s === 'verified' ? `<span class="flag ok" title="${DATA.integrity.valid} sealed records checked">seals verified</span>` : s === 'tampered' ? `<span class="flag bad" title="${DATA.integrity.invalid} records fail their seal">seal mismatch</span>` : '<span class="flag unk" title="This machine has no factory key, so seals were not checked">seals not checked</span>');
   }
+  if (LIVE.on) flags.push(`<span class="flag live${LIVE.connected ? '' : ' off'}" title="${LIVE.connected ? 'Streaming from factory console --serve: the page updates as hooks and the CLI write to .factory/' : 'Lost the connection to factory console --serve; retrying'}">${LIVE.connected ? 'live' : 'reconnecting'}</span>`);
   $('#flags').innerHTML = flags.join('');
   $('#foot').innerHTML = DATA
-    ? `Generated ${esc(fmtDate(DATA.generated_at))} by <code>factory console</code>${DATA.plugin_version ? ` (factory ${esc(DATA.plugin_version)})` : ''} from <code>${esc(DATA.project)}/.factory/</code>: routing decisions, the ledger, the event log and job state, read without changing anything. Re-run it to refresh.`
+    ? `${LIVE.on ? 'Streaming' : 'Generated'} ${esc(fmtDate(DATA.generated_at))} by <code>factory console${LIVE.on ? ' --serve' : ''}</code>${DATA.plugin_version ? ` (factory ${esc(DATA.plugin_version)})` : ''} from <code>${esc(DATA.project)}/.factory/</code>: routing decisions, the ledger, the event log and job state, read without changing anything. ${LIVE.on ? 'Updates arrive as they happen.' : 'Re-run it to refresh, or run <code>factory console --serve</code> to watch it live.'}`
     : 'Built from the factory\'s own definitions: recipes, skills, workflows, agents and the router\'s checks. Generate it with <code>factory console</code> to see real jobs.';
+}
+function sortJobs() {
+  LV.jobs = DATA.jobs.map((job) => { const S = finalState(job); return { job, S, sum: jobSummary(job, S) }; })
+    .sort((a, b) => (SORT[a.sum[0]] - SORT[b.sum[0]]) || (a.job.updated_at < b.job.updated_at ? 1 : -1));
+}
+function bootLive() {
+  paintFlags();
   bindTransport();
   siglegend();
   if (!DATA) { liveEmpty('template'); return; }
   if (!DATA.jobs || !DATA.jobs.length) { liveEmpty('none'); return; }
-  LV.jobs = DATA.jobs.map((job) => { const S = finalState(job); return { job, S, sum: jobSummary(job, S) }; })
-    .sort((a, b) => (SORT[a.sum[0]] - SORT[b.sum[0]]) || (a.job.updated_at < b.job.updated_at ? 1 : -1));
+  sortJobs();
   const hash = (location.hash || '').replace('#', '');
   const pick = LV.jobs.find((x) => x.job.id === hash) ? hash : LV.jobs[0].job.id;
   openJob(pick, false);
+}
+
+// ---------- live: factory console --serve streams fresh data over server-sent events
+const LIVE = { on: false, connected: false, sig: {} };
+const jobSig = (job) => JSON.stringify(job);
+// New data for the page. The open job stays open; if you were watching its latest
+// moment, the new steps play in; if you were scrubbing back, you keep your place.
+function refresh(next) {
+  const prevId = LV.job && LV.job.id;
+  const prevSig = prevId ? LIVE.sig[prevId] : null;
+  DATA = next;
+  LIVE.sig = Object.fromEntries((DATA.jobs || []).map((j) => [j.id, jobSig(j)]));
+  paintFlags();
+  renderCrew();
+  if (!DATA.jobs || !DATA.jobs.length) { liveEmpty('none'); return; }
+  $('#live-body').hidden = false;
+  $('#live-empty').hidden = true;
+  sortJobs();
+  const entry = LV.jobs.find((x) => x.job.id === prevId);
+  if (!entry) { openJob(LV.jobs[0].job.id, false); return; }
+  if (LIVE.sig[prevId] === prevSig) { renderJobs(); return; }
+  const host = $('#street');
+  const scroll = [host.scrollLeft, host.scrollTop];
+  const wasPlaying = LV.playing;
+  const atEnd = LV.t >= LV.END - 1;
+  const oldLen = LV.items.length;
+  const t = LV.t;
+  stopPlay();
+  buildFlow(entry.job);
+  renderJobs();
+  renderHead(entry.job);
+  renderBelow(entry.job);
+  host.scrollLeft = scroll[0];
+  host.scrollTop = scroll[1];
+  LV.shown = -2;
+  if (atEnd && LV.items.length > oldLen && oldLen > 0 && !reduceMotion) {
+    renderAt(LV.sched[oldLen - 1].t1);
+    play();
+  } else {
+    renderAt(atEnd ? LV.END : Math.min(t, LV.END));
+    if (wasPlaying) play();
+  }
+}
+function connectLive() {
+  if (!DATA || !DATA.live || !/^https?:$/.test(location.protocol) || !window.EventSource) return;
+  LIVE.on = true;
+  LIVE.sig = Object.fromEntries((DATA.jobs || []).map((j) => [j.id, jobSig(j)]));
+  const es = new EventSource('events');
+  es.addEventListener('open', () => { LIVE.connected = true; paintFlags(); });
+  es.addEventListener('error', () => { LIVE.connected = false; paintFlags(); }); // EventSource retries by itself
+  es.addEventListener('data', (e) => { try { refresh(JSON.parse(e.data)); } catch (err) { /* keep the last good page */ } });
+  paintFlags();
 }
 
 // ===================================================================== crew
@@ -2596,6 +2658,7 @@ function boot() {
   showIntro();
   renderCrew();
   bootLive();
+  connectLive();
   const hash = (location.hash || '').replace('#', '');
   if (hash === 'map' || hash === 'plan') show('plan');
   else if (hash === 'crew') show('crew');

@@ -40,7 +40,7 @@ The inspector has its own implementations of three things: seal verification, re
 | `/factory-inspector:inspect J-0007` | One job, plus its timeline |
 | `/factory-inspector:inspect status` | Modes, clean streaks, suggestions |
 
-It also runs on its own when a job closes, and adds one line to the conversation. At session start it says how many findings are open.
+It also runs on its own whenever a job ends (closed, cancelled or abandoned) and adds one line to the conversation: right after Claude runs `factory close`/`cancel`/`abandon`; at the end of the turn when the job ended some other way (a `cancel job` reply, a command in your own terminal); and at session start for anything that ended while no session was open, after which it says how many findings are open. The end-of-turn check reads only each job's `state.json`, so it costs nothing when nothing is pending.
 
 **Your replies:** `ack finding F3` · `fixed finding F3` · `wontfix finding F3 <why>` · `inspect mode <recipe|all> on|off|sample <N>`
 
