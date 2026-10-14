@@ -96,11 +96,12 @@ Every asked question is kept in `state.question_log` (id, round, category, quest
 | Hook | Script | Does |
 |---|---|---|
 | SessionStart | `session-start.js` | Tells Claude about an active job and how to continue |
-| UserPromptSubmit | `prompt.js` | Applies an exact reply (`approve`, `deny …`, `resume`, …) via the CLI's human channel; adds `[factory] Applied …` or `NOT applied …` |
-| PreToolUse (Write, Edit, MultiEdit, NotebookEdit, Bash, Read, Grep) | `guard.js` + `guard-rules.js` | Denies state edits, plugin edits, writes outside a task's allowed paths, protected paths, secret reads (real path), force-push in any spelling, `--no-verify`/`commit -n`, hook redirects, `.git/hooks`/`.git/config`, moving a job branch, human-only CLI commands; prose in `--reason`/`-m`/quoted heredocs is data |
-| PostToolUse, SubagentStart | `activity.js` | One line per event in `.factory/log/events.jsonl` (job found by explicit `--job`, worktree, or pointer) |
+| UserPromptSubmit | `prompt.js` | Applies an exact reply (`approve`, `deny …`, `resume`, …; trailing punctuation/emoji and case ignored) via the CLI's human channel; adds `[factory] Applied …` or `NOT applied …`. A short message that looks like a reply but doesn't parse (`aprove`, `approve the plan please`) is not applied; Claude is told so, with the accepted forms |
+| PreToolUse (Write, Edit, MultiEdit, NotebookEdit, Bash, Read, Grep, Glob, NotebookRead) | `guard.js` + `guard-rules.js` | Denies state edits, plugin edits, writes outside a task's allowed paths, protected paths, secret reads (real path; Grep's `glob` filter; Grep/Glob over the seal secret's folder), force-push in any spelling, `--no-verify`/`commit -n`, hook redirects, `.git/hooks`/`.git/config`, moving a job branch, human-only CLI commands; prose in `--reason`/`-m`/quoted heredocs is data |
+| PostToolUse (Bash, Write, Edit, MultiEdit, NotebookEdit, Task, Agent, WebFetch, WebSearch), SubagentStart | `activity.js` | One line per event in `.factory/log/events.jsonl` (job found by explicit `--job`, worktree, or pointer). Read/Grep/Glob are not logged: they change nothing, and logging each cost a Node process |
 | SubagentStop | `subagent-stop.js` | Logs each factory agent finishing. It doesn't block: workflow agents return through a schema the runtime enforces, and `factory record` re-checks every artifact before it counts. |
-| Stop | `stop.js` | Blocks a "done / ready to merge" claim while the job's owed floors fail |
+| Stop | `stop.js` | Blocks a "done / ready to merge / shipped / I've finished the task" claim (not questions, negations or conditionals) while the owed floors fail — for the current job, the job of the worktree it runs in, and every `J-####` the message names |
+| (all) | `lib.js` `safe` | A hook never breaks Claude Code; when one fails it appends a sealed `hook_error` event (hook, message, job) so the inspector can report it |
 
 ## 6a. Seals and the trust boundary
 
@@ -114,7 +115,7 @@ The factory records what it does, so the separate `factory-inspector` plugin can
 
 - **`recipe.lock.json`.** A sealed snapshot of each job's rulebook, taken at creation. It holds the full recipe and its hash, the floors, the selection rules and the inputs that chose the recipe, the limits, and a hash of the plugin's skills, agents and workflows.
 - **Decision ids.** Every routing decision has an id (`J-0001-D0007`) plus the step, workflow, config, command, skill and gate hash it chose. Human actions record which decision they happened `during`.
-- **`events.jsonl`.** One sealed line per `factory` command: its arguments (long prose truncated), the job, and the decision id in force. For `wfargs` and `record` lines it also holds the workflow and config. The log also records guard denials, refused chat replies, Stop and SubagentStop blocks, and agent and tool activity.
+- **`events.jsonl`.** One sealed line per `factory` command: its arguments (long prose truncated), the job, and the decision id in force. For `wfargs` and `record` lines it also holds the workflow and config. The log also records guard denials, refused chat replies, Stop blocks, hook failures (`hook_error`), agent starts and stops, and tool activity for tools that change things (Bash, edits, Task/Agent, web fetches).
 
 ## 6c. The console (`cli/core/console.js`, `console/console.html`)
 

@@ -2,7 +2,8 @@
 // Rules for the PreToolUse guard (guard.js runs them). Denies, for every agent and the main session:
 //   - edits to factory state, recipes, floors, policy and plugin code
 //   - edits outside a task's allowed paths inside its worktree
-//   - writes to protected paths (policy.protected_paths) and reads of secrets (real path checked)
+//   - writes to protected paths (policy.protected_paths) and reads of secrets (real path checked),
+//     through Read, Grep (path and its glob filter), Glob (where it searches) and NotebookRead
 //   - force-push in any spelling, --no-verify / commit -n, hook-path redirects, .git/hooks and .git/config edits
 //   - moving a job branch by hand, secret reads through git objects
 //   - human-only factory commands (approve, deny, resume, cancel, abandon, waive, merged, confirm, lessons accept|reject|promote, ci install)
@@ -85,6 +86,37 @@ function checkRead(root, absIn, policy) {
   if (matchesAny(r, policy.secret_paths) || matchesAny(name, policy.secret_paths.map((g) => g.replace(/^\*\*\//, '')))) {
     if (/\.example$|\.sample$|\.template$/.test(name)) return null;
     return `${name} looks like a secret; reading it is blocked.`;
+  }
+  return null;
+}
+
+// Tools that read or list files. Glob only lists names, so its pattern is free; where it
+// searches (path) gets the same checks as a Read. WebFetch/WebSearch reach URLs, not files.
+const READ_TOOLS = new Set(['Read', 'Grep', 'Glob', 'NotebookRead']);
+
+function checkReadTool(root, tool, ti, absFile, cwd, policy) {
+  const { secretFile } = require('../cli/lib/seal');
+  const secret = realpath(secretFile());
+  const target = absFile || (tool !== 'Read' ? path.resolve(cwd || process.cwd()) : null);
+  if (!target) return null;
+  const real = realpath(target);
+  // The secret itself, or the folder that holds it (a recursive Grep there prints it).
+  if (real === secret || (tool !== 'Read' && tool !== 'NotebookRead' && real === path.dirname(secret))) return 'The factory seal secret is off limits.';
+  if (!root) return null;
+  if (absFile) {
+    const why = checkRead(root, absFile, policy);
+    if (why) return why;
+  }
+  // Grep's glob filter picks the files whose contents it prints.
+  if (tool === 'Grep' && typeof ti.glob === 'string' && ti.glob) {
+    const { matches } = require('../cli/lib/glob');
+    // A filter aimed at secret-looking names (".env", "*.pem"), not a catch-all like "*".
+    const samples = policy.secret_paths.map((x) => x.replace(/^\*\*\//, '').replace(/\*/g, 'x'));
+    for (const g of ti.glob.replace(/^\{|\}$/g, '').split(',')) {
+      const name = path.basename(g.trim());
+      if (!name || !/[^*.?]/.test(name) || /\.example$|\.sample$|\.template$/.test(name)) continue;
+      if (samples.some((x) => matches(x, name))) return `Grep over ${name} files would print secrets; blocked.`;
+    }
   }
   return null;
 }
@@ -200,4 +232,4 @@ function checkContent(text, file) {
     : null;
 }
 
-module.exports = { checkWrite, checkRead, checkBash, checkContent, normalise, deny, loadPolicy, factorySubcommand };
+module.exports = { checkWrite, checkRead, checkReadTool, READ_TOOLS, checkBash, checkContent, normalise, deny, loadPolicy, factorySubcommand };

@@ -33,6 +33,13 @@ function merge(reg, detected, rulebook) {
     existing.times_seen += 1;
     existing.summary = fd.summary;
     existing.evidence = fd.evidence;
+    existing.latest = fd.latest || existing.latest || null;
+    // Health findings come from history that stays in the logs: only newer evidence reopens.
+    const fixedAt = existing.status === 'fixed' ? (existing.history.filter((h) => h.to === 'fixed').pop() || {}).at : null;
+    if (fixedAt && fd.latest && fd.latest <= fixedAt) {
+      res.seen.push(existing.id);
+      continue;
+    }
     if (existing.status === 'fixed') {
       existing.history.push({ at: nowIso(), from: 'fixed', to: 'open', why: 'seen again after being marked fixed' });
       existing.status = 'open';

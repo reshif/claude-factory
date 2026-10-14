@@ -8,10 +8,10 @@
       { "hooks": [ { "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/prompt.js\"", "timeout": 30 } ] }
     ],
     "PreToolUse": [
-      { "matcher": "Write|Edit|MultiEdit|NotebookEdit|Bash|Read|Grep", "hooks": [ { "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/guard.js\"", "timeout": 15 } ] }
+      { "matcher": "Write|Edit|MultiEdit|NotebookEdit|Bash|Read|Grep|Glob|NotebookRead", "hooks": [ { "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/guard.js\"", "timeout": 15 } ] }
     ],
     "PostToolUse": [
-      { "hooks": [ { "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/activity.js\"", "timeout": 10 } ] }
+      { "matcher": "Bash|Write|Edit|MultiEdit|NotebookEdit|Task|Agent|WebFetch|WebSearch", "hooks": [ { "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/activity.js\"", "timeout": 10 } ] }
     ],
     "SubagentStart": [
       { "hooks": [ { "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/activity.js\"", "timeout": 10 } ] }

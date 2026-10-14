@@ -247,6 +247,112 @@ test('hooks: a job that ends outside Claude\'s Bash is caught at the end of the 
   assert.match(JSON.parse(run('session-start.js', {}).stdout).hookSpecificOutput.additionalContext, new RegExp(`inspected ${J2}`));
 });
 
+test('job health from synthetic records (R12–R18)', () => {
+  const { LIMITS } = require('../inspector/config');
+  const at = (h) => new Date(Date.UTC(2026, 0, 1) + h * 36e5).toISOString();
+  const ev = (event, h, extra) => ({ event, ts: at(h), job: 'J-0001', decision_id: 'J-0001-D0003', ...extra });
+  const job = {
+    id: 'J-0001',
+    state: { status: 'active', updated_at: at(0) },
+    lock: null,
+    events: [
+      ...Array.from({ length: 5 }, (_, i) => ev('guard_deny', i, { reason: `src/x${i}.js is outside T1's allowed paths` })),
+      ev('stop_block', 1, { missing: ['acs_proven'] }), ev('stop_block', 2, { missing: ['review_clean'] }),
+      ev('reply_refused', 1, { code: 'stale_gate' }), ev('reply_refused', 2, { code: 'stale_gate' }),
+      ev('reply_unparsed', 1, { word: 'aprove', verb: 'approve' }), ev('reply_unparsed', 2, { word: 'aprove', verb: 'approve' }),
+      ...[1, 2, 3].map((h) => ev('cli', h, { cmd: 'task', sub: 'verify', ok: false, code: 'verify_failed' })),
+      ev('cli', 3, { cmd: 'record', ok: true, status: 'stale', workflow: 'realize' }), ev('cli', 4, { cmd: 'record', ok: true, status: 'stale', workflow: 'realize' }),
+      ev('cli', 5, { cmd: 'park', ok: true }),
+      ev('SubagentStart', 1, { agent_id: 'a1', agent_type: 'factory:builder' }), ev('SubagentStop', 2, { agent_id: 'a1' }),
+      ev('SubagentStart', 2, { agent_id: 'a2', agent_type: 'factory:tester' }),
+    ],
+    ledger: [
+      { kind: 'error', workflow: 'ground', summary: 'boom', at: at(1) }, { kind: 'error', workflow: 'ground', summary: 'boom', at: at(2) },
+      { kind: 'step', step: 'clarify', ok: true, at: at(1), detail: { degraded: ['security analyst'] } },
+      ...[1, 2, 3].map((h) => ({ kind: 'step', step: 'decompose', ok: false, at: at(h) })),
+      { kind: 'agents', workflow: 'realize', at: at(3), agents: [
+        { label: 'build T1 #1', agent_type: 'builder', model: null, outcome: 'done' }, { label: 'build T1 #2', agent_type: 'builder', model: 'opus', outcome: 'done' }, { label: 'build T1 #3', agent_type: 'builder', model: 'opus', outcome: 'exhausted' },
+        { label: 'test T1', agent_type: 'tester', outcome: 'fail' }, { label: 'scan (retry)', agent_type: 'analyst', retry: true, outcome: 'no_result' }, { label: 'scan2 (retry)', agent_type: 'analyst', retry: true, outcome: 'ok' },
+      ] },
+    ],
+    decisions: [
+      { id: 'J-0001-D0001', ts: at(0), action: 'gate', step: 'H1', recipe: 'bug@low' },
+      { ts: at(60), action: 'human.approve', gate: 'H1' },
+      { id: 'J-0001-D0002', ts: at(61), action: 'parked', rule: 'cap.review_rounds' }, { id: 'J-0001-D0003', ts: at(62), action: 'parked', rule: 'cap.review_rounds' },
+      ...[63, 64, 65].map((h) => ({ ts: at(h), action: 'human.resume', from: 'review' })),
+    ],
+  };
+  const found = rules.jobHealth(job, LIMITS, at(200));
+  const ids = found.map((x) => x.rule);
+  for (const r of ['R12.guard_denials', 'R12.stop_blocks', 'R12.replies_refused', 'R12.replies_unparsed', 'R13.cli_failures', 'R13.stale_results', 'R14.workflow_errors', 'R14.degraded', 'R14.agent_retries', 'R14.agent_failures', 'R14.escalations', 'R14.step_failures', 'R15.orphaned_agents', 'R16.park_loop', 'R16.resumed_past_caps', 'R17.idle_job', 'R18.slow_reply']) assert.ok(ids.includes(r), `${r} in ${ids}`);
+  assert.match(found.find((x) => x.rule === 'R13.cli_failures').summary, /factory task verify" failed 3 times .* verify_failed/);
+  assert.match(found.find((x) => x.rule === 'R15.orphaned_agents').summary, /factory:tester/);
+  for (const x of found) assert.ok(['deviation', 'ambiguity', 'gap'].includes(x.class) && ['high', 'medium', 'low'].includes(x.severity), x.rule);
+  // under the limits: nothing
+  const quiet = rules.jobHealth({ ...job, events: job.events.slice(0, 2), ledger: [], decisions: [], state: { status: 'active', updated_at: at(199) } }, LIMITS, at(200));
+  assert.deepEqual(quiet, []);
+});
+
+test('factory-wide health (R10 hook errors, R11 torn lines, R13 crashes) and the health report', () => {
+  const root = F.makeRepo();
+  const J = F.cli(root, ['job', 'new', '--title', 'x', '--type', 'bug', '--risk', 'low']).job;
+  // a factory hook fails: tampered state makes session-start throw → sealed hook_error
+  const st = path.join(F.jobDir(root, J), 'state.json');
+  const good = fs.readFileSync(st, 'utf8');
+  fs.writeFileSync(st, JSON.stringify({ ...JSON.parse(good), risk: 'high' }));
+  spawnSync('node', [path.join(F.PLUGIN, 'hooks', 'session-start.js')], { input: JSON.stringify({ cwd: root, hook_event_name: 'SessionStart' }), encoding: 'utf8' });
+  fs.writeFileSync(st, good);
+  // the inspector's own hook fails: its register can't be written
+  fs.mkdirSync(path.join(root, '.factory', 'inspect', 'register.json'), { recursive: true });
+  const after = spawnSync('node', [path.join(PLUGIN, 'hooks', 'after-close.js')], { input: JSON.stringify({ cwd: root, tool_name: 'Bash', tool_input: { command: `factory close --job ${J}` } }), encoding: 'utf8' });
+  assert.equal(after.status, 0);
+  fs.rmSync(path.join(root, '.factory', 'inspect', 'register.json'), { recursive: true });
+  assert.match(fs.readFileSync(path.join(root, '.factory', 'inspect', 'hook-errors.jsonl'), 'utf8'), /"hook":"after-close"/);
+  // a torn line
+  fs.appendFileSync(path.join(root, '.factory', 'log', 'events.jsonl'), '{"ts":"2026-01-01T00:00:00Z","event":"cl\n');
+  // the job is still active: --active inspects it now
+  const r = inspect(root, ['run', '--active']);
+  assert.deepEqual(r.inspected.map((x) => x.job), [J]);
+  const fds = I.report(root).findings;
+  const he = fds.find((x) => x.rule === 'R10.hook_errors');
+  assert.ok(he, JSON.stringify(fds.map((x) => x.rule)));
+  assert.match(he.summary, /session-start hook failed 1 time/);
+  assert.ok(fds.some((x) => x.rule === 'R10.inspector_hook_errors'));
+  assert.ok(fds.some((x) => x.rule === 'R11.torn_lines'));
+  assert.ok(!fds.some((x) => x.rule === 'R1.unattributed_lines'), 'a torn line is R11, not a forgery');
+  const md = spawnSync('node', [BIN, 'report', '--format', 'md'], { cwd: root, encoding: 'utf8' }).stdout;
+  assert.match(md, /## Factory health/);
+  assert.match(md, /Hook errors: session-start ×1 · inspector hooks 1/);
+  assert.match(md, /torn lines 1/);
+  assert.equal(inspect(root, ['health']).hook_errors[0].key, 'session-start');
+  // crashes are factory-wide
+  const obs = { jobs: {}, events: [{ event: 'cli', cmd: 'verify', sub: 'run', ok: false, code: 'internal', ts: 'x', job: J }], decisions: [], unsealed: { decisions: [], events: [] }, torn: { events: [], decisions: [] } };
+  assert.equal(rules.factoryHealth(obs, require('../inspector/config').LIMITS)[0].rule, 'R13.cli_crash');
+});
+
+test('limits and rules_off come from config; a fixed health finding reopens only on new evidence', () => {
+  const root = F.makeRepo();
+  F.cli(root, ['job', 'new', '--title', 'x', '--type', 'bug', '--risk', 'low']);
+  fs.mkdirSync(path.join(root, '.factory', 'inspect'), { recursive: true });
+  fs.writeFileSync(path.join(root, '.factory', 'inspect', 'config.json'), JSON.stringify({ limits: { guard_denials_per_job: 2 }, rules_off: ['R9'] }));
+  const guard = path.join(F.PLUGIN, 'hooks', 'guard.js');
+  const deny = () => spawnSync('node', [guard], { input: JSON.stringify({ tool_name: 'Bash', tool_input: { command: 'git push --force' }, cwd: root }), encoding: 'utf8' });
+  for (let i = 0; i < 3; i++) deny();
+  inspect(root, ['run', '--active']);
+  let fds = I.report(root).findings;
+  const g = fds.find((x) => x.rule === 'R12.guard_denials');
+  assert.ok(g && /3 guard denials \(limit 2\)/.test(g.summary), JSON.stringify(fds.map((x) => x.rule)));
+  assert.ok(!fds.some((x) => x.rule.startsWith('R9.')), 'R9 switched off');
+  assert.equal(inspect(root, ['status']).limits.guard_denials_per_job, 2);
+  I.applyReply(root, I.parseReply(`fixed finding ${g.id}`));
+  inspect(root, ['run', '--active']);
+  assert.equal(I.report(root, { status: 'all' }).findings.find((x) => x.id === g.id).status, 'fixed', 'old denials do not reopen it');
+  deny();
+  inspect(root, ['run', '--active']);
+  fds = I.report(root, { status: 'all' }).findings;
+  assert.equal(fds.find((x) => x.id === g.id).status, 'open', 'a new denial does');
+});
+
 test('independence: the inspector imports nothing from the factory', () => {
   for (const dir of ['inspector', 'hooks', 'bin']) {
     for (const f of fs.readdirSync(path.join(PLUGIN, dir))) {

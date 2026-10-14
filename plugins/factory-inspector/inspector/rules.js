@@ -19,7 +19,7 @@ function seals(job) {
   const bad = [];
   if (job.state && !job.stateSealed) bad.push('state.json');
   if (job.lock && !job.lockSealed) bad.push('recipe.lock.json');
-  const ledgerBad = job.ledgerLines.filter((l) => !l.sealed || (l.rec && l.rec.job && l.rec.job !== job.id));
+  const ledgerBad = job.ledgerLines.filter((l) => !l.torn && (!l.sealed || (l.rec && l.rec.job && l.rec.job !== job.id))); // torn lines: R11
   if (ledgerBad.length) bad.push(`ledger.jsonl lines ${ledgerBad.map((l) => l.line).slice(0, 10).join(', ')}`);
   const decBad = job.decisionLines.filter((d) => !d.sealed);
   if (decBad.length) bad.push(`decisions.jsonl lines ${decBad.map((d) => d.line).slice(0, 10).join(', ')}`);
@@ -338,12 +338,134 @@ function friction(obs, threshold) {
   return out;
 }
 
-function inspectJob(job) {
-  return [...seals(job), ...intendedRecipe(job), ...conformance(job), ...gates(job), ...evidenceChain(job), ...loops(job), ...driverFidelity(job)];
+// ---------------------------------------------------------------- health: R10–R18
+// Everything the factory reports about itself — hook failures, hook pushback, CLI
+// failures, workflow and agent trouble, parks, idle jobs, slow gates — checked against
+// the thresholds in config "limits". Findings carry `latest` (newest evidence) so a
+// finding you marked fixed reopens only on new evidence.
+
+const latest = (items, k = 'ts') => items.map((x) => x && x[k]).filter(Boolean).sort().pop() || null;
+const norm = (s, n = 90) => String(s || '').replace(/[\w./-]*\/[\w./-]*/g, '<path>').replace(/\bJ-\d+(-[DT]\d+)?\b/g, '<id>').replace(/\b[0-9a-f]{7,64}\b/g, '<hash>').slice(0, n);
+const groupBy = (items, keyFn) => {
+  const m = new Map();
+  for (const it of items) {
+    const k = keyFn(it);
+    if (k) m.set(k, [...(m.get(k) || []), it]);
+  }
+  return m;
+};
+const hours = (a, b) => (Date.parse(b) - Date.parse(a)) / 36e5;
+const AGENT_FAILED = new Set(['no_result', 'error', 'failed', 'exhausted', 'timeout', 'crashed']);
+const ENFORCING_HOOKS = new Set(['guard', 'stop', 'prompt']);
+
+// R10 / R11 / R13.cli_crash: factory-wide, from every log line regardless of job.
+function factoryHealth(obs, L) {
+  const out = [];
+  const ev = obs.events;
+  for (const [k, items] of groupBy(ev.filter((e) => e.event === 'hook_error'), (e) => `${e.hook || 'unknown'}|${norm(e.message, 120)}`)) {
+    if (items.length < (L.hook_errors || 1)) continue;
+    const [hook, msg] = k.split('|');
+    const enforcing = ENFORCING_HOOKS.has(hook);
+    out.push(f({ rule: 'R10.hook_errors', class: 'gap', severity: enforcing ? 'high' : 'medium', subject: k, latest: latest(items), summary: `The factory's ${hook} hook failed ${items.length} time(s): ${msg}${enforcing ? ' — while it fails, it enforces nothing (it falls back to "allow").' : '.'}`, evidence: [...new Set(items.map((i) => i.job).filter(Boolean))].slice(0, 10).concat(items.slice(-3).map((i) => i.ts)), question: `What breaks the ${hook} hook, and what slipped through while it was failing?` }));
+  }
+  for (const [k, items] of groupBy(obs.inspectorHookErrors || [], (e) => `${e.hook || 'unknown'}|${norm(e.message, 120)}`)) {
+    if (items.length < (L.hook_errors || 1)) continue;
+    out.push(f({ rule: 'R10.inspector_hook_errors', class: 'gap', severity: 'medium', subject: k, latest: latest(items), summary: `The inspector's own ${k.split('|')[0]} hook failed ${items.length} time(s): ${k.split('|')[1]}`, evidence: items.slice(-3).map((i) => i.ts), question: 'Is the inspector missing jobs or replies because its hook fails?' }));
+  }
+  const torn = [...obs.torn.events.map((n) => `events.jsonl line ${n}`), ...obs.torn.decisions.map((n) => `decisions.jsonl line ${n}`)];
+  for (const j of Object.values(obs.jobs)) torn.push(...(j.ledgerTorn || []).map((n) => `${j.id}/ledger.jsonl line ${n}`));
+  if (torn.length) out.push(f({ rule: 'R11.torn_lines', class: 'gap', severity: 'medium', subject: 'logs', summary: `${torn.length} log line(s) are not valid JSON (a crashed or concurrent write, or a hand edit): ${torn.slice(0, 6).join(', ')}${torn.length > 6 ? ', …' : ''}.`, evidence: torn.slice(0, 20), question: 'Did a factory process crash mid-write, or did two write the same log at once?' }));
+  const crashes = ev.filter((e) => e.event === 'cli' && e.ok === false && e.code === 'internal');
+  for (const [k, items] of groupBy(crashes, (e) => `${e.cmd}${e.sub ? ` ${e.sub}` : ''}`)) {
+    out.push(f({ rule: 'R13.cli_crash', class: 'gap', severity: 'high', subject: k, latest: latest(items), summary: `"factory ${k}" crashed with an internal error ${items.length} time(s) — a bug in the factory, not a refusal.`, evidence: [...new Set(items.map((i) => i.job).filter(Boolean))].slice(0, 10), question: `What makes factory ${k} crash, and did a job move on without it?` }));
+  }
+  return out;
 }
 
-function inspectGlobal(obs, threshold) {
-  const out = [...consistency(obs), ...friction(obs, threshold)];
+// R12–R18 for one job, from its own events, ledger and decisions.
+function jobHealth(job, L, now) {
+  const out = [];
+  const ev = job.events;
+  const id = job.id;
+  const status = job.state && job.state.status;
+  // R12 hook pushback in this job
+  const pushback = [
+    ['guard_deny', 'guard_denials_per_job', 'R12.guard_denials', 'guard denials', (items) => `top: ${[...groupBy(items, (e) => norm(e.reason, 70)).entries()].sort((a, b) => b[1].length - a[1].length).slice(0, 2).map(([r, x]) => `${x.length}× ${r}`).join('; ')}`, 'Are the agents\' instructions unclear about this boundary, or is the boundary wrong for this job?'],
+    ['stop_block', 'stop_blocks_per_job', 'R12.stop_blocks', 'blocked "done" claims', (items) => `floors still missing: ${[...new Set(items.flatMap((e) => e.missing || []))].slice(0, 5).join(', ')}`, 'Why does Claude keep calling this job done while floors fail?'],
+    ['reply_refused', 'replies_refused_per_job', 'R12.replies_refused', 'refused chat replies', (items) => `codes: ${[...new Set(items.map((e) => e.code || 'unknown'))].join(', ')}`, 'Was the gate presented clearly? Did the document change after it was shown?'],
+    ['reply_unparsed', 'replies_unparsed_per_job', 'R12.replies_unparsed', 'messages that looked like replies but weren\'t applied', (items) => `e.g. "${items[0].word}" (meant ${items[0].verb}?)`, 'Are the reply forms hard to remember?'],
+  ];
+  for (const [event, limit, rule, what, detail, question] of pushback) {
+    const items = ev.filter((e) => e.event === event);
+    if (items.length >= L[limit]) out.push(f({ rule, class: 'ambiguity', severity: 'medium', subject: id, job: id, latest: latest(items), summary: `${id}: ${items.length} ${what} (limit ${L[limit]}); ${detail(items).replace(/\.+$/, '')}.`, evidence: [...new Set(items.map((e) => e.decision_id).filter(Boolean))].slice(0, 6), question }));
+  }
+  // R13 CLI failures and stale results
+  const cli = ev.filter((e) => e.event === 'cli');
+  for (const [k, items] of groupBy(cli.filter((e) => e.ok === false && e.code !== 'internal'), (e) => `${e.cmd}${e.sub ? ` ${e.sub}` : ''}|${e.code || 'error'}`)) {
+    if (items.length < L.cli_failures) continue;
+    const [cmd, code] = k.split('|');
+    out.push(f({ rule: 'R13.cli_failures', class: 'ambiguity', severity: 'medium', subject: `${id}:${k}`, job: id, latest: latest(items), summary: `"factory ${cmd}" failed ${items.length} times in ${id} with ${code}.`, evidence: [...new Set(items.map((e) => e.decision_id).filter(Boolean))].slice(0, 6), question: 'Is Claude retrying blindly? Does the skill say what to do on this error?' }));
+  }
+  const stale = cli.filter((e) => e.cmd === 'record' && e.status === 'stale');
+  if (stale.length >= L.stale_results_per_job) out.push(f({ rule: 'R13.stale_results', class: 'ambiguity', severity: 'medium', subject: id, job: id, latest: latest(stale), summary: `${stale.length} workflow results in ${id} were thrown away as stale (inputs changed while the workflow ran).`, evidence: [...new Set(stale.map((e) => e.workflow).filter(Boolean))], question: 'What keeps changing the contract, design or build while workflows run?' }));
+  // R14 workflows and agents
+  const errors = job.ledger.filter((e) => e.kind === 'error');
+  if (errors.length >= L.workflow_errors_per_job) out.push(f({ rule: 'R14.workflow_errors', class: 'ambiguity', severity: 'medium', subject: id, job: id, latest: latest(errors, 'at'), summary: `${errors.length} workflow errors in ${id}: ${errors.slice(-3).map((e) => `${e.workflow}${e.config ? `/${e.config}` : ''}: ${norm(e.summary, 60)}`).join('; ')}.`, question: 'Is a workflow failing for the same reason each time?' }));
+  const degraded = job.ledger.filter((e) => e.kind === 'step' && e.detail && Array.isArray(e.detail.degraded) && e.detail.degraded.length);
+  const degradedRecords = cli.filter((e) => e.cmd === 'record' && e.status === 'degraded');
+  for (const [step, items] of groupBy(degraded, (e) => e.step)) {
+    out.push(f({ rule: 'R14.degraded', class: 'ambiguity', severity: 'medium', subject: `${id}:${step}`, job: id, latest: latest(items, 'at'), summary: `${step} in ${id} went on without ${[...new Set(items.flatMap((e) => e.detail.degraded))].join(', ')} (agents with no result after a retry).`, question: 'Was it right to go on without that angle? Why do those agents fail?' }));
+  }
+  if (!degraded.length && degradedRecords.length) out.push(f({ rule: 'R14.degraded', class: 'ambiguity', severity: 'medium', subject: `${id}:record`, job: id, latest: latest(degradedRecords), summary: `${degradedRecords.length} workflow result(s) in ${id} came back degraded (agents failed twice).`, question: 'Why do those agents fail?' }));
+  const runs = job.ledger.filter((e) => e.kind === 'agents').flatMap((e) => (e.agents || []).map((a) => ({ ...a, at: e.at, workflow: e.workflow })));
+  const retries = runs.filter((a) => a.retry || /#([2-9]|\d{2,})$/.test(a.label || ''));
+  if (retries.length >= L.agent_retries_per_job) out.push(f({ rule: 'R14.agent_retries', class: 'ambiguity', severity: 'low', subject: id, job: id, latest: latest(retries, 'at'), summary: `${retries.length} agent retries in ${id} (limit ${L.agent_retries_per_job}): ${[...groupBy(retries, (a) => a.agent_type).entries()].map(([t, x]) => `${t} ×${x.length}`).join(', ')}.`, question: 'Are these prompts or schemas hard to satisfy first time?' }));
+  const failed = runs.filter((a) => AGENT_FAILED.has(a.outcome));
+  if (failed.length >= L.agent_failures_per_job) out.push(f({ rule: 'R14.agent_failures', class: 'ambiguity', severity: 'medium', subject: id, job: id, latest: latest(failed, 'at'), summary: `${failed.length} agent runs in ${id} came back failed: ${[...groupBy(failed, (a) => `${a.agent_type} (${a.outcome})`).entries()].map(([t, x]) => `${t} ×${x.length}`).join(', ')}.`, question: 'Which role keeps failing, and why?' }));
+  const escalated = [];
+  for (const [, items] of groupBy(runs, (a) => `${a.workflow}|${String(a.label || '').replace(/\s*(#\d+|\(retry\))$/, '')}`)) {
+    escalated.push(...items.slice(1).filter((a) => a.model && a.model !== items[0].model));
+  }
+  if (escalated.length >= L.escalations_per_job) out.push(f({ rule: 'R14.escalations', class: 'ambiguity', severity: 'low', subject: id, job: id, latest: latest(escalated, 'at'), summary: `${escalated.length} agent run(s) in ${id} were escalated to a stronger model: ${escalated.slice(0, 4).map((a) => `${a.label} → ${a.model}`).join(', ')}.`, question: 'Is the first-attempt model too weak for these tasks?' }));
+  for (const [step, items] of groupBy(job.ledger.filter((e) => e.kind === 'step' && e.ok === false && !['prove', 'challenge'].includes(e.step)), (e) => e.step)) {
+    if (items.length >= L.step_failures) out.push(f({ rule: 'R14.step_failures', class: 'ambiguity', severity: 'medium', subject: `${id}:${step}`, job: id, latest: latest(items, 'at'), summary: `"${step}" was recorded as failed ${items.length} times in ${id}.`, question: `What keeps ${step} from passing?` }));
+  }
+  // R15 agents that started and never stopped
+  const open = new Map();
+  for (const e of ev) {
+    if (e.event === 'SubagentStart' && e.agent_id) open.set(e.agent_id, e);
+    if (e.event === 'SubagentStop' && e.agent_id) open.delete(e.agent_id);
+  }
+  const ended = ['closed', 'cancelled', 'abandoned'].includes(status);
+  const orphans = [...open.values()].filter((s) => ended || hours(s.ts, now) * 60 >= L.orphan_agent_minutes);
+  if (orphans.length) out.push(f({ rule: 'R15.orphaned_agents', class: 'gap', severity: 'low', subject: id, job: id, latest: latest(orphans), summary: `${orphans.length} agent(s) in ${id} started and never reported stopping${ended ? ` before the job ${status}` : ` within ${L.orphan_agent_minutes} min`}: ${orphans.slice(0, 4).map((s) => `${s.agent_type || 'agent'} since ${s.ts}`).join(', ')}.`, evidence: orphans.slice(0, 6).map((s) => s.agent_id), question: 'Did these agents crash or time out? Were their results lost?' }));
+  // R16 parks and resumes
+  const parks = [...job.decisions.filter((d) => d.action === 'parked'), ...cli.filter((e) => (e.cmd === 'park' && e.ok) || (e.cmd === 'record' && e.status === 'park')).map((e) => ({ ts: e.ts, reason: e.cmd === 'park' ? 'parked by hand' : `${e.workflow || 'workflow'} parked it` }))];
+  const resumes = job.decisions.filter((d) => d.action === 'human.resume');
+  if (parks.length >= L.parks_per_job) out.push(f({ rule: 'R16.park_loop', class: 'ambiguity', severity: 'medium', subject: `${id}:parks`, job: id, latest: latest(parks), summary: `${id} was parked ${parks.length} times (limit ${L.parks_per_job}): ${[...new Set(parks.map((p) => p.rule || p.reason).filter(Boolean))].slice(0, 3).join(', ')}.`, evidence: parks.slice(0, 6).map((p) => p.id).filter(Boolean), question: 'Is this job too big or unclear for its recipe?' }));
+  if (resumes.length >= L.resumes_per_job) out.push(f({ rule: 'R16.resumed_past_caps', class: 'ambiguity', severity: 'medium', subject: `${id}:resumes`, job: id, latest: latest(resumes), summary: `${id} was resumed past its caps ${resumes.length} times (limit ${L.resumes_per_job}).`, question: 'Are the caps too tight, or should this job have been re-scoped?' }));
+  // R17 active with no activity
+  if (status === 'active' && !job.state.pending_gate) {
+    const last = [latest(ev), latest(job.decisions), latest(job.ledger, 'at'), job.state.updated_at, job.state.created_at].filter(Boolean).sort().pop();
+    if (last && hours(last, now) >= L.idle_hours) out.push(f({ rule: 'R17.idle_job', class: 'gap', severity: 'low', subject: id, job: id, summary: `${id} is active but nothing has happened for ${Math.round(hours(last, now))} h (since ${last}).`, question: 'Was it forgotten, or should it be parked or cancelled?' }));
+  }
+  // R18 slow human replies at gates
+  const routing = job.decisions.filter(isRouting).sort((a, b) => (a.ts < b.ts ? -1 : 1));
+  for (const g of routing.filter((d) => d.action === 'gate' && d.step)) {
+    const reply = job.decisions.filter((d) => ['human.approve', 'human.deny'].includes(d.action) && (!d.gate || d.gate === g.step) && d.ts >= g.ts).sort((a, b) => (a.ts < b.ts ? -1 : 1))[0];
+    const waited = hours(g.ts, reply ? reply.ts : now);
+    if (reply && waited >= L.reply_hours) out.push(f({ rule: 'R18.slow_reply', class: 'ambiguity', severity: 'low', subject: `${id}:${g.step}`, job: id, latest: reply.ts, summary: `${g.step} in ${id} waited ${Math.round(waited)} h for your reply (limit ${L.reply_hours} h).`, evidence: [g.id], question: `Is ${g.step} hard to review, or does it arrive at a bad time?` }));
+  }
+  return out;
+}
+
+function inspectJob(job, { limits, now } = {}) {
+  const base = [...seals(job), ...intendedRecipe(job), ...conformance(job), ...gates(job), ...evidenceChain(job), ...loops(job), ...driverFidelity(job)];
+  return limits ? [...base, ...jobHealth(job, limits, now || new Date().toISOString())] : base;
+}
+
+function inspectGlobal(obs, threshold, { limits } = {}) {
+  const out = [...consistency(obs), ...friction(obs, threshold), ...(limits ? factoryHealth(obs, limits) : [])];
   const orphan = obs.unsealed.decisions.length + obs.unsealed.events.length;
   if (orphan) {
     const jobsTouched = new Set([...obs.unsealed.decisions, ...obs.unsealed.events].map((x) => x.job).filter(Boolean));
@@ -352,4 +474,4 @@ function inspectGlobal(obs, threshold) {
   return out;
 }
 
-module.exports = { inspectJob, inspectGlobal, seals, intendedRecipe, conformance, gates, evidenceChain, loops, driverFidelity, consistency, friction, expectationsFor };
+module.exports = { AGENT_FAILED, inspectJob, inspectGlobal, jobHealth, factoryHealth, seals, intendedRecipe, conformance, gates, evidenceChain, loops, driverFidelity, consistency, friction, expectationsFor };

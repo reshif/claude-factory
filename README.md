@@ -41,7 +41,7 @@ The first run initialises the repo (`factory init`): a `.factory/` folder kept o
 
 ### Your replies (exact, whole message)
 
-The UserPromptSubmit hook applies these before Claude sees them; nothing else counts as approval.
+The UserPromptSubmit hook applies these before Claude sees them; nothing else counts as approval. Case and trailing punctuation or emoji don't matter (`Approve!`, `approve 👍`), but the reply must be the whole message: a short message that only looks like one (`aprove`, `approve the plan please`) is **not applied**, and Claude is told so, with the exact forms.
 
 | Reply | Effect |
 |---|---|
@@ -104,13 +104,13 @@ Run `factory console`, or `/factory:console` in Claude Code, then open `.factory
 
 ## The inspector (optional, separate plugin)
 
-`factory-inspector` audits the factory from the outside. For each job it checks whether the intended recipe was used and whether the factory behaved as that recipe says, including whether Claude did what the router told it. It keeps a register of deviations, ambiguities and gaps for you to decide on.
+`factory-inspector` audits the factory from the outside. For each job it checks whether the intended recipe was used and whether the factory behaved as that recipe says, including whether Claude did what the router told it. It also checks the factory's health from everything it logs: hook failures, repeated guard denials and blocked "done" claims, refused replies, CLI failures and crashes, stale or degraded workflow results, agent failures and retries, orphaned agents, parks, idle jobs and slow gates (thresholds are configurable). It keeps a register of deviations, ambiguities and gaps for you to decide on.
 
 ```bash
 claude plugin install factory-inspector@software-factory
 ```
 
-It runs whenever a job ends — closed, cancelled or abandoned — however it ended: right after Claude runs the command, at the end of the turn when you ended it with a chat reply, or at the next session start when you ended it from your own terminal. Also on demand with `/factory-inspector:inspect`. Once a recipe has a long clean streak it suggests sampling, then off. Disable the plugin to turn it off completely; the factory keeps logging either way. See [`plugins/factory-inspector/README.md`](plugins/factory-inspector/README.md).
+It runs whenever a job ends — closed, cancelled or abandoned — however it ended: right after Claude runs the command, at the end of the turn when you ended it with a chat reply, or at the next session start when you ended it from your own terminal. Also on demand with `/factory-inspector:inspect` (`active` also covers running jobs; `factory-inspect report` ends with a factory health summary). Once a recipe has a long clean streak it suggests sampling, then off. Disable the plugin to turn it off completely; the factory keeps logging either way. See [`plugins/factory-inspector/README.md`](plugins/factory-inspector/README.md).
 
 ## CI re-verify (recommended)
 
@@ -138,7 +138,7 @@ Recipes and floors live in the plugin ([`recipes/`](plugins/factory/recipes), [`
 
 ```bash
 cd plugins/factory
-npm test          # 45 tests (plus 11 in plugins/factory-inspector): end-to-end jobs, decision table, caps, guard, seals, hooks, workflows, schemas
+npm test          # 54 tests (plus 14 in plugins/factory-inspector): end-to-end jobs, decision table, caps, guard, seals, hooks, workflows, schemas, console
 ./bin/factory help
 ```
 
@@ -149,4 +149,4 @@ The tests drive the real CLI against throwaway git repos, play the agents and th
 - Not yet exercised inside a live Claude Code session — the CLI, hooks and workflow scripts are covered by the automated tests above. Run `claude plugin validate plugins/factory` after installing, and try a `bug@low` job first.
 - The guard and seals are defence in depth, not a sandbox: agents run as your OS user. CI re-verify and your own merge are the hard backstops. Details: ARCHITECTURE.md §6a.
 - Budgets count agent runs and wall time, not tokens.
-- v0.7.5 extras not included in this standalone build: standards packs (`python@1`, `typescript@1`), the Inspector, display consoles. Project checks go in `policy.checks`.
+- v0.7.5 extras not included in this standalone build: standards packs (`python@1`, `typescript@1`). Project checks go in `policy.checks`.

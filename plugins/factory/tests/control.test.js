@@ -215,6 +215,14 @@ test('human-only actions refuse the agent path', () => {
   assert.equal(human.parseReply('approve\nand more'), null);
   assert.deepEqual(human.parseReply('approve J-0001 H1'), { cmd: 'approve', jobId: 'J-0001', gate: 'H1' });
   assert.equal(human.parseReply('deny add negatives').reason, 'add negatives');
+  // tone is tolerated, sentences are not
+  for (const t of ['Approve!', 'approve 👍', 'approve.', 'APPROVE 👍🏽']) assert.deepEqual(human.parseReply(t), { cmd: 'approve', jobId: undefined, gate: undefined }, t);
+  assert.deepEqual(human.parseReply('approve j-0001 h1!'), { cmd: 'approve', jobId: 'J-0001', gate: 'H1' });
+  assert.equal(human.parseReply('merged abc1234.').commit, 'abc1234');
+  assert.equal(human.parseReply('approve the plan please'), null);
+  // near misses are recognised (to say "not applied"), never parsed
+  for (const t of ['aprove', 'approve the plan please', 'cancel', 'Approved!', 'merge it']) assert.ok(human.nearMiss(t), t);
+  for (const t of ['please continue', 'approve', 'what does the approve gate check in this repo for us today', 'hello']) assert.equal(human.nearMiss(t), null, t);
 });
 
 test('an open GitHub PR alternates sync and wait instead of busy-looping', () => {
