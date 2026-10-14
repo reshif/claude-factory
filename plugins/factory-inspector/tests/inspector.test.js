@@ -365,3 +365,20 @@ test('independence: the inspector imports nothing from the factory', () => {
     }
   }
 });
+
+test('R19.intent_parked fires only on the park entry, not on a needs_user round that asks an intent question', () => {
+  const { LIMITS } = require('../inspector/config');
+  const at = (h) => new Date(Date.UTC(2026, 0, 1) + h * 36e5).toISOString();
+  const job = {
+    id: 'J-0001',
+    state: { status: 'active', updated_at: at(9) },
+    lock: null,
+    ledger: [{ kind: 'step', step: 'clarify', ok: false, at: at(1), detail: { round: 1, questions: 1, question_ids: ['Q-1'], intent_open: true, held: 2, dropped: 0 } }],
+    decisions: [{ id: 'J-0001-D0001', ts: at(1), action: 'skill', skill: 'clarify' }],
+    events: [],
+  };
+  assert.ok(!rules.jobHealth(job, LIMITS, at(10)).some((x) => x.rule === 'R19.intent_parked'), 'a needs_user intent round is not a park');
+  // the real park entry (record.js: intent_open, questions 0, no question ids) still fires
+  job.ledger.push({ kind: 'step', step: 'clarify', ok: false, at: at(4), detail: { round: 2, intent_open: true, intent_rounds: 2, questions: 0, contract_problems: [] } });
+  assert.ok(rules.jobHealth(job, LIMITS, at(10)).some((x) => x.rule === 'R19.intent_parked'));
+});
