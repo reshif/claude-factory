@@ -5,7 +5,7 @@ Turns a request into a verified, merged change. Claude does the work through spe
 | Plugin | Version | What it is |
 |---|---|---|
 | `factory` | 0.10.1 | The orchestrator: skills, hooks, the `factory` CLI, workflows, agents, recipes, templates and the console |
-| `factory-inspector` | 0.2.1 | An independent auditor: checks each job against the rulebook it declared and the factory's health (rules R1–R19, R21, R22) |
+| `factory-inspector` | 0.2.1 | An independent auditor: checks each job against the rulebook it declared and the factory's health |
 
 ## How it fits together
 
@@ -45,7 +45,7 @@ flowchart TB
   store[/"<b>.factory/</b> in your repo · contract · ADRs · plan · ledger · decisions · events · lessons"/]:::art
 
   console["<b>Console</b><br/>factory console --serve<br/>live board · wire · line map · story"]
-  inspector["<b>Inspector</b><br/>plugin factory-inspector<br/>rules R1–R19 · runs when a job ends"]
+  inspector["<b>Inspector</b><br/>plugin factory-inspector<br/>conformance and health rules · runs when a job ends"]
 
   you --> skills
   you --> hooks
@@ -223,7 +223,7 @@ Run `factory console`, or `/factory:console` in Claude Code, then open `.factory
 
 `factory-inspector` audits the factory from the outside. It imports none of the factory's code: it reads `.factory/` directly, with its own seal check, so a bug in the factory can't hide itself. It never blocks or changes a job; its findings are questions for you, kept in `.factory/inspect/register.json`.
 
-- **Per job (R1–R9):** forged records, the wrong recipe, steps out of order, gates approved without being shown, review on an unproven build, loops past caps, Claude not doing what `factory next` said, the same situation routed differently, recurring friction.
+- **Per job:** forged records, the wrong recipe, steps out of order, gates approved without being shown, review on an unproven build, loops past caps, Claude not doing what `factory next` said, the same situation routed differently, recurring friction.
 - **Factory health:** hook failures, torn log lines, repeated guard denials / blocked "done" claims / refused replies, CLI failures and crashes, degraded workflows and agent retries, agents that never stopped, repeated parks, idle jobs, slow gate replies, and clarify parking on an unclear intent or overrunning its question budget. **R21/R22:** a confirmed review finding that came back in a later round, and a reconcile that would have dropped merged or fixed lines. Thresholds live in `.factory/inspect/config.json` (`limits`, `rules_off`).
 - **When it runs:** whenever a job ends — closed, cancelled or abandoned — however it ended: right after Claude runs the command, at the end of the turn if you ended it with a chat reply, or at the next session start if you ended it from your terminal. On demand with `/factory-inspector:inspect` (`active` also covers running jobs). Once a recipe has a long clean streak it suggests sampling, then off.
 
@@ -302,7 +302,7 @@ plugins/factory/
   docs/                             ARCHITECTURE · DESIGN-v2 · RECIPES · FLOORS · DOCS
   tests/                            end-to-end and unit tests
 plugins/factory-inspector/
-  inspector/                        observe · rules (R1–R19) · register · config · io
+  inspector/                        observe · rules · register · config · io
   hooks/ · skills/inspect/ · bin/factory-inspect · tests/
 ```
 
