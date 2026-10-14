@@ -11,4 +11,4 @@ From the distill context (confirmed findings, verify-fix rounds, minor findings 
 - Each has a scope: the globs it applies to.
 - Do not restate a lesson that already exists.
 
-Record each with the `lessons add` command you are given. The human accepts or rejects them.
+Record each with the `lessons add` command you are given, with `--why` naming the finding or failure it comes from ("code-3: handler trusted the body unvalidated"). The CLI renders every lesson as a card in .factory/lessons/lessons.md (templates/docs/lessons.md: rule, scope, why, check, decision), so the text is the rule alone. The human accepts or rejects them.

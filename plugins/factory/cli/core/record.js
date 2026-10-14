@@ -21,19 +21,48 @@ const wfargs = require('./wfargs');
 const lifecycle = require('./lifecycle');
 const decisionTable = require('./decision-table');
 const questions = require('./questions');
+const docMod = require('./doc');
 
-function findingsMarkdown(state, topics) {
-  const L = [`# Findings — ${state.id}: ${state.title}`, '', 'Every claim is cited (file:line, command, or URL) or marked UNVERIFIED.', ''];
+// Decide runs in a row whose design record fails the doc templates before the job parks.
+const DOC_RETRY_CAP = 3;
+
+// findings.md follows templates/docs/findings.md (findings@1).
+function findingsMarkdown(state, topics, answers = []) {
+  const { frontBlock, cell, loadTemplate } = docMod;
+  const answered = new Set(answers.map((a) => a.question));
+  const unknowns = topics.flatMap((t) => t.unknowns.map((u) => ({ ...u, topic: t.topic })));
+  const blocked = unknowns.some((u) => u.blocking && !answered.has(u.question));
+  const L = [
+    frontBlock({ doc: 'findings', template: loadTemplate('findings').version, job: state.id, title: state.title, status: blocked ? 'blocked' : 'grounded', date: nowIso().slice(0, 10), contract: 'contract.md', related: [] }),
+    '',
+    `# Findings — ${state.id}: ${state.title}`,
+    '',
+    '## Summary',
+    '',
+    'Every claim is cited (file:line, command, or URL) or marked UNVERIFIED.',
+    '',
+    '| Topic | Claims | Unverified | Unknowns | Blocking |',
+    '|---|---|---|---|---|',
+    ...topics.map((t) => `| ${cell(t.topic)} | ${t.claims.length} | ${t.claims.filter((c) => c.source === 'UNVERIFIED').length} | ${t.unknowns.length} | ${t.unknowns.filter((u) => u.blocking).length} |`),
+    ...(topics.length ? [] : ['| — | 0 | 0 | 0 | 0 |']),
+    '',
+    '## Topics',
+    '',
+  ];
   for (const t of topics) {
-    L.push(`## ${t.topic}`, '');
-    if (!t.claims.length) L.push('_No claims._', '');
+    L.push(`### ${t.topic}`, '');
+    if (!t.claims.length) L.push('_No claims._');
     for (const c of t.claims) L.push(`- ${c.claim} — ${c.source === 'UNVERIFIED' ? '**UNVERIFIED**' : `\`${c.source}\``}`);
-    if (t.unknowns.length) {
-      L.push('', '**Unknowns**', '');
-      for (const u of t.unknowns) L.push(`- ${u.blocking ? '(blocking) ' : ''}${u.question}`);
-    }
     L.push('');
   }
+  if (!topics.length) L.push('_No topics._', '');
+  L.push('## Unknowns', '');
+  for (const u of unknowns) L.push(`- ${u.blocking ? '(blocking) ' : ''}[${u.topic}] ${u.question}${u.blocking ? ` — ${answered.has(u.question) ? 'answered' : 'unanswered'}` : ''}`);
+  if (!unknowns.length) L.push('None.');
+  L.push('', '## Answers from the human', '');
+  for (const a of answers) L.push(`- Q: ${a.question} — A: ${a.answer}`);
+  if (!answers.length) L.push('None.');
+  L.push('');
   return L.join('\n');
 }
 
@@ -93,8 +122,8 @@ function recClarify(root, state, env) {
 function recGround(root, state, env) {
   const topics = (env.data && env.data.topics) || [];
   const jp = jobPaths(root, state.id);
-  writeText(jp.findings, findingsMarkdown(state, topics));
   const answers = readJson(jp.answers, []);
+  writeText(jp.findings, findingsMarkdown(state, topics, answers));
   const answered = new Set(answers.map((a) => a.question));
   const blocking = topics.flatMap((t) => t.unknowns.filter((u) => u.blocking && !answered.has(u.question)).map((u) => u.question));
   const b = invalidation.current(root, state);
@@ -121,6 +150,19 @@ function recDecide(root, state, env) {
   job.save(root, state);
   const max = state.policy.limits.max_design_critique_rounds;
   writeJson(path.join(jp.critiquesDir, 'design.json'), seal({ hash: b.design, verdict: last ? last.verdict : 'none', items: last ? last.items : [], rounds: critiques.length, at: nowIso() }));
+  // The design record must follow templates/docs (front matter, sections in order, an AC
+  // table, a Mermaid architecture diagram in an ADR, a data-flow diagram in a threat model).
+  const docProblems = docMod.designProblems(root, state);
+  if (docProblems.length) {
+    const prior = ledger.steps(root, state.id, 'decide');
+    const since = (state.resumed && state.resumed.at) || '';
+    let streak = 1;
+    for (let i = prior.length - 1; i >= 0 && !prior[i].ok && (prior[i].detail.doc_problems || []).length && prior[i].at > since; i--) streak += 1;
+    ledger.append(root, state.id, { kind: 'step', step: 'decide', ok: false, bound: { contract: b.contract, design: b.design }, detail: { kind: a.kind, paths, critique: last ? last.verdict : null, rounds: critiques.length, threat_model: needThreat, doc_problems: docProblems.slice(0, 40) } });
+    const list = docProblems.slice(0, 12).map((p) => `- ${p}`).join('\n');
+    if (streak >= DOC_RETRY_CAP) return { status: 'park', park_reason: `The design record still breaks the doc templates after ${streak} decide runs:\n${list}`, doc_problems: docProblems, message: 'Parked.' };
+    return { status: 'retry', doc_problems: docProblems, message: `The design record does not follow the doc templates (${docProblems.length} problem(s)):\n${list}\nfactory next runs decide again; the architect gets these problems. Check a file with: factory doc check <file>` };
+  }
   const h2Step = ctx.recipe.steps.find((s) => ['H2', 'EH2', 'HF'].includes(s.step));
   const humanWillSee = Boolean(h2Step && !(h2Step.when === 'adr' && !invalidation.hasAdr(root, state.id)));
   const approved = last && last.verdict === 'approve';

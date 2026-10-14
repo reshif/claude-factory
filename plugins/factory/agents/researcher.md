@@ -11,3 +11,4 @@ Rules:
 - Read code and run read-only commands (grep, git log, test listings). Do not modify anything.
 - Record genuine unknowns. Mark one blocking only if the design cannot proceed without the human's answer.
 - Use the web only for the external topic, and only official or primary sources.
+- The CLI renders every topic's claims into findings.md (templates/docs/findings.md): a summary table, one section per topic, then the unknowns. The architect cites your claims from there, so write each claim so it stands alone (no "as above"), one fact per claim.

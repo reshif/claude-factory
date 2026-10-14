@@ -80,16 +80,39 @@ test('standard@medium: ADR → H2, plan → H3, three lanes, floors before ship'
   let brief = F.cli(root, ['wfargs', 'fanout-judge', '--config', 'decide']);
   assert.equal(brief.fanout.filter((f) => f.id.startsWith('option')).length, 3);
   assert.ok(!brief.fanout.some((f) => f.id === 'threat-modeler'));
-  // architect writes an ADR; the critique says revise twice → H2 shows it to the human
+  assert.match(fs.readFileSync(brief.judge.prompt.split('\n')[1].trim(), 'utf8'), /templates\/docs\/adr\.md[\s\S]*Mermaid architecture diagram[\s\S]*doc check/, 'the architect is told which template to follow and how to check it');
+  // an ADR without the template's sections or an architecture diagram is sent back
+  const adrPath = path.join(F.jobDir(root, J), 'adr-001-math.md');
   F.write(F.jobDir(root, J), 'adr-001-math.md', '# ADR 001\nDecision: separate modules.\n');
-  let r = F.record(root, F.envelope(brief, 'ok', { options: [], degraded: [], judge: { kind: 'adr', paths: [path.join(F.jobDir(root, J), 'adr-001-math.md')], summary: 's' }, critiques: [{ verdict: 'revise', items: [{ issue: 'i', severity: 'minor' }] }, { verdict: 'revise', items: [] }] }));
+  const env = (critiques) => F.envelope(brief, 'ok', { options: [], degraded: [], judge: { kind: 'adr', paths: [adrPath], summary: 's' }, critiques });
+  let r = F.record(root, env([{ verdict: 'approve', items: [] }]));
+  assert.equal(r.status, 'retry');
+  assert.ok(r.doc_problems.some((p) => /No front matter/.test(p)) && r.doc_problems.some((p) => /Missing section "## Architecture diagram"/.test(p)), JSON.stringify(r.doc_problems));
+  assert.equal(next(root).step, 'decide', 'a rejected design record is decided again');
+  F.write(F.jobDir(root, J), 'adr-001-math.md', F.adrText({ job: J, acs: ['AC-1', 'AC-2'], diagram: 'Two modules, add and sub.\n' }));
+  brief = F.cli(root, ['wfargs', 'fanout-judge', '--config', 'decide']);
+  assert.match(fs.readFileSync(brief.judge.prompt.split('\n')[1].trim(), 'utf8'), /breaks the doc templates[\s\S]*needs a ```mermaid diagram/, 'the next architect run gets the template problems');
+  r = F.record(root, env([{ verdict: 'approve', items: [] }]));
+  assert.equal(r.status, 'retry');
+  assert.match(r.message, /Architecture diagram/);
+  // a diagram that is there but malformed is still refused; AC-2 must be covered too
+  F.write(F.jobDir(root, J), 'adr-001-math.md', F.adrText({ job: J, acs: ['AC-1'], diagram: '```mermaid\nflowchart LR\n  subgraph m\n  add[add --> sub\n```\n' }));
+  r = F.record(root, env([{ verdict: 'approve', items: [] }]));
+  assert.equal(r.status, 'park', 'three template failures in a row park the job');
+  assert.match(r.park_reason, /unbalanced brackets[\s\S]*does not cover AC-2|does not cover AC-2[\s\S]*unbalanced brackets/);
+  F.reply(root, 'resume decide');
+  // architect writes a valid ADR; the critique says revise twice → H2 shows it to the human
+  F.write(F.jobDir(root, J), 'adr-001-math.md', F.adrText({ job: J, acs: ['AC-1', 'AC-2'], decision: 'We will add separate modules.' }));
+  assert.equal(F.cli(root, ['doc', 'check', adrPath]).ok, true);
+  brief = F.cli(root, ['wfargs', 'fanout-judge', '--config', 'decide']);
+  r = F.record(root, F.envelope(brief, 'ok', { options: [], degraded: [], judge: { kind: 'adr', paths: [path.join(F.jobDir(root, J), 'adr-001-math.md')], summary: 's' }, critiques: [{ verdict: 'revise', items: [{ issue: 'i', severity: 'minor' }] }, { verdict: 'revise', items: [] }] }));
   assert.equal(r.status, 'ok');
   assert.match(r.message, /you will see it at H2/);
   n = next(root);
   assert.equal(n.step, 'H2');
   assert.ok(n.gate.docs.some((d) => d.endsWith('design.json')));
   // a document edited after it was presented can't be approved
-  F.write(F.jobDir(root, J), 'adr-001-math.md', '# ADR 001\nDecision: separate modules, edited.\n');
+  F.write(F.jobDir(root, J), 'adr-001-math.md', F.adrText({ job: J, acs: ['AC-1', 'AC-2'], decision: 'We will add separate modules, edited.' }));
   assert.throws(() => F.reply(root, 'approve'), /changed after it was presented/);
   n = next(root);
   assert.equal(n.first_failing, null);
@@ -144,11 +167,19 @@ test('full@high: threat model required, H2 and H3 human, HS before ship, trial r
   assert.equal(n.threat_model, true);
   let brief = F.cli(root, ['wfargs', 'fanout-judge', '--config', 'decide']);
   assert.ok(brief.fanout.some((f) => f.id === 'threat-modeler'));
-  F.write(F.jobDir(root, J), 'adr-001-x.md', '# ADR\n');
+  assert.match(fs.readFileSync(brief.fanout.find((f) => f.id === 'threat-modeler').prompt.split('\n')[1].trim(), 'utf8'), /templates\/docs\/threat-model\.md[\s\S]*subgraph[\s\S]*doc check/);
+  F.write(F.jobDir(root, J), 'adr-001-x.md', F.adrText({ job: J, acs: ['AC-1', 'AC-2'], threats: ['TH-1'] }));
   const noThreat = F.record(root, F.envelope(brief, 'ok', { options: [], degraded: [], judge: { kind: 'adr', paths: [path.join(F.jobDir(root, J), 'adr-001-x.md')], summary: 's' }, critiques: [{ verdict: 'approve', items: [] }] }, { threat_model: true }));
   assert.equal(noThreat.error, true);
   assert.match(noThreat.message, /threat model is required/);
-  F.write(F.jobDir(root, J), 'threat-model.md', '# Threats\n');
+  // a threat model without a data-flow diagram, or a threat the ADR does not map, is sent back
+  F.write(F.jobDir(root, J), 'threat-model.md', F.threatModelText({ job: J, ids: ['TH-1', 'TH-2'] }).replace(/```mermaid[\s\S]*?```\n/, 'See the code.\n'));
+  brief = F.cli(root, ['wfargs', 'fanout-judge', '--config', 'decide']);
+  const bad = F.record(root, F.envelope(brief, 'ok', { options: [], degraded: [], judge: { kind: 'adr', paths: [path.join(F.jobDir(root, J), 'adr-001-x.md')], summary: 's' }, critiques: [{ verdict: 'approve', items: [] }] }, { threat_model: true }));
+  assert.equal(bad.status, 'retry');
+  assert.ok(bad.doc_problems.some((p) => /^threat-model\.md: .*Data-flow diagram/.test(p)), JSON.stringify(bad.doc_problems));
+  assert.ok(bad.doc_problems.some((p) => /^adr-001-x\.md: .*does not map threat\(s\) TH-2/.test(p)), JSON.stringify(bad.doc_problems));
+  F.write(F.jobDir(root, J), 'threat-model.md', F.threatModelText({ job: J }));
   brief = F.cli(root, ['wfargs', 'fanout-judge', '--config', 'decide']);
   assert.equal(F.record(root, F.envelope(brief, 'ok', { options: [], degraded: [], judge: { kind: 'adr', paths: [path.join(F.jobDir(root, J), 'adr-001-x.md')], summary: 's' }, critiques: [{ verdict: 'approve', items: [] }] }, { threat_model: true })).status, 'ok');
   assert.equal(next(root).step, 'H2');
@@ -171,6 +202,20 @@ test('full@high: threat model required, H2 and H3 human, HS before ship, trial r
   F.reply(root, 'approve');
   assert.equal(next(root).skill, 'ship');
   assert.equal(F.cli(root, ['ship', '--local']).mode, 'local');
+  // every doc of the job follows its template; the report and the index trace AC → design → task → proof
+  const docs = F.cli(root, ['doc', 'check']);
+  assert.equal(docs.ok, true, JSON.stringify(docs.docs.filter((d) => !d.ok)));
+  assert.deepEqual(docs.docs.map((d) => d.type), ['findings', 'threat-model', 'adr', 'ship-report', 'index']);
+  const report = fs.readFileSync(path.join(F.jobDir(root, J), 'completion-report.md'), 'utf8');
+  assert.match(report, /^---\ndoc: ship-report\ntemplate: ship-report@1\njob: J-\d+/);
+  assert.match(report, /## What changed[\s\S]*\| A \| src\/sub\.js \|[\s\S]*## Acceptance criteria → evidence[\s\S]*AC-2[^\n]*proven/);
+  assert.match(report, /## Design record\n\n- adr: adr-001-x\.md — Fix add in place \(proposed\)\n  We will fix the operator in src\/add\.js\./);
+  assert.match(report, /Threat model: threat-model\.md \(TH-1\)/);
+  assert.equal(F.cli(root, ['report']).report, path.join(F.jobDir(root, J), 'completion-report.md'));
+  assert.equal(fs.readFileSync(path.join(F.jobDir(root, J), 'completion-report.md'), 'utf8').replace(/status: \w+/, ''), report.replace(/status: \w+/, ''), 'the report is reproducible');
+  const idx = fs.readFileSync(path.join(F.jobDir(root, J), 'docs-index.md'), 'utf8');
+  assert.match(idx, /\| AC-2 sub\(5, 3\) returns 2 \| adr-001-x\.md \| T2, T3 \| proven \|/);
+  assert.match(require(path.join(F.PLUGIN, 'cli', 'core', 'ship')).prBody(report), /^<!-- factory doc: ship-report · template: ship-report@1 · [^\n]*-->\n\n# Completion report/);
 });
 
 test('high-risk jobs refuse recipes that are not proven', () => {

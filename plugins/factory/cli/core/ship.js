@@ -16,6 +16,8 @@ const floors = require('./floors');
 const decisions = require('./decisions');
 const verifyMod = require('./verify');
 const tasks = require('./tasks');
+const invalidation = require('./invalidation');
+const docMod = require('./doc');
 
 function gh(args, cwd) {
   const r = spawnSync('gh', args, { cwd, encoding: 'utf8' });
@@ -41,43 +43,96 @@ function report(root, state, ctx, fl) {
     .forJob(root, state.id)
     .filter((d) => d.chosen && !String(d.action).startsWith('human.'))
     .map((d) => d.chosen);
-  const lines = [];
-  lines.push(`# Completion report — ${state.id}: ${state.title}`, '');
-  lines.push(`- Work type: ${state.work_type} · Risk: ${state.risk} · Recipe: ${state.recipe.id} v${state.recipe.version}`);
-  lines.push(`- Base: ${state.base_branch} @ ${state.base_commit.slice(0, 12)} · Branch: ${state.branch}`);
-  lines.push(`- Build fingerprint: ${ctx.b.fingerprint}`, '');
-  lines.push('## Acceptance criteria → proof', '', '| AC | Status | Proof |', '|---|---|---|');
+  // Follows templates/docs/ship-report.md (ship-report@1). Rendered from sealed state, git
+  // and the job's docs only, so the same build renders the same report.
+  const { frontBlock, cell, loadTemplate, sectionLead, frontMatter, typeOf } = docMod;
+  const design = invalidation.designFiles(root, state.id).filter((f) => f.endsWith('.md'));
+  const adr = design.find((f) => typeOf(f) === 'adr') || design.find((f) => typeOf(f) === 'no-adr');
+  const plan = readJson(state.epic ? jp.slices : jp.plan, null);
+  const units = plan ? plan.tasks || plan.slices || [] : [];
+  const changes = state.branch
+    ? git.run(root, ['diff', '--name-status', state.base_commit, state.branch], { allowFail: true }).stdout.split('\n').filter(Boolean).map((l) => l.split('\t')).filter((p) => !String(p[p.length - 1]).startsWith('.factory-ship/'))
+    : [];
+  const serious = ch ? ch.detail.findings.filter((f) => f.status === 'confirmed' && ['blocker', 'major'].includes(f.severity)) : [];
+  const L = [
+    frontBlock({ doc: 'ship-report', template: loadTemplate('ship-report').version, job: state.id, title: state.title, status: state.pr && state.pr.fingerprint === ctx.b.fingerprint ? 'shipped' : 'ready', date: String((prove && prove.at) || state.created_at || nowIso()).slice(0, 10), contract: 'contract.md', related: [...design.map((f) => path.basename(f)), ...(plan ? [path.basename(state.epic ? jp.slices : jp.plan)] : []), 'docs-index.md'], fingerprint: ctx.b.fingerprint }),
+    '',
+    `# Completion report — ${state.id}: ${state.title}`,
+    '',
+    '## Summary',
+    '',
+    parsed.goal || '_No goal recorded._',
+    '',
+    `- Work type: ${state.work_type} · Risk: ${state.risk} · Recipe: ${state.recipe.id} v${state.recipe.version}`,
+    `- Base: ${state.base_branch} @ ${state.base_commit.slice(0, 12)} · Branch: ${state.branch || '(epic: see slice jobs)'}`,
+    `- Build fingerprint: ${ctx.b.fingerprint}`,
+    '',
+    '## What changed',
+    '',
+    '| Status | File |',
+    '|---|---|',
+    ...changes.map((p) => `| ${cell(p[0])} | ${cell(p.slice(1).join(' → '))} |`),
+    ...(changes.length ? [] : [`| — | ${state.epic ? `slices: ${(state.children || []).join(', ') || 'none'}` : 'no changes'} |`]),
+    '',
+    '## Acceptance criteria → evidence',
+    '',
+    '| AC | Status | Proof |',
+    '|---|---|---|',
+  ];
   for (const ac of parsed.acs) {
     const s = prove && prove.detail.acs[ac.id];
     const w = prove && prove.detail.why[ac.id];
-    lines.push(`| ${ac.id} ${ac.text.replace(/\|/g, '\\|')} | ${s || 'unproven'} | ${(w || []).join('; ').replace(/\|/g, '\\|')} |`);
+    L.push(`| ${cell(`${ac.id} ${ac.text}`)} | ${s || 'unproven'} | ${cell((w || []).join('; '))} |`);
   }
-  lines.push('', '## Floors', '', '| Floor | Met |', '|---|---|');
-  for (const r of fl.results) lines.push(`| ${r.floor} | ${r.ok ? 'yes' : 'NO'} |`);
-  lines.push('', '## Approvals', '', '| Gate | Hash | When | Via |', '|---|---|---|---|');
-  for (const [g, a] of Object.entries(state.approvals || {})) lines.push(`| ${g} | ${String(a.hash).slice(0, 12)} | ${a.at} | ${a.via} |`);
-  if (Object.keys(state.waivers || {}).length) {
-    lines.push('', '## Waivers', '');
-    for (const [f, w] of Object.entries(state.waivers)) lines.push(`- ${f}: ${w.reason} (${w.at})`);
+  if (!parsed.acs.length) L.push('| — | — | — |');
+  L.push('', '## Design record', '');
+  for (const f of design) {
+    const text = readText(f, '');
+    const fm = frontMatter(text).front || {};
+    const lead = sectionLead(text, typeOf(f, fm) === 'adr' ? 'Decision' : typeOf(f, fm) === 'no-adr' ? 'Approach' : typeOf(f, fm) === 'recommendation' ? 'Recommendation' : '');
+    L.push(`- ${typeOf(f, fm) || 'doc'}: ${path.basename(f)}${fm.title ? ` — ${fm.title}` : ''}${fm.status ? ` (${fm.status})` : ''}${lead ? `\n  ${lead}` : ''}`);
   }
+  if (!design.length) L.push('No design record (this recipe has no decide step).');
+  L.push('', '## Risk', '');
+  L.push(`- Risk level: ${state.risk}${state.risk_proposed && state.risk_proposed !== state.risk ? ` (raised by policy from ${state.risk_proposed})` : ''}`);
+  L.push(`- Threat model: ${exists(jp.threatModel) ? `threat-model.md (${docMod.threatIds(readText(jp.threatModel, '')).join(', ') || 'no threat ids'})` : 'none'}`);
+  L.push(`- Confirmed serious review findings at this build: ${serious.length}${serious.length ? ` (${serious.map((f) => f.id).join(', ')})` : ''}`);
+  L.push(`- Waivers: ${Object.keys(state.waivers || {}).length ? Object.entries(state.waivers).map(([f, w]) => `${f} — ${w.reason} (${w.at})`).join('; ') : 'none'}`);
+  L.push('', '## Rollout and rollback', '');
+  L.push(`- Rollout: merge ${state.branch || 'each slice'} into ${state.base_branch}; CI (factory-gate) re-runs the verify commands in .factory-ship/${state.id}.json on the merge result.`);
+  const rb = units.filter((u) => u.rollback).map((u) => `${u.id}: ${u.rollback}`);
+  L.push(`- Rollback: ${rb.length ? rb.join('; ').replace(/\.?$/, '.') : 'revert the merge commit.'}${adr && sectionLead(readText(adr, ''), 'Rollback and migration') ? ` Design: ${sectionLead(readText(adr, ''), 'Rollback and migration')}` : ''}`);
+  L.push('', '## Floors', '', '| Floor | Met |', '|---|---|');
+  for (const r of fl.results) L.push(`| ${r.floor} | ${r.ok ? 'yes' : 'NO'} |`);
+  if (!fl.results.length) L.push('| — | — |');
+  L.push('', '## Approvals', '', '| Gate | Hash | When | Via |', '|---|---|---|---|');
+  for (const [g, a] of Object.entries(state.approvals || {})) L.push(`| ${g} | ${String(a.hash).slice(0, 12)} | ${a.at} | ${a.via} |`);
+  if (!Object.keys(state.approvals || {}).length) L.push('| — | — | — | — |');
+  L.push('', '## Review', '');
   if (ch) {
-    lines.push('', `## Review (round ${ch.detail.round})`, '', '| Lane | Verdict |', '|---|---|');
-    for (const [l, v] of Object.entries(ch.detail.lanes)) lines.push(`| ${l} | ${v} |`);
+    L.push(`Round ${ch.detail.round}.`, '', '| Lane | Verdict |', '|---|---|');
+    for (const [l, v] of Object.entries(ch.detail.lanes)) L.push(`| ${l} | ${v} |`);
     const minors = ch.detail.findings.filter((f) => f.severity === 'minor');
     const refuted = ch.detail.findings.filter((f) => f.status === 'refuted');
     if (minors.length) {
-      lines.push('', '### Non-blocking findings', '');
-      for (const f of minors) lines.push(`- [${f.lane}] ${f.file || ''}${f.line ? `:${f.line}` : ''} ${f.summary}${f.notes.length ? ` _(${f.notes.join('; ')})_` : ''}`);
+      L.push('', '### Non-blocking findings', '');
+      for (const f of minors) L.push(`- [${f.lane}] ${f.file || ''}${f.line ? `:${f.line}` : ''} ${f.summary}${f.notes.length ? ` _(${f.notes.join('; ')})_` : ''}`);
     }
     if (refuted.length) {
-      lines.push('', '### Dismissed after verification', '');
-      for (const f of refuted) lines.push(`- [${f.lane}] ${f.summary} — ${f.verification || 'refuted'}`);
+      L.push('', '### Dismissed after verification', '');
+      for (const f of refuted) L.push(`- [${f.lane}] ${f.summary} — ${f.verification || 'refuted'}`);
     }
-  }
-  lines.push('', '## Path taken', '', path_.join(' → ') || '(none recorded)', '');
-  lines.push(`Budget: ${state.counters.agent_runs} agent runs · ${state.counters.review_rounds} fix rounds from review · ${state.counters.verify_fix_rounds} from verification.`, '');
-  writeText(jp.report, lines.join('\n'));
+  } else L.push('No review recorded at this build.');
+  L.push('', '## Path taken', '', path_.join(' → ') || '(none recorded)', '');
+  L.push(`Budget: ${state.counters.agent_runs} agent runs · ${state.counters.review_rounds} fix rounds from review · ${state.counters.verify_fix_rounds} from verification.`, '');
+  writeText(jp.report, L.join('\n'));
   return jp.report;
+}
+
+// The PR body is the report; its front matter becomes one hidden comment so GitHub
+// renders the report from its title down, and the metadata survives for tooling.
+function prBody(text) {
+  return text.replace(/^---\r?\n([\s\S]*?)\r?\n---\r?\n/, (m, fm) => `<!-- factory ${fm.split(/\r?\n/).join(' · ')} -->\n`);
 }
 
 function manifest(root, state) {
@@ -96,6 +151,7 @@ function ship(root, { jobId, local = false, title }) {
     fail(`The change touches ${changed.length} files (limit ${state.policy.limits.max_ship_files}). Split it, or waive with "waive ship_size <reason>".`, 'size');
   }
   const reportFile = report(root, state, ctx, fl);
+  docMod.index(root, { jobId: state.id });
   const wt = tasks.ensureJobWorktree(root, state);
   const mdir = path.join(wt, '.factory-ship');
   mkdirp(mdir);
@@ -115,7 +171,9 @@ function ship(root, { jobId, local = false, title }) {
     if (existing.code === 0) {
       url = JSON.parse(existing.stdout).url;
     } else {
-      const pr = gh(['pr', 'create', '--base', state.base_branch, '--head', state.branch, '--title', title || `${state.id}: ${state.title}`, '--body-file', reportFile], root);
+      const bodyFile = path.join(root, '.factory', 'scratch', `pr-body-${state.id}.md`);
+      writeText(bodyFile, prBody(readText(reportFile, '')));
+      const pr = gh(['pr', 'create', '--base', state.base_branch, '--head', state.branch, '--title', title || `${state.id}: ${state.title}`, '--body-file', bodyFile], root);
       if (pr.code !== 0) fail(`gh pr create failed: ${pr.stderr}`, 'pr_failed');
       url = pr.stdout.split('\n').pop();
     }
@@ -209,4 +267,4 @@ function ciInstall(root) {
   return { ok: true, files: ['.github/factory-cli/', '.github/workflows/factory-gate.yml'], next: 'Commit these on your base branch and mark "factory-gate" as a required check.' };
 }
 
-module.exports = { ship, prSync, ciVerify, ciInstall, report };
+module.exports = { ship, prSync, ciVerify, ciInstall, report, prBody };

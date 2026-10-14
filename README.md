@@ -70,7 +70,7 @@ H1 contract · H2 design (when there is an ADR, or always at high risk) · H3 pl
 
 `factory next` (the CLI) evaluates an **alignment vector** — contract approved → no drift → floors so far → no confirmed serious finding → criteria proven → no stale evidence — and the first failing check decides the next step; otherwise the recipe's next undone step runs. Agent work happens in five **workflow scripts** (`ground`, `fanout-judge` with configs clarify/decide/challenge, `decompose`, `realize`, `reconcile`) that return a result envelope; `factory record` validates it, rejects stale results, re-checks what it can, and writes the ledger. Builders work in per-task git worktrees; only `factory task verify` produces evidence, and only `factory verify run` proves criteria on the integrated build. `factory finalize`, `factory ship`, `factory close`, the Stop hook and CI refuse to pass a job whose floors aren't met. Every routing decision is a line in `.factory/log/decisions.jsonl`.
 
-Full detail: [`plugins/factory/docs/ARCHITECTURE.md`](plugins/factory/docs/ARCHITECTURE.md) · design rationale: [`DESIGN-v2.md`](plugins/factory/docs/DESIGN-v2.md) · diagram: [`orchestrator-v2.mmd`](plugins/factory/docs/orchestrator-v2.mmd).
+Full detail: [`plugins/factory/docs/ARCHITECTURE.md`](plugins/factory/docs/ARCHITECTURE.md) · design rationale: [`DESIGN-v2.md`](plugins/factory/docs/DESIGN-v2.md) · diagram: [`orchestrator-v2.mmd`](plugins/factory/docs/orchestrator-v2.mmd) · documents (templated ADRs with Mermaid architecture diagrams, threat models, reports, lessons): [`DOCS.md`](plugins/factory/docs/DOCS.md).
 
 ## The console (see the factory work)
 
@@ -138,7 +138,7 @@ Recipes and floors live in the plugin ([`recipes/`](plugins/factory/recipes), [`
 
 ```bash
 cd plugins/factory
-npm test          # 54 tests (plus 14 in plugins/factory-inspector): end-to-end jobs, decision table, caps, guard, seals, hooks, workflows, schemas, console
+npm test          # 61 tests (plus 14 in plugins/factory-inspector): end-to-end jobs, decision table, caps, guard, seals, hooks, workflows, schemas, console, doc templates
 ./bin/factory help
 ```
 

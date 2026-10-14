@@ -91,6 +91,154 @@ ${allowed.map((a) => `- ${a}`).join('\n')}
 `;
 }
 
+// Design docs that follow templates/docs (what an architect or threat modeler writes).
+function front(doc, job, title, status, related = ['findings.md']) {
+  return `---\ndoc: ${doc}\ntemplate: ${doc}@1\njob: ${job}\ntitle: ${title}\nstatus: ${status}\ndate: 2026-01-01\ncontract: contract.md\nrelated: [${related.join(', ')}]\n---\n`;
+}
+const DIAGRAM = '```mermaid\nflowchart LR\n  caller([Caller]) -->|add(a, b)| add\n  subgraph repo["tiny — this repository"]\n    add[src/add.js] -->|sum| caller2[tests/add.test.js]\n  end\n```\n';
+function adrText({ job, title = 'Fix add in place', acs = ['AC-1'], threats = [], diagram = DIAGRAM, decision = 'We will fix the operator in src/add.js.' } = {}) {
+  return `${front('adr', job, title, 'proposed')}
+# ADR 001: ${title}
+
+## Context
+add subtracts instead of adding (findings · codebase · src/add.js:1).
+
+## Decision drivers
+- AC-1 must hold without changing the export shape.
+
+## Considered options
+| # | Option | Pros | Cons | Verdict |
+|---|---|---|---|---|
+| 1 | Fix the operator | One line | None | chosen |
+| 2 | Rewrite the module | — | Larger change | rejected: out of scope |
+
+## Decision
+${decision}
+
+## Architecture diagram
+${diagram}
+## Consequences
+- Positive: callers get sums.
+
+## How each acceptance criterion is met
+| AC | How | Proof |
+|---|---|---|
+${acs.map((a) => `| ${a} | operator fixed | test: \`node tests/add.test.js\` |`).join('\n')}
+
+## Threat mitigations
+${threats.length ? `| Threat | Mitigation | Where |\n|---|---|---|\n${threats.map((t) => `| ${t} | validated input | src/add.js |`).join('\n')}` : 'No threat model at this risk.'}
+
+## Rollback and migration
+Revert the merge commit; no data changes.
+
+## Open questions
+None.
+`;
+}
+function noAdrText({ job, acs = ['AC-1'] } = {}) {
+  return `${front('no-adr', job, 'Fix the operator', 'accepted')}
+# No ADR: Fix the operator
+
+## Why no decision is needed
+One viable fix.
+
+## Approach
+Change - to + in src/add.js.
+
+## How each acceptance criterion is met
+| AC | How | Proof |
+|---|---|---|
+${acs.map((a) => `| ${a} | operator fixed | test |`).join('\n')}
+
+## Rollback
+Revert the merge commit.
+`;
+}
+function threatModelText({ job, ids = ['TH-1'] } = {}) {
+  return `${front('threat-model', job, 'add', 'draft')}
+# Threat model: add
+
+## Scope and assets
+| Asset | Why it matters | Where it lives |
+|---|---|---|
+| Sums | integrity | src/add.js |
+
+## Data-flow diagram
+\`\`\`mermaid
+flowchart LR
+  subgraph caller["Trust boundary: caller"]
+    c([Caller])
+  end
+  subgraph lib["Trust boundary: library"]
+    add[add]
+  end
+  c -->|numbers| add
+\`\`\`
+
+## Entry points and trust boundaries
+| Entry point | Crosses | Who can reach it | Authn / authz |
+|---|---|---|---|
+| add(a, b) | caller → library | any caller | none |
+
+## Threats (STRIDE)
+| ID | STRIDE | Threat | Entry point / asset | Likelihood | Impact | Mitigation the design must include |
+|---|---|---|---|---|---|---|
+${ids.map((id) => `| ${id} | Tampering | Non-numbers concatenate | add(a, b) | low | medium | Coerce or reject non-numbers |`).join('\n')}
+
+## Out of scope
+- Callers' own input handling.
+`;
+}
+function recommendationText({ job } = {}) {
+  return `${front('recommendation', job, 'Which approach', 'proposed')}
+# Recommendation: Which approach
+
+## Question
+A or B?
+
+## Options weighed
+| # | Option | Cost | Verdict |
+|---|---|---|---|
+| 1 | A | low | recommended |
+| 2 | B | high | not recommended: cost |
+
+## Recommendation
+Use A.
+
+## Confidence
+medium — one measurement.
+
+## What would change it
+- A second instance → B.
+
+## Evidence
+- A is cheaper — \`bench.txt\`
+`;
+}
+function contractsDocText({ job } = {}) {
+  return `${front('contracts', job, 'Big epic', 'proposed', ['contracts.json'])}
+# Contracts: Big epic
+
+## Interfaces to freeze
+| Interface | Kind | Version | Owner slice | Consumers |
+|---|---|---|---|---|
+| add | function | v1 | S01 | S02 |
+
+## Interface details
+### add
+add(a: number, b: number): number
+
+## Compatibility and versioning
+Additive changes only.
+
+## Feature flag
+None: the change is additive.
+
+## Change procedure
+Amend the epic and bump the version.
+`;
+}
+
 function envelope(brief, status, data, extra = {}) {
   return {
     workflow: brief.workflow,
@@ -121,4 +269,4 @@ function jobDir(root, id) {
   return path.join(root, '.factory', 'jobs', id);
 }
 
-module.exports = { PLUGIN, BIN, sh, write, makeRepo, cli, reply, contractText, envelope, record, jobDir };
+module.exports = { PLUGIN, BIN, sh, write, makeRepo, cli, reply, contractText, envelope, record, jobDir, adrText, noAdrText, threatModelText, recommendationText, contractsDocText, DIAGRAM };
