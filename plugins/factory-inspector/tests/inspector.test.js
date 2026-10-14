@@ -382,3 +382,33 @@ test('R19.intent_parked fires only on the park entry, not on a needs_user round 
   job.ledger.push({ kind: 'step', step: 'clarify', ok: false, at: at(4), detail: { round: 2, intent_open: true, intent_rounds: 2, questions: 0, contract_problems: [] } });
   assert.ok(rules.jobHealth(job, LIMITS, at(10)).some((x) => x.rule === 'R19.intent_parked'));
 });
+
+test('guard regressions: redirects to /dev/null, prose and patterns are not inspector writes or calls; indirection is caught', () => {
+  for (const c of [
+    'ls .factory/inspect/ 2>/dev/null',
+    "jq '.findings | length' .factory/inspect/register.json > /tmp/n.txt",
+    'grep -c open .factory/inspect/register.json 2>&1',
+    'cat .factory/inspect/register.json >&2',
+    'grep -n "factory-inspect mark" $(git ls-files \'*.md\')',
+    'git commit -m "docs: factory-inspect mode examples"',
+    "echo 'Run factory-inspect mark F3 --status fixed when done'",
+    'gh pr create --body "then run factory-inspect mode all off"',
+    'factory-inspect report --status open 2>/dev/null | head',
+    'factory-inspect run',
+  ]) assert.equal(guardCheck(c), null, c);
+  for (const c of [
+    'factory-inspect mark F1 fixed',
+    'echo x > .factory/inspect/register.json',
+    'jq . x.json | tee .factory/inspect/config.json',
+    'rm -f .factory/inspect/register.json',
+    'sed -i s/open/fixed/ .factory/inspect/register.json',
+    'bash -c "factory-inspect mode all off"',
+    `env X=1 node ${BIN} mark F2 fixed`,
+    'X=$(which factory-inspect); $X mark F1 fixed',
+    'echo "$(factory-inspect mode all off)"',
+    `I=${BIN}; node $I mark F1 --to fixed`,
+    `echo mode | xargs node ${BIN}`,
+    'eval "factory-inspect ma""rk F1"',
+  ]) assert.ok(guardCheck(c), c);
+  assert.equal(fs.readFileSync(path.join(PLUGIN, 'hooks', 'shell.js'), 'utf8'), fs.readFileSync(path.join(PLUGIN, '..', 'factory', 'hooks', 'shell.js'), 'utf8'), "the shell reader is an identical copy of the factory's");
+});

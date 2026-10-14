@@ -235,10 +235,10 @@ Rule table and CLI: [`plugins/factory-inspector/README.md`](plugins/factory-insp
 |---|---|---|---|
 | factory | SessionStart | `session-start.js` | Tells Claude about the current job and what's waiting |
 | factory | UserPromptSubmit | `prompt.js` | Applies your replies through the CLI; flags look-alikes as not applied |
-| factory | PreToolUse (Write, Edit, Bash, Read, Grep, Glob …) | `guard.js` | Blocks writes to protected paths, recipes and policy, and reads of secrets (`.env`, keys, the seal key); keeps builders inside their task's allowed paths |
+| factory | PreToolUse (Write, Edit, Bash, Read, Grep, Glob …) | `guard.js` | Blocks writes to protected paths, recipes and policy, and reads of secrets (`.env`, keys, the seal key; `.env.example` and other templates are fine); keeps builders inside their task's allowed paths; reads shell commands like a shell, so a human-only `factory` verb is caught where it runs, never in prose, patterns or commit messages; each deny quotes the command |
 | factory | PostToolUse (tools that change things), SubagentStart | `activity.js` | Appends a sealed line per event to `.factory/log/events.jsonl` |
 | factory | SubagentStop | `subagent-stop.js` | Records that an agent finished |
-| factory | Stop | `stop.js` | Blocks "it's done" while any job it names has unmet floors |
+| factory | Stop | `stop.js` | Blocks "it's done" while any job it names has unmet floors (not while the job waits on you) |
 | inspector | PostToolUse (Bash) | `after-close.js` | Inspects right after `factory close / cancel / abandon` |
 | inspector | Stop · SessionStart | `catch-up.js` · `session-start.js` | Inspects jobs that ended any other way |
 | inspector | UserPromptSubmit · PreToolUse | `prompt.js` · `guard.js` | Applies your finding replies; keeps marking and modes human-only |
