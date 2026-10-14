@@ -1,3 +1,8 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark light">
 <title>Software Factory Console</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -41,6 +46,9 @@
   --m-sonnet: #2d7fd6;
   --m-haiku: #0f9d8a;
   --grain-o: 0.035;
+  --bar: #f7f9f8;
+  --rule-2: #b9c4bf;
+  --shadow: 0 10px 28px rgba(23, 32, 30, .14);
   --display: "Big Shoulders Display", "Arial Narrow", "Roboto Condensed", sans-serif;
   --body: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
   --mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
@@ -48,7 +56,7 @@
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
-    --paper: #0f1513; --sheet: #161e1c; --bay: #131a18; --ink: #e2e9e6; --muted: #95a49f; --rule: #2c3936;
+    --paper: #0c1210; --sheet: #121a17; --bay: #0f1714; --ink: #e3ebe7; --muted: #92a29c; --rule: #1f2b27; --bar: #0a0f0d; --rule-2: #33433e; --shadow: 0 10px 30px rgba(0, 0, 0, .45), 0 1px 0 rgba(255, 255, 255, .03) inset;
     --track: #4fb3a2; --track-soft: #173430; --signal: #e3a83a; --signal-soft: #3a2e14;
     --stop: #e2735f; --stop-soft: #3d1f19; --live: #82a9ea; --live-soft: #1b2a42;
     --skill: #b3a4ec; --skill-soft: #272241;
@@ -60,7 +68,7 @@
   }
 }
 :root[data-theme="dark"] {
-  --paper: #0f1513; --sheet: #161e1c; --bay: #131a18; --ink: #e2e9e6; --muted: #95a49f; --rule: #2c3936;
+  --paper: #0c1210; --sheet: #121a17; --bay: #0f1714; --ink: #e3ebe7; --muted: #92a29c; --rule: #1f2b27; --bar: #0a0f0d; --rule-2: #33433e; --shadow: 0 10px 30px rgba(0, 0, 0, .45), 0 1px 0 rgba(255, 255, 255, .03) inset;
   --track: #4fb3a2; --track-soft: #173430; --signal: #e3a83a; --signal-soft: #3a2e14;
   --stop: #e2735f; --stop-soft: #3d1f19; --live: #82a9ea; --live-soft: #1b2a42;
   --skill: #b3a4ec; --skill-soft: #272241;
@@ -74,40 +82,21 @@
 body { background: var(--paper); color: var(--ink); font: 15px/1.55 var(--body); }
 body::before { content: ""; position: fixed; inset: 0; pointer-events: none; z-index: 0; opacity: var(--grain-o);
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E"); }
-.wrap { position: relative; z-index: 1; max-width: 1480px; margin: 0 auto; padding-inline: 20px; padding-block: 20px 56px; }
-@media (max-width: 560px) { .wrap { padding-inline: 16px; } }
 h1, h2, h3 { margin: 0; text-wrap: balance; }
 code, .mono { font-family: var(--mono); font-size: 0.86em; }
 button { font: inherit; color: inherit; }
 :focus-visible { outline: 2px solid var(--live); outline-offset: 2px; }
 
-.top { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 16px; border-bottom: 2px solid var(--ink); padding-bottom: 12px; }
-.brand .eyebrow { font: 500 12px/1 var(--mono); letter-spacing: 0.12em; text-transform: uppercase; color: var(--muted); display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: center; }
-.brand h1 { font: 800 clamp(32px, 5vw, 50px)/0.95 var(--display); text-transform: uppercase; margin-top: 6px; }
 .flag { display: inline-block; font: 600 10.5px/1.35 var(--mono); letter-spacing: 0.08em; padding: 3px 7px; border-radius: 2px; border: 1px solid currentColor; }
 .flag.sample { color: var(--signal); }
 .flag.ok { color: var(--track); } .flag.bad { color: var(--stop); } .flag.unk { color: var(--muted); }
 .flag.live { color: var(--track); } .flag.live::before { content: ''; display: inline-block; width: 6px; height: 6px; margin-right: 5px; border-radius: 50%; background: currentColor; vertical-align: 1px; animation: livepulse 1.6s ease-in-out infinite; }
 .flag.live.off { color: var(--muted); } .flag.live.off::before { animation: none; }
 @keyframes livepulse { 50% { opacity: 0.25; } }
-.tabs { display: flex; gap: 4px; flex-wrap: wrap; }
-.tab { border: 1px solid var(--rule); background: var(--sheet); padding: 8px 14px; border-radius: 2px; cursor: pointer; font-weight: 500; }
-.tab[aria-selected="true"] { background: var(--ink); color: var(--paper); border-color: var(--ink); }
 .lede { color: var(--muted); max-width: 76ch; margin: 12px 0 0; }
 .label { font: 500 11px/1.2 var(--mono); letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted); }
 .panel { background: var(--sheet); border: 1px solid var(--rule); border-radius: 3px; }
 
-/* ---------- live line: jobs */
-.jobs { display: flex; gap: 10px; overflow-x: auto; scroll-snap-type: x proximity; padding: 14px 2px 6px; margin-top: 4px; }
-.jobcard { flex: 0 0 248px; scroll-snap-align: start; text-align: left; display: grid; gap: 6px; padding: 10px 12px 11px; background: var(--sheet); border: 1px solid var(--rule); border-radius: 4px; cursor: pointer; position: relative; }
-.jobcard:hover { border-color: var(--muted); }
-.jobcard[aria-pressed="true"] { border: 2px solid var(--ink); padding: 9px 11px 10px; }
-.jobcard .jt { display: flex; justify-content: space-between; gap: 8px; align-items: baseline; }
-.jobcard .jid { font: 500 12px var(--mono); color: var(--muted); font-variant-numeric: tabular-nums; }
-.jobcard .jr { font: 500 10.5px var(--mono); color: var(--muted); border: 1px solid var(--rule); padding: 1px 6px; border-radius: 999px; white-space: nowrap; }
-.jobcard .jn { font-weight: 600; font-size: 14px; line-height: 1.3; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; min-height: 2.6em; }
-.jobcard .jb { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
-.jobcard .jw { font: 600 11px var(--mono); letter-spacing: 0.06em; text-transform: uppercase; }
 .lamps { display: inline-flex; gap: 3px; align-items: center; background: var(--sig-housing); padding: 3px 5px; border-radius: 8px; }
 .lamps i { width: 7px; height: 7px; border-radius: 50%; background: var(--sig-off); display: block; }
 .lamps i.done, .lamps i.auto { background: var(--sig-green); }
@@ -517,108 +506,639 @@ svg text { font-family: var(--body); }
   .sig .halo, .sig .lamp, .sig .hand, .lamps i, .achip.pop, .odo b.tick { animation: none !important; }
   .sig.is-waiting .lamp.amber, .sig.ped.is-waiting .hand { stroke: var(--ink); stroke-width: 1.5; }
 }
+
+/* =====================================================================================
+   SWITCHBOARD — the operations floor. A header with the live LED, five KPI housings that
+   double as filters, a facet rail, the board (or the line map), and the wire on the right.
+   ===================================================================================== */
+html, body { margin: 0; }
+[hidden] { display: none !important; }
+body { min-height: 100dvh; }
+.app { position: relative; z-index: 1; display: grid; grid-template-rows: auto auto minmax(0, 1fr) auto; height: 100dvh; min-width: 0; }
+.app[data-view="plan"] .kpis, .app[data-view="crew"] .kpis, .app[data-view="job"] .kpis { display: none; }
+.sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+kbd { font: 500 10.5px/1 var(--mono); padding: 2px 5px 3px; border-radius: 3px; border: 1px solid var(--rule-2); border-bottom-width: 2px; color: var(--muted); background: var(--sheet); }
+
+/* header bar */
+.bar { display: flex; align-items: center; gap: 10px 16px; padding: 10px 18px; flex-wrap: nowrap; border-bottom: 1px solid var(--rule); background: var(--bar); position: relative; }
+.ibtns { display: flex; gap: 6px; flex: none; }
+.status { flex: none; }
+.bar::before { content: ""; position: absolute; left: 0; right: 0; top: 0; height: 2px; background: linear-gradient(90deg, var(--sig-green) 0 62%, var(--sig-amber) 62% 84%, var(--sig-red) 84% 100%); opacity: .85; }
+.brand { display: flex; align-items: center; gap: 11px; min-width: 0; }
+.brand .mark { width: 15px; height: 34px; border-radius: 4px; background: var(--sig-housing); display: grid; align-content: space-evenly; justify-items: center; box-shadow: inset 0 0 0 1px var(--sig-rim); flex: none; }
+.brand .mark i { width: 7px; height: 7px; border-radius: 50%; background: var(--sig-off); display: block; }
+.brand .mark i.g { background: var(--sig-green); box-shadow: 0 0 6px var(--sig-green); }
+.brand .mark i.a { background: var(--sig-amber); box-shadow: 0 0 6px var(--sig-amber); }
+.brand h1 { font: 800 25px/0.9 var(--display); text-transform: uppercase; letter-spacing: .01em; white-space: nowrap; }
+.brand { flex: 0 1 auto; }
+.brand > div { min-width: 0; }
+.brand .proj { font: 500 11px/1.2 var(--mono); color: var(--muted); letter-spacing: .06em; margin-top: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 230px; }
+.nav { display: flex; gap: 2px; padding: 3px; border: 1px solid var(--rule); border-radius: 7px; background: var(--paper); }
+.nav button { border: 0; background: transparent; padding: 6px 12px; border-radius: 5px; cursor: pointer; font: 600 13px/1.2 var(--body); color: var(--muted); white-space: nowrap; }
+.nav button:hover { color: var(--ink); }
+.nav button[aria-selected="true"] { background: var(--ink); color: var(--paper); }
+.bar .grow { flex: 0 1 0; min-width: 0; }
+.omni { position: relative; flex: 1 1 160px; max-width: 420px; min-width: 150px; margin-left: auto; }
+.omni input { width: 100%; font: 400 13.5px/1.2 var(--body); color: var(--ink); background: var(--paper); border: 1px solid var(--rule-2); border-radius: 7px; padding: 8px 64px 8px 32px; }
+.omni input::placeholder { color: var(--muted); }
+.omni input:focus { outline: 2px solid var(--live); outline-offset: 1px; border-color: transparent; }
+.omni .ico { position: absolute; left: 10px; top: 50%; transform: translateY(-50%); width: 14px; height: 14px; color: var(--muted); pointer-events: none; }
+.omni .keys { position: absolute; right: 8px; top: 50%; transform: translateY(-50%); display: flex; gap: 3px; pointer-events: none; }
+.qhelp { position: absolute; left: 0; right: 0; top: calc(100% + 6px); z-index: 30; background: var(--sheet); border: 1px solid var(--rule-2); border-radius: 8px; padding: 10px; box-shadow: var(--shadow); display: grid; gap: 8px; }
+.qhelp .toks { display: flex; flex-wrap: wrap; gap: 5px; }
+.qhelp button { font: 500 11.5px var(--mono); border: 1px solid var(--rule); background: var(--paper); color: var(--ink); padding: 3px 7px; border-radius: 4px; cursor: pointer; }
+.qhelp button:hover { border-color: var(--live); color: var(--live); }
+.qhelp p { margin: 0; font-size: 12px; color: var(--muted); }
+.status { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.led { display: inline-flex; align-items: center; gap: 7px; font: 600 11px/1 var(--mono); letter-spacing: .12em; text-transform: uppercase; padding: 6px 9px 6px 8px; border-radius: 999px; border: 1px solid var(--rule-2); background: var(--paper); white-space: nowrap; }
+.led i { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); display: block; }
+.led[data-led="live"] { color: var(--sig-green); }
+.led[data-led="live"] i { background: var(--sig-green); box-shadow: 0 0 0 3px color-mix(in srgb, var(--sig-green) 22%, transparent), 0 0 10px var(--sig-green); animation: livepulse 1.8s ease-in-out infinite; }
+.led[data-led="reconnecting"] { color: var(--sig-amber); }
+.led[data-led="reconnecting"] i { background: var(--sig-amber); animation: blink 1s steps(1) infinite; }
+.led[data-led="snapshot"] { color: var(--muted); }
+.led[data-led="snapshot"] i { background: transparent; box-shadow: inset 0 0 0 1.5px var(--muted); }
+.clk { font: 500 11px/1.3 var(--mono); color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.clk b { color: var(--ink); font-weight: 500; }
+.ibtn { width: 34px; height: 34px; display: inline-grid; place-items: center; border: 1px solid var(--rule-2); background: var(--paper); border-radius: 7px; cursor: pointer; color: var(--muted); flex: none; }
+.ibtn:hover { color: var(--ink); border-color: var(--muted); }
+.ibtn[aria-pressed="true"] { color: var(--signal); border-color: var(--signal); background: var(--signal-soft); }
+.ibtn svg { width: 16px; height: 16px; }
+.flags { display: inline-flex; gap: 6px; flex-wrap: wrap; }
+
+/* KPI housings */
+.kpis { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 10px; padding: 12px 18px 10px; border-bottom: 1px solid var(--rule); background: var(--paper); }
+.kpi { position: relative; text-align: left; display: grid; grid-template-columns: auto minmax(0, 1fr); grid-template-rows: auto auto; column-gap: 12px; align-items: end; padding: 9px 12px 9px 12px; border-radius: 8px; border: 1px solid var(--rule); background: var(--sheet); cursor: pointer; overflow: hidden; }
+.kpi::after { content: ""; position: absolute; inset: auto 0 0 0; height: 2px; background: var(--k); opacity: .0; transition: opacity 200ms ease-out; }
+.kpi:hover { border-color: var(--rule-2); }
+.kpi[aria-pressed="true"] { border-color: var(--k); box-shadow: inset 0 0 0 1px var(--k); }
+.kpi[aria-pressed="true"]::after { opacity: 1; }
+.kpi .n { grid-row: 1 / span 2; font: 800 46px/0.82 var(--display); font-variant-numeric: tabular-nums; letter-spacing: -.01em; color: var(--ink); min-width: 1.1ch; }
+.kpi.zero .n { color: var(--muted); opacity: .55; }
+.kpi .k { display: flex; align-items: center; gap: 7px; font: 600 10.5px/1 var(--mono); letter-spacing: .14em; text-transform: uppercase; color: var(--ink); white-space: nowrap; }
+.kpi .k i { width: 9px; height: 9px; border-radius: 50%; background: var(--sig-off); box-shadow: inset 0 0 0 1px var(--sig-rim); flex: none; }
+.kpi:not(.zero) .k i { background: var(--k); box-shadow: 0 0 8px var(--k); }
+.kpi.k-turn:not(.zero) .k i { animation: blink 1s steps(1) infinite; }
+.kpi .s { font: 400 11.5px/1.3 var(--body); color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 5px; }
+.kpi .hk { position: absolute; right: 8px; top: 7px; }
+.kpi .hk kbd { opacity: .7; }
+.k-turn { --k: var(--sig-amber); } .k-running { --k: var(--live); } .k-parked { --k: var(--skill); } .k-stopped { --k: var(--sig-red); } .k-done { --k: var(--sig-green); }
+
+/* the floor: rail · main · wire */
+.floor { display: grid; grid-template-columns: 196px minmax(0, 1fr) 300px; min-height: 0; }
+.app[data-view="job"] .floor { grid-template-columns: minmax(0, 1fr); }
+.app[data-view="job"].wire-open .floor { grid-template-columns: minmax(0, 1fr) 300px; }
+.app[data-view="plan"] .floor, .app[data-view="crew"] .floor { grid-template-columns: minmax(0, 1fr); }
+.app[data-view="job"] .facets, .app[data-view="plan"] .facets, .app[data-view="crew"] .facets, .app[data-view="plan"] .wire, .app[data-view="crew"] .wire { display: none; }
+.app[data-view="job"]:not(.wire-open) .wire { display: none; }
+.pane { min-height: 0; overflow: auto; overscroll-behavior: contain; scrollbar-width: thin; scrollbar-color: var(--rule-2) transparent; }
+.mainp { position: relative; padding: 0 18px 18px; min-width: 0; }
+.app[data-view="job"] .mainp { padding: 0; overflow: hidden; display: grid; }
+.app[data-view="plan"] .mainp, .app[data-view="crew"] .mainp { padding: 4px 22px 30px; }
+
+/* facet rail */
+.facets { border-right: 1px solid var(--rule); padding: 12px 12px 30px 14px; display: grid; align-content: start; gap: 16px; background: var(--paper); }
+.facet h3 { font: 600 10px/1 var(--mono); letter-spacing: .16em; text-transform: uppercase; color: var(--muted); margin: 0 0 6px; display: flex; justify-content: space-between; align-items: center; }
+.facet h3 button { border: 0; background: none; color: var(--live); font: 500 10px var(--mono); cursor: pointer; padding: 0; text-transform: none; letter-spacing: 0; }
+.fopt { --w: 0%; width: 100%; display: grid; grid-template-columns: 10px minmax(0, 1fr) auto; align-items: center; gap: 8px; padding: 4px 6px; border: 0; border-radius: 4px; background: linear-gradient(90deg, color-mix(in srgb, var(--rule) 55%, transparent) var(--w), transparent var(--w)); text-align: left; cursor: pointer; font: 400 12.5px/1.25 var(--body); color: var(--ink); position: relative; margin-bottom: 2px; }
+.fopt:hover { box-shadow: inset 0 0 0 1px var(--rule-2); }
+.fopt .sw2 { width: 8px; height: 8px; border-radius: 2px; box-shadow: inset 0 0 0 1.5px var(--rule-2); }
+.fopt[aria-pressed="true"] { background: var(--live-soft); }
+.fopt[aria-pressed="true"] .sw2 { background: var(--live); box-shadow: none; }
+.fopt .fl { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fopt .fc { font: 500 11px var(--mono); color: var(--muted); font-variant-numeric: tabular-nums; }
+.fopt.zero { opacity: .45; }
+.fopt .mono { font-size: 11.5px; }
+
+/* board */
+.btool { position: sticky; top: 0; z-index: 4; display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; padding: 10px 0 8px; background: var(--paper); border-bottom: 1px solid var(--rule); }
+.btool .ttl { font: 800 20px/1 var(--display); text-transform: uppercase; letter-spacing: .02em; }
+.btool .cnt { font: 500 11.5px var(--mono); color: var(--muted); }
+.segb { display: inline-flex; border: 1px solid var(--rule-2); border-radius: 6px; overflow: hidden; background: var(--sheet); }
+.segb button { border: 0; background: transparent; padding: 5px 10px; cursor: pointer; font: 600 12px/1.2 var(--body); color: var(--muted); }
+.segb button + button { border-left: 1px solid var(--rule); }
+.segb button[aria-pressed="true"] { background: var(--ink); color: var(--paper); }
+.pick2 { display: inline-flex; align-items: center; gap: 6px; font: 500 10.5px var(--mono); letter-spacing: .1em; text-transform: uppercase; color: var(--muted); }
+.pick2 select { font: 500 12.5px var(--body); color: var(--ink); background: var(--sheet); border: 1px solid var(--rule-2); border-radius: 5px; padding: 4px 6px; text-transform: none; letter-spacing: 0; }
+.qchips { display: flex; flex-wrap: wrap; gap: 5px; }
+.qchip { font: 500 11.5px var(--mono); border: 1px solid var(--live); color: var(--live); background: var(--live-soft); border-radius: 4px; padding: 2px 4px 2px 7px; display: inline-flex; gap: 4px; align-items: center; cursor: pointer; }
+.qchip b { font-weight: 500; opacity: .7; }
+.board { container-type: inline-size; container-name: board; display: block; }
+.bgh { position: sticky; top: 49px; z-index: 3; width: 100%; display: flex; align-items: center; gap: 10px; padding: 14px 4px 6px; border: 0; background: var(--paper); cursor: pointer; text-align: left; color: var(--ink); border-bottom: 1px solid var(--rule); }
+.bgh .chev { width: 10px; height: 10px; transition: transform 160ms ease-out; color: var(--muted); }
+.bgh[aria-expanded="false"] .chev { transform: rotate(-90deg); }
+.bgh .gl { font: 800 16px/1 var(--display); text-transform: uppercase; letter-spacing: .04em; }
+.bgh .gn { font: 600 11px/1 var(--mono); color: var(--paper); background: var(--gk, var(--muted)); padding: 3px 6px; border-radius: 3px; font-variant-numeric: tabular-nums; }
+.bgh .gs { font: 400 12px var(--body); color: var(--muted); }
+.bgh .gr { flex: 1; height: 1px; }
+.g-turn { --gk: var(--sig-amber); } .g-running { --gk: var(--live); } .g-parked { --gk: var(--skill); } .g-stopped { --gk: var(--sig-red); } .g-done { --gk: var(--track); }
+.brow { --cols: 14px 58px minmax(120px, 1fr) 124px 66px 136px 34px 62px 60px 64px 42px;
+  width: 100%; display: grid; grid-template-columns: var(--cols); align-items: center; column-gap: 8px; height: 35px; padding: 0 6px 0 8px; border: 0; border-bottom: 1px solid var(--rule); background: transparent; text-align: left; cursor: pointer; font: 400 13px/1.2 var(--body); color: var(--ink); position: relative; }
+.brow:hover { background: var(--sheet); }
+.brow:focus-visible { outline: 2px solid var(--live); outline-offset: -2px; }
+.brow.cur { background: var(--live-soft); }
+.brow.cur::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; background: var(--live); }
+.brow.b-turn { background: linear-gradient(90deg, color-mix(in srgb, var(--sig-amber) 9%, transparent), transparent 40%); }
+.brow.b-turn.cur { background: var(--live-soft); }
+.brow > span { min-width: 0; }
+.beacon { width: 10px; height: 10px; border-radius: 50%; display: block; background: var(--bk, var(--muted)); box-shadow: 0 0 0 2px color-mix(in srgb, var(--bk, var(--muted)) 22%, transparent); }
+.b-turn .beacon { --bk: var(--sig-amber); animation: beacon 1.1s steps(1) infinite; }
+.b-running .beacon { --bk: var(--live); }
+.b-parked .beacon { --bk: var(--skill); }
+.b-stopped .beacon { --bk: var(--sig-red); }
+.b-done .beacon { --bk: var(--track); box-shadow: none; opacity: .75; }
+@keyframes beacon { 0%, 54% { box-shadow: 0 0 0 2px color-mix(in srgb, var(--sig-amber) 30%, transparent), 0 0 12px var(--sig-amber); } 55%, 100% { background: color-mix(in srgb, var(--sig-amber) 30%, var(--paper)); box-shadow: none; } }
+.bid { font: 500 12px var(--mono); color: var(--muted); font-variant-numeric: tabular-nums; position: relative; white-space: nowrap; }
+.b-turn .bid, .brow.cur .bid { color: var(--ink); }
+.unread { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--live); margin-left: 4px; vertical-align: 2px; box-shadow: 0 0 6px var(--live); }
+.btt { display: flex; align-items: center; gap: 6px; overflow: hidden; }
+.bti { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
+.b-done .bti { font-weight: 400; color: var(--muted); }
+.nest { font: 500 11px var(--mono); color: var(--muted); flex: none; }
+.d1 .btt { padding-left: 14px; }
+.rchip { display: inline-flex; align-items: center; gap: 5px; max-width: 100%; font: 500 11px/1 var(--mono); color: var(--muted); border: 1px solid var(--rule-2); border-radius: 999px; padding: 3px 7px 3px 6px; white-space: nowrap; overflow: hidden; }
+.rchip i { width: 6px; height: 6px; border-radius: 50%; flex: none; background: var(--muted); }
+.rk-low i { background: var(--sig-green); } .rk-medium i { background: var(--sig-amber); } .rk-high i { background: var(--sig-red); }
+.rchip span { overflow: hidden; text-overflow: ellipsis; }
+.bnow { display: flex; flex-direction: column; gap: 1px; font-size: 12px; line-height: 1.15; overflow: hidden; }
+.bnow b { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.bnow .w { font: 500 10.5px var(--mono); color: var(--muted); white-space: nowrap; }
+.b-turn .bnow b, .b-turn .bnow .w { color: var(--signal); }
+.b-stopped .bnow b { color: var(--stop); }
+.bpip { display: flex; gap: 2px; align-items: center; }
+.pip { width: 13px; height: 13px; border-radius: 3px; display: inline-grid; place-items: center; font: 700 8.5px/1 var(--mono); color: #fff; background: var(--muted); }
+.pip.opus { background: var(--m-opus); } .pip.sonnet { background: var(--m-sonnet); } .pip.haiku { background: var(--m-haiku); }
+.pip.live { animation: pipb 1.6s ease-in-out infinite; }
+.pip.stale { background: transparent; color: var(--muted); box-shadow: inset 0 0 0 1px var(--muted); }
+@keyframes pipb { 50% { opacity: .45; } }
+.btask { display: grid; gap: 3px; font: 500 10.5px/1 var(--mono); color: var(--muted); font-variant-numeric: tabular-nums; }
+.tbar { height: 4px; border-radius: 2px; background: var(--rule); overflow: hidden; display: block; }
+.tbar i { display: block; height: 100%; background: var(--track); border-radius: 2px; }
+.bflags { display: flex; gap: 7px; font: 500 11px var(--mono); color: var(--muted); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.bflags .rw { color: var(--stop); } .bflags .rt { color: var(--signal); } .bflags .fd { color: var(--stop); font-weight: 600; }
+.bspark svg { display: block; width: 100%; height: 18px; }
+.bspark path { fill: none; stroke: var(--sk, var(--muted)); stroke-width: 1.2; }
+.bspark .area { fill: var(--sk, var(--muted)); opacity: .14; stroke: none; }
+.b-turn .bspark { --sk: var(--signal); } .b-running .bspark { --sk: var(--live); } .b-stopped .bspark { --sk: var(--stop); } .b-done .bspark { --sk: var(--track); } .b-parked .bspark { --sk: var(--skill); }
+.bago { font: 500 11px var(--mono); color: var(--muted); text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.brow .lamps { justify-self: start; gap: 2px; padding: 3px 4px; }
+.brow .lamps i { width: 6px; height: 6px; }
+.brow.sweep::after { content: ""; position: absolute; inset: 0; pointer-events: none; background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--live) 30%, transparent) 45%, transparent 70%); background-size: 220% 100%; animation: sweep 900ms ease-out both; }
+@keyframes sweep { from { background-position: 120% 0; opacity: 1; } to { background-position: -60% 0; opacity: 0; } }
+.bempty { padding: 36px 8px; color: var(--muted); display: grid; gap: 10px; justify-items: start; }
+.bempty h2 { font: 800 26px/1 var(--display); text-transform: uppercase; color: var(--ink); }
+.bempty p { margin: 0; max-width: 62ch; }
+@container board (max-width: 880px) { .brow { --cols: 14px 58px minmax(120px, 1fr) 120px 66px 136px 34px 60px 60px 42px; } .bspark { display: none; } }
+@container board (max-width: 780px) { .brow { --cols: 14px 58px minmax(110px, 1fr) 66px 136px 60px 42px; } .bspark, .brc, .bpip, .btask { display: none; } }
+@container board (max-width: 560px) {
+  .brow { --cols: 12px 76px minmax(0, 1fr) auto; grid-template-rows: auto auto; height: auto; padding: 7px 6px 7px 8px; row-gap: 5px; }
+  .brow .bc { grid-row: 1; } .brow .bid { grid-row: 1; } .brow .btt { grid-column: 3 / span 2; grid-row: 1; }
+  .brow .lamps { grid-column: 2; grid-row: 2; } .brow .bnow { grid-column: 3; grid-row: 2; flex-direction: row; gap: 6px; align-items: baseline; } .brow .bago { grid-column: 4; grid-row: 2; }
+  .bspark, .brc, .bpip, .btask, .bflags { display: none; }
+}
+
+/* the wire */
+.wire { border-left: 1px solid var(--rule); background: var(--paper); display: grid; grid-template-rows: auto minmax(0, 1fr); min-height: 0; overflow: hidden; }
+.wireh { display: flex; align-items: center; gap: 8px; padding: 12px 12px 10px 14px; border-bottom: 1px solid var(--rule); flex-wrap: wrap; }
+.wireh h2 { font: 800 20px/1 var(--display); text-transform: uppercase; letter-spacing: .03em; margin-right: auto; display: flex; align-items: center; gap: 8px; }
+.wireh h2 i { width: 7px; height: 7px; border-radius: 50%; background: var(--sig-green); box-shadow: 0 0 8px var(--sig-green); animation: livepulse 1.8s ease-in-out infinite; }
+.wire.paused .wireh h2 i, .wire.static .wireh h2 i { background: var(--muted); box-shadow: none; animation: none; }
+.tbtn { border: 1px solid var(--rule-2); background: var(--sheet); color: var(--muted); border-radius: 5px; padding: 4px 8px; font: 600 11.5px/1.2 var(--body); cursor: pointer; white-space: nowrap; }
+.tbtn:hover { color: var(--ink); }
+.tbtn[aria-pressed="true"] { color: var(--live); border-color: var(--live); background: var(--live-soft); }
+.wnew { width: 100%; border: 0; border-bottom: 1px solid var(--rule); background: var(--signal-soft); color: var(--signal); font: 600 12px var(--body); padding: 6px; cursor: pointer; }
+.wlist { list-style: none; margin: 0; padding: 0 0 20px; }
+.wday { font: 600 10px/1 var(--mono); letter-spacing: .14em; text-transform: uppercase; color: var(--muted); padding: 12px 14px 6px; position: sticky; top: 0; background: var(--paper); z-index: 1; }
+.witem { width: 100%; display: grid; grid-template-columns: 40px 20px minmax(0, 1fr); gap: 8px; align-items: start; padding: 6px 12px 6px 12px; border: 0; background: transparent; text-align: left; cursor: pointer; color: var(--ink); font: 400 12.5px/1.35 var(--body); position: relative; }
+.witem:hover { background: var(--sheet); }
+.witem .wt { font: 500 10.5px/1.6 var(--mono); color: var(--muted); font-variant-numeric: tabular-nums; }
+.wg { width: 20px; height: 20px; border-radius: 50%; display: grid; place-items: center; font: 700 10.5px/1 var(--mono); color: var(--wc, var(--muted)); background: color-mix(in srgb, var(--wc, var(--muted)) 14%, transparent); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--wc, var(--muted)) 50%, transparent); margin-top: 1px; }
+.wb { min-width: 0; display: grid; gap: 1px; }
+.wb .wh { overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.wb .wj { font: 500 10.5px var(--mono); color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.wb .wj b { color: var(--ink); font-weight: 500; }
+.w-route { --wc: var(--live); } .w-ok { --wc: var(--track); } .w-bad { --wc: var(--stop); } .w-you { --wc: var(--signal); } .w-agents { --wc: var(--m-sonnet); } .w-park { --wc: var(--skill); } .w-insp { --wc: var(--stop); } .w-amend { --wc: var(--skill); }
+.witem.fresh::after { content: ""; position: absolute; inset: 0; pointer-events: none; background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--live) 26%, transparent) 50%, transparent); background-size: 220% 100%; animation: sweep 900ms ease-out both; }
+.wmore { margin: 8px 14px; }
+
+/* job view */
+.jobview { display: grid; grid-template-columns: 268px minmax(0, 1fr); min-height: 0; height: 100%; }
+.jlist { border-right: 1px solid var(--rule); background: var(--paper); }
+.jlh { position: sticky; top: 0; z-index: 2; display: flex; align-items: center; gap: 8px; padding: 10px 10px 8px 12px; background: var(--paper); border-bottom: 1px solid var(--rule); }
+.jlh .back2 { border: 1px solid var(--rule-2); background: var(--sheet); border-radius: 5px; padding: 4px 9px; cursor: pointer; font: 600 12px var(--body); color: var(--ink); }
+.jlh .hint2 { margin-left: auto; display: flex; gap: 3px; }
+.jrow { width: 100%; display: grid; grid-template-columns: 12px minmax(0, 1fr) auto; gap: 4px 8px; align-items: center; padding: 8px 10px 8px 12px; border: 0; border-bottom: 1px solid var(--rule); background: transparent; text-align: left; cursor: pointer; color: var(--ink); font: 400 12.5px/1.25 var(--body); position: relative; }
+.jrow:hover { background: var(--sheet); }
+.jrow[aria-current="true"] { background: var(--live-soft); }
+.jrow[aria-current="true"]::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; background: var(--live); }
+.jrow .bid { font-size: 11px; }
+.jrow .jt2 { grid-column: 2 / span 2; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
+.jrow .jw2 { grid-column: 2 / span 2; font: 500 10.5px var(--mono); color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.jrow.b-turn .jw2 { color: var(--signal); }
+.jrow .lamps { grid-column: 3; grid-row: 1; }
+.jrow .beacon { grid-row: 1; }
+.jrow .bid { grid-row: 1; grid-column: 2; }
+.jdetail { min-width: 0; padding: 0 20px 30px; }
+.jhead2 { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px 22px; align-items: end; padding: 14px 0 10px; }
+@media (max-width: 1100px) { .jhead2 { grid-template-columns: minmax(0, 1fr); } }
+.jhead2 .eyebrow { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; font: 500 11.5px var(--mono); color: var(--muted); margin-bottom: 6px; }
+.jhead2 h2 { font: 800 clamp(24px, 3vw, 34px)/1.0 var(--display); text-transform: uppercase; overflow-wrap: anywhere; }
+.jhead2 .meta { display: flex; flex-wrap: wrap; gap: 4px 14px; color: var(--muted); font-size: 12.5px; margin-top: 7px; }
+.jtabs { position: sticky; top: 0; z-index: 5; display: flex; gap: 2px; border-bottom: 1px solid var(--rule); background: var(--paper); margin: 0 -20px 12px; padding: 0 20px; overflow-x: auto; scrollbar-width: none; }
+.jtabs button { border: 0; background: none; padding: 10px 12px 9px; font: 600 13px var(--body); color: var(--muted); cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -1px; white-space: nowrap; }
+.jtabs button[aria-selected="true"] { color: var(--ink); border-bottom-color: var(--ink); }
+.jtabs button .n2 { font: 500 10.5px var(--mono); color: var(--muted); margin-left: 4px; }
+.jprev { display: none; gap: 6px; }
+
+/* story */
+.story { display: grid; grid-template-columns: minmax(0, 68ch) minmax(0, 300px); gap: 0 34px; align-items: start; }
+@media (max-width: 1180px) { .story { grid-template-columns: minmax(0, 1fr); } }
+.nowcard { grid-column: 1 / -1; position: sticky; top: 46px; z-index: 3; display: grid; gap: 8px; padding: 14px 16px; margin-bottom: 18px; border-radius: 8px; border: 1px solid var(--rule-2); background: var(--sheet); box-shadow: var(--shadow); }
+.nowcard.b-turn { border-color: var(--sig-amber); box-shadow: 0 0 0 1px var(--sig-amber), var(--shadow); }
+.nowcard .nk { display: flex; align-items: center; gap: 8px; font: 600 10.5px/1 var(--mono); letter-spacing: .14em; text-transform: uppercase; color: var(--muted); }
+.nowcard p { margin: 0; font-size: 14.5px; }
+.reply { display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; }
+.reply code { font: 500 13.5px var(--mono); background: var(--paper); border: 1px solid var(--rule-2); border-radius: 5px; padding: 6px 10px; color: var(--ink); }
+.copy { border: 1px solid var(--rule-2); background: var(--paper); color: var(--ink); border-radius: 5px; padding: 5px 10px; font: 600 12px var(--body); cursor: pointer; }
+.copy.done { color: var(--track); border-color: var(--track); }
+.para { grid-column: 1; position: relative; padding: 2px 0 18px 18px; border-left: 2px solid var(--rule); }
+.para.rtn { border-left-color: var(--stop); }
+.para.park { border-left-color: var(--skill); border-left-style: dashed; }
+.para.you { border-left-color: var(--signal); }
+.para::before { content: ""; position: absolute; left: -6px; top: 7px; width: 10px; height: 10px; border-radius: 50%; background: var(--paper); box-shadow: inset 0 0 0 2px var(--track); }
+.para.rtn::before { box-shadow: inset 0 0 0 2px var(--stop); }
+.para.gate::before { border-radius: 2px; transform: rotate(45deg); box-shadow: inset 0 0 0 2px var(--signal); }
+.para .ph { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; }
+.para .ph h4 { margin: 0; font: 800 17px/1.1 var(--display); text-transform: uppercase; letter-spacing: .02em; }
+.para .ph .tm { font: 500 11px var(--mono); color: var(--muted); }
+.para .rt2 { font: 600 10px/1 var(--mono); letter-spacing: .1em; text-transform: uppercase; color: var(--stop); border: 1px solid var(--stop); border-radius: 3px; padding: 3px 5px; }
+.para p { margin: 5px 0 0; font-size: 14.5px; line-height: 1.62; max-width: 68ch; }
+.para p .q { font-style: italic; }
+.para p b.y { color: var(--signal); font-weight: 600; }
+.para p .bad { color: var(--stop); }
+.para p .ok { color: var(--track); }
+.mnote { grid-column: 2; font-size: 12.5px; line-height: 1.45; padding: 9px 11px; border-radius: 6px; background: var(--stop-soft); border-left: 3px solid var(--stop); margin: 4px 0 12px; }
+.mnote b { font: 600 11px var(--mono); display: block; margin-bottom: 3px; }
+@media (max-width: 1180px) { .mnote { grid-column: 1; margin-left: 18px; } }
+.evbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 10px; }
+.evbar input { font: 400 13px var(--body); color: var(--ink); background: var(--sheet); border: 1px solid var(--rule-2); border-radius: 5px; padding: 6px 9px; min-width: 220px; }
+.tbl tr.clk2 { cursor: pointer; }
+.tbl tr.clk2:hover td { background: var(--sheet); }
+.taskrow .tbar { width: 100%; min-width: 60px; }
+
+/* line map */
+.lmwrap { display: grid; grid-template-rows: auto auto minmax(0, 1fr); min-height: 0; height: 100%; }
+.app[data-view="lines"] .mainp { overflow: hidden; display: grid; padding-bottom: 0; }
+.lmlegend { display: flex; flex-wrap: wrap; gap: 4px 16px; align-items: center; font: 400 12px var(--body); color: var(--muted); padding: 8px 0; }
+.lmlegend span { display: inline-flex; gap: 6px; align-items: center; }
+.lmlegend svg { overflow: visible; }
+.lm { position: relative; border: 1px solid var(--rule); border-radius: 8px; overflow: hidden; display: grid; grid-template-rows: 34px minmax(0, 1fr); min-height: 260px; background: var(--paper); margin-bottom: 14px; }
+.lmhead { display: grid; grid-template-columns: 236px minmax(0, 1fr); border-bottom: 1px solid var(--rule); background: var(--sheet); }
+.lmhead .c { font: 600 10px/34px var(--mono); letter-spacing: .14em; color: var(--muted); padding-left: 12px; border-right: 1px solid var(--rule); }
+.lmhead svg { display: block; width: 100%; height: 34px; }
+.lmscroll { overflow-y: auto; overflow-x: hidden; position: relative; scrollbar-width: thin; }
+.lmsizer { position: relative; display: grid; grid-template-columns: 236px minmax(0, 1fr); }
+.lmlabels { position: relative; border-right: 1px solid var(--rule); background: var(--sheet); }
+.lml { position: absolute; left: 0; right: 0; height: 34px; display: grid; grid-template-columns: 10px 50px minmax(0, 1fr); gap: 7px; align-items: center; padding: 0 10px 0 12px; border: 0; border-bottom: 1px solid var(--rule); background: transparent; text-align: left; cursor: pointer; color: var(--ink); font: 500 12.5px var(--body); }
+.lml:hover, .lml.hov { background: var(--live-soft); }
+.lml .bti { font-weight: 500; }
+.lmplot { position: relative; overflow: hidden; touch-action: pan-y; cursor: grab; }
+.lmplot.dragging { cursor: grabbing; }
+.lmplot svg { position: absolute; left: 0; display: block; }
+.lm .ln { fill: none; stroke: var(--lc); stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; }
+.lm .ln.rtn { stroke: var(--stop); }
+.lm .ln.wait { stroke: var(--signal); stroke-dasharray: 4 4; }
+.lm .ln.parkd { stroke: var(--skill); stroke-dasharray: 1 5; stroke-width: 3.2; }
+.lm .ln.erase { stroke: var(--paper); stroke-width: 6; }
+.lm .ln.tail { stroke-dasharray: 2 4; opacity: .6; }
+.lm .rowbg { fill: transparent; }
+.lm .rowbg.alt { fill: var(--sheet); opacity: .5; }
+.lm .rowbg.hov { fill: var(--live-soft); opacity: 1; }
+.lm .stn { fill: var(--paper); stroke: var(--lc); stroke-width: 2; cursor: pointer; }
+.lm .stn.bad { stroke: var(--stop); }
+.lm .gate1 { fill: var(--paper); stroke: var(--signal); stroke-width: 1.6; cursor: pointer; }
+.lm .gate2 { fill: none; stroke: var(--signal); stroke-width: 1.4; pointer-events: none; }
+.lm .loop { fill: none; stroke: var(--stop); stroke-width: 1.6; }
+.lm .term { fill: var(--lc); stroke: var(--paper); stroke-width: 2; }
+.lm .buf { stroke: var(--stop); stroke-width: 3; stroke-linecap: square; }
+.lm .pk { font: 700 9px var(--mono); fill: var(--skill); }
+.lm .xfer { fill: none; stroke: var(--muted); stroke-width: 1.4; stroke-dasharray: 1 4; stroke-linecap: round; }
+.lm .head2 { fill: var(--lc); }
+.lm .headp { fill: none; stroke: var(--lc); stroke-width: 2; transform-box: fill-box; transform-origin: center; animation: ring 1.6s ease-out infinite; }
+.lm .nowl { stroke: var(--live); stroke-width: 1; stroke-dasharray: 3 3; opacity: .8; }
+.lm .hit { fill: transparent; cursor: pointer; }
+.lmax .tk { stroke: var(--rule-2); }
+.lmax text { font: 500 10px var(--mono); fill: var(--muted); }
+.lmax text.day { font-weight: 600; fill: var(--ink); }
+.lmax .brk { stroke: var(--muted); fill: none; stroke-width: 1.2; }
+.lmax .nowt rect { fill: var(--live); }
+.lmax .nowt text { fill: #fff; font-weight: 600; }
+.lmtip { position: absolute; z-index: 10; width: 300px; padding: 10px 12px; border-radius: 8px; background: var(--sheet); border: 1px solid var(--rule-2); box-shadow: var(--shadow); font-size: 12.5px; line-height: 1.4; pointer-events: none; display: grid; gap: 5px; }
+.lmtip .k2 { font: 600 10px/1 var(--mono); letter-spacing: .12em; text-transform: uppercase; color: var(--muted); }
+.lmtip h4 { margin: 0; font: 800 16px/1.05 var(--display); text-transform: uppercase; }
+.lmtip p { margin: 0; color: var(--muted); }
+.lmtip .ag { display: flex; flex-wrap: wrap; gap: 3px; }
+
+/* toasts, palette, cheat sheet */
+.toasts { position: fixed; right: 16px; bottom: 16px; z-index: 60; display: grid; gap: 8px; width: min(380px, calc(100vw - 32px)); }
+.toast { display: grid; gap: 8px; padding: 12px 14px; border-radius: 9px; background: var(--sheet); border: 1px solid var(--sig-amber); box-shadow: 0 0 0 1px var(--sig-amber), var(--shadow); animation: toastin 220ms ease-out both; }
+.toast .tt { display: flex; gap: 8px; align-items: center; font: 600 10.5px/1 var(--mono); letter-spacing: .12em; text-transform: uppercase; color: var(--signal); }
+.toast .tt .x { margin-left: auto; border: 0; background: none; color: var(--muted); cursor: pointer; font-size: 16px; line-height: 1; padding: 2px 4px; }
+.toast p { margin: 0; font-size: 13.5px; }
+.toast .reply code { font-size: 12.5px; padding: 4px 8px; }
+@keyframes toastin { from { transform: translateY(10px); opacity: 0; } to { transform: none; opacity: 1; } }
+dialog.dlg { border: 1px solid var(--rule-2); border-radius: 12px; background: var(--sheet); color: var(--ink); padding: 0; width: min(620px, calc(100vw - 32px)); box-shadow: var(--shadow); margin-top: 12vh; }
+dialog.dlg::backdrop { background: rgba(4, 8, 7, .55); backdrop-filter: blur(2px); }
+.pal input { width: 100%; border: 0; border-bottom: 1px solid var(--rule); background: transparent; color: var(--ink); font: 400 16px var(--body); padding: 15px 18px; outline: none; }
+.pal ul { list-style: none; margin: 0; padding: 6px; max-height: 52vh; overflow-y: auto; }
+.pal li button { width: 100%; display: grid; grid-template-columns: 74px minmax(0, 1fr) auto; gap: 10px; align-items: center; padding: 8px 10px; border: 0; border-radius: 6px; background: transparent; color: var(--ink); text-align: left; cursor: pointer; font: 400 13.5px var(--body); }
+.pal li button .pk2 { font: 600 10px var(--mono); letter-spacing: .1em; text-transform: uppercase; color: var(--muted); }
+.pal li button .ps { font: 500 11px var(--mono); color: var(--muted); }
+.pal li button[aria-selected="true"] { background: var(--live-soft); }
+.pal .pf { display: flex; gap: 14px; padding: 8px 16px; border-top: 1px solid var(--rule); font: 500 11px var(--mono); color: var(--muted); }
+.keys2 { padding: 18px 20px 20px; }
+.keys2 h2 { font: 800 24px/1 var(--display); text-transform: uppercase; margin-bottom: 12px; }
+.keys2 dl { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 8px 16px; margin: 0; font-size: 13.5px; }
+.keys2 dt { display: flex; gap: 3px; justify-content: flex-end; }
+.keys2 dd { margin: 0; color: var(--muted); }
+.mtabs { display: none; }
+.foot2 { padding: 7px 18px; border-top: 1px solid var(--rule); color: var(--muted); font-size: 11.5px; background: var(--paper); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.foot2 code { font-size: 11px; }
+
+/* narrow screens: the side panes become tabs, the page scrolls as one */
+@media (max-width: 1180px) {
+  .floor { grid-template-columns: 188px minmax(0, 1fr) 280px; }
+  .kpi .n { font-size: 38px; }
+  .kpi .hk { display: none; }
+}
+@media (max-width: 960px) {
+  .app { height: auto; min-height: 100dvh; display: block; }
+  .bar { padding: 10px 16px; gap: 8px 10px; flex-wrap: wrap; }
+  .brand { order: 1; flex: 1 1 0; }
+  .ibtns { order: 2; }
+  .status { order: 3; flex: 1 1 100%; }
+  .ibtn { width: 32px; height: 32px; }
+  .jtabs #j-wire { display: none; }
+  .jhead2 .meta span[title="policy.agents.models"] { display: none; }
+  .kpi .k { white-space: normal; line-height: 1.15; align-items: flex-start; }
+  .brand h1 { font-size: 22px; }
+  .bar .grow { display: none; }
+  .omni { order: 9; flex: 1 1 100%; max-width: none; margin-left: 0; }
+  .nav { order: 10; flex: 1 1 100%; overflow-x: auto; scrollbar-width: none; }
+  .nav button { flex: 1 0 auto; }
+  .clk { display: none; }
+  .kpis { grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 6px; padding: 10px 16px; }
+  .kpi { padding: 7px 8px; grid-template-columns: minmax(0, 1fr); row-gap: 4px; }
+  .kpi .n { grid-row: auto; font-size: 30px; order: 2; }
+  .kpi .k { font-size: 9px; letter-spacing: .08em; gap: 5px; }
+  .kpi .s { display: none; }
+  .mtabs { display: flex; gap: 2px; padding: 8px 16px 0; background: var(--paper); position: sticky; top: 0; z-index: 8; border-bottom: 1px solid var(--rule); }
+  .mtabs button { flex: 1; border: 0; background: none; padding: 9px 6px; font: 600 13px var(--body); color: var(--muted); border-bottom: 2px solid transparent; cursor: pointer; }
+  .mtabs button[aria-selected="true"] { color: var(--ink); border-bottom-color: var(--ink); }
+  .app[data-view="job"] .mtabs, .app[data-view="plan"] .mtabs, .app[data-view="crew"] .mtabs { display: none; }
+  .floor, .app[data-view="job"] .floor, .app[data-view="job"].wire-open .floor { display: block; }
+  .pane { overflow: visible; }
+  .facets, .wire { display: none; border: 0; }
+  .app[data-mpane="rail"]:not([data-view="job"]) .facets { display: grid; }
+  .app[data-mpane="wire"]:not([data-view="job"]) .wire { display: grid; }
+  .app[data-mpane="rail"]:not([data-view="job"]) .mainp, .app[data-mpane="wire"]:not([data-view="job"]) .mainp { display: none; }
+  .mainp { padding: 0 16px 20px; }
+  .app[data-view="plan"] .mainp, .app[data-view="crew"] .mainp { padding: 4px 16px 24px; }
+  .app[data-view="job"] .mainp, .app[data-view="lines"] .mainp { overflow: visible; display: block; }
+  .btool { top: 41px; }
+  .bgh { top: 90px; }
+  .jobview { display: block; }
+  .jlist { display: none; }
+  .jdetail { padding: 0 16px 24px; }
+  .jtabs { margin: 0 -16px 12px; padding: 0 16px; }
+  .jprev { display: flex; }
+  .lm { height: 70vh; }
+  .lmhead, .lmsizer { grid-template-columns: 116px minmax(0, 1fr); }
+  .lml { grid-template-columns: 10px minmax(0, 1fr); }
+  .lml .bti { display: none; }
+  .foot2 { white-space: normal; }
+  .story { grid-template-columns: minmax(0, 1fr); }
+  .nowcard { position: static; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .beacon, .pip.live, .led i, .kpi .k i, .wireh h2 i, .lm .headp { animation: none !important; }
+  .brow.sweep::after, .witem.fresh::after { animation: none; opacity: 0; }
+  .b-turn .beacon { box-shadow: 0 0 0 2px var(--ink); }
+  .toast { animation: none; }
+}
+
 </style>
 
-<div class="wrap">
-  <header class="top">
+<div class="app" id="app" data-view="board" data-mpane="main">
+  <header class="bar">
     <div class="brand">
-      <div class="eyebrow"><span>Software Factory · read-only</span><span id="flags"></span></div>
-      <h1>Factory Console</h1>
+      <span class="mark" aria-hidden="true"><i></i><i class="a" id="mark-a"></i><i class="g"></i></span>
+      <div><h1>Factory Console</h1><div class="proj" id="proj">Software Factory · read-only</div></div>
     </div>
-    <div class="tabs" role="tablist" aria-label="Views">
-      <button class="tab" role="tab" id="tab-live" aria-controls="view-live" aria-selected="true">Live line</button>
-      <button class="tab" role="tab" id="tab-plan" aria-controls="view-plan" aria-selected="false" tabindex="-1">Recipe map</button>
-      <button class="tab" role="tab" id="tab-crew" aria-controls="view-crew" aria-selected="false" tabindex="-1">The crew</button>
+    <nav class="nav" role="tablist" aria-label="Views">
+      <button type="button" role="tab" id="nav-board" data-view="board" aria-selected="true">Board</button>
+      <button type="button" role="tab" id="nav-lines" data-view="lines" aria-selected="false">Line map</button>
+      <button type="button" role="tab" id="nav-plan" data-view="plan" aria-selected="false">Recipe map</button>
+      <button type="button" role="tab" id="nav-crew" data-view="crew" aria-selected="false">Crew</button>
+    </nav>
+    <span class="grow"></span>
+    <div class="omni">
+      <svg class="ico" viewBox="0 0 16 16" aria-hidden="true"><circle cx="7" cy="7" r="5" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M11 11l3.5 3.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+      <input id="q" type="search" autocomplete="off" spellcheck="false" placeholder="Filter jobs: is:waiting risk:high or any words" aria-label="Filter jobs. Tokens: is:, risk:, recipe:, gate:, has:, agent:, since:, or free text">
+      <span class="keys" aria-hidden="true"><kbd>/</kbd><kbd>⌘K</kbd></span>
+      <div class="qhelp" id="qhelp" hidden></div>
+    </div>
+    <div class="status">
+      <span class="led" id="led" data-led="snapshot" role="status"><i></i><span>snapshot</span></span>
+      <span class="clk" id="clk"></span>
+      <span class="flags" id="flags"></span>
+    </div>
+    <div class="ibtns">
+      <button type="button" class="ibtn" id="b-notify" aria-pressed="false" aria-label="Desktop notifications when a job needs you" title="Desktop notifications when a job needs you (off)"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 11V7a4 4 0 0 1 8 0v4l1.2 1.4H2.8z M6.5 13.6a1.6 1.6 0 0 0 3 0" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/></svg></button>
+      <button type="button" class="ibtn" id="b-theme" aria-label="Theme" title="Theme: follows your system"><svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="5.5" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M8 2.5a5.5 5.5 0 0 1 0 11z" fill="currentColor"/></svg></button>
+      <button type="button" class="ibtn" id="b-keys" aria-label="Keyboard shortcuts" title="Keyboard shortcuts (?)"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="1.5" y="4" width="13" height="8.5" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="M4 7h1M7 7h1M10 7h2M4 9.6h8" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg></button>
     </div>
   </header>
 
-  <!-- LIVE LINE -->
-  <section id="view-live" role="tabpanel" aria-labelledby="tab-live">
-    <div class="jobs" id="jobs" role="group" aria-label="Jobs"></div>
-    <div id="live-body">
-      <div class="jobhead">
-        <div>
-          <h2 id="j-title"></h2>
-          <div class="meta" id="j-meta"></div>
+  <section class="kpis" id="kpis" aria-label="The floor at a glance. Each tile filters the board."></section>
+
+  <div class="mtabs" role="tablist" aria-label="Panes">
+    <button type="button" role="tab" data-mpane="main" aria-selected="true">Jobs</button>
+    <button type="button" role="tab" data-mpane="rail" aria-selected="false">Filters</button>
+    <button type="button" role="tab" data-mpane="wire" aria-selected="false">The wire</button>
+  </div>
+
+  <div class="floor">
+    <aside class="pane facets" id="rail" aria-label="Filters"></aside>
+
+    <main class="pane mainp" id="main">
+      <!-- BOARD -->
+      <section id="view-board" aria-label="Board">
+        <div class="btool" id="btool">
+          <span class="ttl">Board</span><span class="cnt" id="bcount"></span>
+          <span class="qchips" id="qchips"></span>
+          <span class="grow" style="flex:1"></span>
+          <label class="pick2">Group <select id="groupby" aria-label="Group by"><option value="attention">attention</option><option value="status">status</option><option value="recipe">recipe</option><option value="risk">risk</option><option value="stage">stage</option><option value="epic">epic</option><option value="day">day</option></select></label>
+          <label class="pick2">Sort <select id="sortby" aria-label="Sort by"><option value="urgency">urgency</option><option value="updated">updated</option><option value="created">created</option><option value="id">id</option></select></label>
         </div>
-        <div class="odo" id="odo" aria-live="off"></div>
-      </div>
-      <div class="siglegend" id="siglegend"></div>
-      <div class="line">
-        <div>
-          <div class="street" id="street" tabindex="0" aria-label="The job's flow: stages left to right, time top to bottom"></div>
-          <div class="panel transport">
-            <div class="tbtns">
-              <button type="button" id="t-prev" aria-label="Previous event" title="Previous event (←)">⏮</button>
-              <button type="button" id="t-play" class="primary">▶ Replay</button>
-              <button type="button" id="t-next" aria-label="Next event" title="Next event (→)">⏭</button>
-              <span class="speed" role="group" aria-label="Speed" id="speed"></span>
-              <button type="button" id="t-follow" aria-pressed="true" title="Keep the request in view">Follow</button>
-              <button type="button" id="t-zoom" aria-pressed="true" title="Fit the canvas to the width, or show it at full size">Fit</button>
+        <div class="board" id="board" role="list" aria-label="Jobs"></div>
+      </section>
+
+      <!-- LINE MAP -->
+      <section id="view-lines" class="lmwrap" aria-label="Line map" hidden>
+        <div class="btool">
+          <span class="ttl">Line map</span><span class="cnt" id="lmcount"></span>
+          <span class="grow" style="flex:1"></span>
+          <span class="segb" role="group" aria-label="Time axis"><button type="button" id="lm-sq" aria-pressed="true" title="Shrink the quiet hours so busy minutes get room">Squeeze idle</button><button type="button" id="lm-lin" aria-pressed="false">Linear</button></span>
+          <span class="segb" role="group" aria-label="Zoom"><button type="button" id="lm-out" aria-label="Zoom out">−</button><button type="button" id="lm-in" aria-label="Zoom in">+</button><button type="button" id="lm-fit">Fit</button></span>
+        </div>
+        <div class="lmlegend" id="lmlegend"></div>
+        <div class="lm" id="lm">
+          <div class="lmhead"><div class="c">JOB · TRACKS ↓ STAGES</div><svg id="lm-axis" class="lmax" aria-hidden="true"></svg></div>
+          <div class="lmscroll" id="lm-scroll" tabindex="0" aria-label="Every job as a line on one time axis. Plus and minus zoom, arrows pan.">
+            <div class="lmsizer" id="lm-sizer"><div class="lmlabels" id="lm-labels"></div><div class="lmplot" id="lm-plot"><svg id="lm-svg" role="img" aria-label="Job lines"></svg></div></div>
+          </div>
+          <div class="lmtip" id="lm-tip" hidden></div>
+        </div>
+      </section>
+
+      <!-- JOB -->
+      <section id="view-job" class="jobview" aria-label="Job" hidden>
+        <aside class="pane jlist" id="jlist" aria-label="Jobs (j and k switch)"></aside>
+        <div class="pane jdetail" id="jdetail">
+          <div class="jhead2">
+            <div>
+              <div class="eyebrow"><button type="button" class="tbtn" id="j-back" title="Back to the board (Esc)">← Board</button><span id="j-eyebrow"></span><span class="jprev"><button type="button" class="tbtn" id="j-prev" aria-label="Previous job">↑ k</button><button type="button" class="tbtn" id="j-next" aria-label="Next job">↓ j</button></span></div>
+              <h2 id="j-title"></h2>
+              <div class="meta" id="j-meta"></div>
             </div>
-            <div class="scrub" id="scrub">
-              <div class="rail"></div><div class="fill" id="s-fill"></div>
-              <div id="s-ticks"></div>
-              <input type="range" id="s-range" min="0" max="1000" value="1000" aria-label="Timeline">
-              <div class="head" id="s-head"></div>
+            <div class="odo" id="odo" aria-live="off"></div>
+          </div>
+          <div class="jtabs" role="tablist" aria-label="Job views">
+            <button type="button" role="tab" data-jt="line" aria-selected="true">Line</button>
+            <button type="button" role="tab" data-jt="story" aria-selected="false">Story</button>
+            <button type="button" role="tab" data-jt="tasks" aria-selected="false">Tasks<span class="n2" id="n-tasks"></span></button>
+            <button type="button" role="tab" data-jt="events" aria-selected="false">Events<span class="n2" id="n-events"></span></button>
+            <button type="button" role="tab" data-jt="lessons" aria-selected="false">Lessons<span class="n2" id="n-lessons"></span></button>
+            <span style="flex:1"></span>
+            <button type="button" class="tbtn" id="j-wire" aria-pressed="false" title="Show the wire beside this job">Wire ▸</button>
+          </div>
+          <div id="live-body" data-jt="line">
+            <div class="siglegend" id="siglegend"></div>
+            <div class="line">
+              <div>
+                <div class="street" id="street" tabindex="0" aria-label="The job's flow: stages left to right, time top to bottom"></div>
+                <div class="panel transport">
+                  <div class="tbtns">
+                    <button type="button" id="t-prev" aria-label="Previous event" title="Previous event (←)">⏮</button>
+                    <button type="button" id="t-play" class="primary">▶ Replay</button>
+                    <button type="button" id="t-next" aria-label="Next event" title="Next event (→)">⏭</button>
+                    <span class="speed" role="group" aria-label="Speed" id="speed"></span>
+                    <button type="button" id="t-follow" aria-pressed="true" title="Keep the request in view">Follow</button>
+                    <button type="button" id="t-zoom" aria-pressed="true" title="Fit the canvas to the width, or show it at full size">Fit</button>
+                  </div>
+                  <div class="scrub" id="scrub">
+                    <div class="rail"></div><div class="fill" id="s-fill"></div>
+                    <div id="s-ticks"></div>
+                    <input type="range" id="s-range" min="0" max="1000" value="1000" aria-label="Timeline">
+                    <div class="head" id="s-head"></div>
+                  </div>
+                  <div class="clock" id="clock"></div>
+                </div>
+              </div>
+              <aside class="panel now" id="now" aria-live="polite"></aside>
             </div>
-            <div class="clock" id="clock"></div>
+            <div class="below" id="below"></div>
+          </div>
+          <div id="jt-story" data-jt="story" hidden></div>
+          <div id="jt-tasks" data-jt="tasks" hidden></div>
+          <div id="jt-events" data-jt="events" hidden></div>
+          <div id="jt-lessons" data-jt="lessons" hidden></div>
+        </div>
+      </section>
+
+      <!-- RECIPE MAP -->
+      <section id="view-plan" aria-label="Recipe map" hidden>
+        <p class="lede">The same factory as a floor plan, for any recipe: each bay is a stage with the skills Claude follows, the workflows that put agents together, the CLI steps that decide and record, and the gates where you decide. Click anything to see what it does.</p>
+        <div class="toolbar">
+          <div class="picker" id="picker" role="group" aria-label="Recipe"></div>
+          <div class="tools-row">
+            <button type="button" id="z-out" aria-label="Zoom out">−</button>
+            <button type="button" id="z-in" aria-label="Zoom in">+</button>
+            <button type="button" id="z-fit">Fit</button>
+            <button type="button" id="z-play" class="primary">Run a request</button>
           </div>
         </div>
-        <aside class="panel now" id="now" aria-live="polite"></aside>
-      </div>
-      <div class="below" id="below"></div>
-    </div>
-    <div id="live-empty" hidden></div>
-  </section>
+        <p class="recipe-note" id="recipe-note"></p>
+        <div class="plant">
+          <div class="canvas" id="canvas">
+            <svg id="svg" role="group" aria-label="Factory floor plan">
+              <defs>
+                <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" style="fill: var(--muted)"></path></marker>
+                <marker id="arr-ink" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" style="fill: var(--ink)"></path></marker>
+                <marker id="arr-loop" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" style="fill: var(--stop)"></path></marker>
+                <marker id="arr-human" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" style="fill: var(--signal)"></path></marker>
+              </defs>
+              <g id="world"></g>
+            </svg>
+            <div class="hint">drag or shift + scroll to pan · ctrl + scroll or pinch to zoom · + − 0 keys</div>
+            <div class="nowcap" id="nowcap" hidden></div>
+          </div>
+          <aside class="panel side" id="side" aria-live="polite"></aside>
+        </div>
+        <div class="legend">
+          <span><span class="sw" style="border-color: var(--skill)"></span>skill: instructions Claude follows</span>
+          <span><span class="sw" style="border-color: var(--track)"></span>workflow and its agents</span>
+          <span><span class="sw" style="border-color: var(--track); border-style: dashed"></span>read-only agent</span>
+          <span><span class="sw" style="border-color: var(--live)"></span>factory CLI: decides and records</span>
+          <span><span class="sw" style="border-color: var(--signal)"></span>you: gates and replies</span>
+          <span><span class="sw" style="border-color: var(--stop); border-style: dashed"></span>loop back</span>
+        </div>
+      </section>
 
-  <!-- RECIPE MAP -->
-  <section id="view-plan" role="tabpanel" aria-labelledby="tab-plan" hidden>
-    <p class="lede">The same factory as a floor plan, for any recipe: each bay is a stage with the skills Claude follows, the workflows that put agents together, the CLI steps that decide and record, and the gates where you decide. Click anything to see what it does.</p>
-    <div class="toolbar">
-      <div class="picker" id="picker" role="group" aria-label="Recipe"></div>
-      <div class="tools-row">
-        <button type="button" id="z-out" aria-label="Zoom out">−</button>
-        <button type="button" id="z-in" aria-label="Zoom in">+</button>
-        <button type="button" id="z-fit">Fit</button>
-        <button type="button" id="z-play" class="primary">Run a request</button>
-      </div>
-    </div>
-    <p class="recipe-note" id="recipe-note"></p>
-    <div class="plant">
-      <div class="canvas" id="canvas">
-        <svg id="svg" role="group" aria-label="Factory floor plan">
-          <defs>
-            <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" style="fill: var(--muted)"></path></marker>
-            <marker id="arr-ink" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" style="fill: var(--ink)"></path></marker>
-            <marker id="arr-loop" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" style="fill: var(--stop)"></path></marker>
-            <marker id="arr-human" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" style="fill: var(--signal)"></path></marker>
-          </defs>
-          <g id="world"></g>
-        </svg>
-        <div class="hint">drag or shift + scroll to pan · ctrl + scroll or pinch to zoom · + − 0 keys</div>
-        <div class="nowcap" id="nowcap" hidden></div>
-      </div>
-      <aside class="panel side" id="side" aria-live="polite"></aside>
-    </div>
-    <div class="legend">
-      <span><span class="sw" style="border-color: var(--skill)"></span>skill: instructions Claude follows</span>
-      <span><span class="sw" style="border-color: var(--track)"></span>workflow and its agents</span>
-      <span><span class="sw" style="border-color: var(--track); border-style: dashed"></span>read-only agent</span>
-      <span><span class="sw" style="border-color: var(--live)"></span>factory CLI: decides and records</span>
-      <span><span class="sw" style="border-color: var(--signal)"></span>you: gates and replies</span>
-      <span><span class="sw" style="border-color: var(--stop); border-style: dashed"></span>loop back</span>
-    </div>
-  </section>
+      <!-- THE CREW -->
+      <section id="view-crew" aria-label="The crew" hidden>
+        <p class="lede">Nineteen agents, each with one role and its own tool limits. Workflows start them by agent type, so a reviewer can't write and a builder can only touch its task's paths. The guard hook enforces the rest.</p>
+        <div class="crew" id="crew"></div>
+      </section>
+    </main>
 
-  <!-- THE CREW -->
-  <section id="view-crew" role="tabpanel" aria-labelledby="tab-crew" hidden>
-    <p class="lede">Nineteen agents, each with one role and its own tool limits. Workflows start them by agent type, so a reviewer can't write and a builder can only touch its task's paths. The guard hook enforces the rest.</p>
-    <div class="crew" id="crew"></div>
-  </section>
+    <aside class="pane wire" id="wire" aria-label="The wire: every event, newest first">
+      <div class="wireh">
+        <h2><i aria-hidden="true"></i>The wire</h2>
+        <button type="button" class="tbtn" id="w-job" aria-pressed="false" title="Only the selected job">This job</button>
+        <button type="button" class="tbtn" id="w-pause" aria-pressed="false" title="Hold the feed while you read">Pause</button>
+      </div>
+      <div class="pane" id="wbody"><button type="button" class="wnew" id="w-new" hidden></button><ul class="wlist" id="wlist"></ul></div>
+    </aside>
+  </div>
 
-  <p class="foot" id="foot"></p>
+  <footer class="foot2" id="foot"></footer>
 </div>
+
+<div class="toasts" id="toasts" aria-live="assertive"></div>
+<dialog class="dlg pal" id="palette" aria-label="Command palette">
+  <input id="pal-q" type="text" autocomplete="off" spellcheck="false" placeholder="Jump to a job, switch view, toggle a filter…" aria-label="Command" role="combobox" aria-controls="pal-list" aria-expanded="true">
+  <ul id="pal-list" role="listbox"></ul>
+  <div class="pf"><span><kbd>↑</kbd> <kbd>↓</kbd> move</span><span><kbd>↵</kbd> go</span><span><kbd>esc</kbd> close</span></div>
+</dialog>
+<dialog class="dlg" id="keys" aria-label="Keyboard shortcuts">
+  <div class="keys2">
+    <h2>Keys</h2>
+    <dl>
+      <dt><kbd>j</kbd><kbd>k</kbd></dt><dd>next / previous job (on the board, and inside a job)</dd>
+      <dt><kbd>↵</kbd></dt><dd>open the job under the cursor</dd>
+      <dt><kbd>esc</kbd></dt><dd>back to the board · close a dialog · clear the filter box</dd>
+      <dt><kbd>/</kbd></dt><dd>filter box: <code>is:waiting risk:high recipe:bug@low gate:H2 has:finding has:rework agent:builder since:2d</code> and any words</dd>
+      <dt><kbd>⌘</kbd><kbd>K</kbd></dt><dd>command palette: jump to a job, switch view, toggle filters</dd>
+      <dt><kbd>1</kbd>–<kbd>5</kbd></dt><dd>toggle the tiles: your turn · running · parked · stopped · done</dd>
+      <dt><kbd>g</kbd> <kbd>w</kbd></dt><dd>next job waiting for you</dd>
+      <dt><kbd>g</kbd> <kbd>b</kbd> / <kbd>l</kbd></dt><dd>board / line map</dd>
+      <dt><kbd>space</kbd> <kbd>←</kbd> <kbd>→</kbd></dt><dd>on a job's line: play, previous and next event</dd>
+      <dt><kbd>?</kbd></dt><dd>this sheet</dd>
+    </dl>
+  </div>
+</dialog>
 
 <script>
 // ===================================================================== definitions
@@ -676,9 +1196,9 @@ const STAGES = [
       { id: 'skill-clarify', type: 'skill', title: 'factory:clarify', sub: 'Claude drafts contract.md from your request and the repo', step: 'clarify',
         detail: { what: 'Fills every section, answers what the repo can answer, and runs factory contract check before any agent sees it.', skills: ['factory:clarify'], cmds: ['factory contract check'], outputs: ['contract.md draft'] } },
       { id: 'wf-clarify', type: 'workflow', title: 'fanout-judge · clarify', step: 'clarify',
-        groups: [[P('analyst · ambiguity', 'agent', 'intent-analyst'), P('analyst · constraints', 'agent', 'intent-analyst'), P('analyst · testability', 'agent', 'intent-analyst')], [P('judge', 'agent', 'judge')], [P('god-eye · intent', 'agent', 'god-eye')]],
-        detail: { what: 'Three analysts read the contract in parallel, each from one angle. The judge merges, dismisses with reasons and never re-asks. Only when no questions are left does God Eye read it cold.', agents: ['intent-analyst', 'judge', 'god-eye'], cmds: ['factory wfargs fanout-judge --config clarify', 'factory record'], outputs: ['questions for you, or an approved contract'], floors: 'contract_approved' } },
-      { id: 'you-answer', type: 'you', title: 'You answer questions', sub: 'Only what the repo can\'t answer; at most 7, then 3', step: 'clarify',
+        groups: [[P('analyst · intent (gate)', 'agent', 'intent-analyst')], [P('analyst · ambiguity', 'agent', 'intent-analyst'), P('analyst · constraints', 'agent', 'intent-analyst'), P('analyst · testability', 'agent', 'intent-analyst')], [P('judge', 'agent', 'judge')], [P('god-eye · intent', 'agent', 'god-eye')]],
+        detail: { what: 'The intent analyst runs first and alone: can it restate the problem, who has it, the outcome and the signal that proves it? While the intent is open, the other three analysts are held back. Then ambiguity, constraints and testability read the contract in parallel. The judge merges, prioritises (intent, scope, constraint, acceptance), gives every question an id (Q-n) and never re-asks. Only when no questions are left does God Eye read it cold.', agents: ['intent-analyst', 'judge', 'god-eye'], cmds: ['factory wfargs fanout-judge --config clarify', 'factory record'], outputs: ['questions for you, or an approved contract'], floors: 'contract_approved' } },
+      { id: 'you-answer', type: 'you', title: 'You answer questions', sub: 'Q-n questions, intent first; at most 5, then 3', step: 'clarify',
         detail: { what: 'Your answers go into the contract and the round runs again. Rounds are capped; a contract that won\'t converge parks.', you: ['answers in chat'] } },
       { id: 'gate-H1', type: 'gate', title: 'H1 · You approve the contract', step: 'H1', alt: 'EH1',
         detail: { what: 'Approval is bound to the contract\'s hash, and risk is part of that hash. Change it later and the router sends you to an amendment.', you: ['approve', 'deny <what must change>'], floors: 'contract_approved' } },
@@ -1743,7 +2263,7 @@ function rowLines(job, row) {
         if (it.target) add(i, `$ ${it.target}`, 'cmd');
         break;
       }
-      case 'refused': add(i, `⚠ ${it.text}`, 'warn'); break;
+      case 'refused': case 'hook_error': case 'stop_block': case 'unparsed': add(i, `⚠ ${it.text}`, 'warn'); break;
       case 'error': add(i, `✕ ${it.text}`, 'bad'); break;
       case 'route': if (it.action === 'parked') add(i, `Router parked the job: ${RULES[it.rule] || it.rule}`, 'bad'); break;
       default: break;
@@ -2210,8 +2730,7 @@ function paintOdo(i, S) {
 }
 
 // ---------- the panel
-function describe(it) {
-  const job = LV.job;
+function describe(it, job = LV.job) {
   switch (it.type) {
     case 'created': return [`Request submitted`, `“${job.title}” · ${job.work_type}, ${job.risk} risk${job.risk_proposed && job.risk_proposed !== job.risk ? ` (proposed ${job.risk_proposed})` : ''} → recipe ${job.recipe}`];
     case 'route': {
@@ -2231,6 +2750,9 @@ function describe(it) {
     case 'error': return ['Workflow error', it.text];
     case 'guard': return [`Guard blocked ${it.who || 'a tool call'}`, `${it.text}${it.target ? ` — command: ${it.target}` : ''}`];
     case 'refused': return ['A reply was refused', it.text];
+    case 'hook_error': return ['A hook failed', it.text];
+    case 'stop_block': return ['Stop hook: not done yet', it.text];
+    case 'unparsed': return ['A reply was not understood', it.text];
     case 'amend': return [it.phase === 'start' ? `Amendment ${it.id || ''} started`.replace('  ', ' ') : it.phase === 'submit' ? 'Amendment submitted' : 'Amendment applied', it.text];
     case 'spawn': return [`Follow-up ${it.job} opened`, it.text];
     case 'end': return job.status === 'closed' ? ['Off the line', `Closed ${fmtDate(job.closed_at || it.t)}`] : ['Now', `Last activity ${ago(it.t)}`];
@@ -2242,7 +2764,7 @@ function who(it) {
   if (it.type === 'human') return ['you', 'you'];
   if (it.type === 'agents') return ['agents', 'agents'];
   if (it.type === 'result') return [it.ok ? 'passed' : it.outcome === 'ask' ? 'asks' : 'failed', it.ok ? 'ok' : it.outcome === 'ask' ? 'you' : 'bad'];
-  if (['park', 'error', 'guard', 'stopped', 'refused'].includes(it.type)) return [it.type, 'bad'];
+  if (['park', 'error', 'guard', 'stopped', 'refused', 'hook_error', 'stop_block', 'unparsed'].includes(it.type)) return [it.type.replace('_', ' '), 'bad'];
   if (it.type === 'created') return ['request', 'you'];
   if (it.type === 'amend') return ['amend', 'you'];
   if (it.type === 'spawn') return ['follow-up', 'route'];
@@ -2280,6 +2802,7 @@ function paintNow(i, S) {
   }
   if (it && it.type === 'result' && it.findings && it.findings.length) parts.push(`<div class="label">Findings</div>${findingsHtml(it.findings)}`);
   if (i === LV.items.length - 1 && job.running_agents && job.running_agents.length) parts.push(`<div class="label">Running now</div><div class="chips">${job.running_agents.map((a) => `<span class="chip agent">${esc(a.agent_type)}</span>`).join('')}</div>`);
+  if (i === LV.items.length - 1 && job.stale_agents && job.stale_agents.length && job.status !== 'closed') parts.push(`<div class="label">Started, never reported back</div><div class="chips">${job.stale_agents.map((a) => `<span class="chip off" title="started ${esc(fmtDate(a.since))}; its session probably ended">${esc(a.agent_type)} · stale</span>`).join('')}</div>`);
   if (i === LV.items.length - 1 && job.pending_gate && job.pending_gate.id !== 'P') parts.push(`<div class="label">Your move</div><p>Reply <b>approve</b> or <b>deny &lt;what must change&gt;</b> in chat to answer ${esc(job.pending_gate.id)}.</p>`);
   if (i === LV.items.length - 1 && job.status === 'parked') parts.push(`<div class="label">Your move</div><p>Fix what the reason names, then reply <b>resume</b>.</p>`);
   $('#now').innerHTML = parts.join('');
@@ -2452,15 +2975,6 @@ function siglegend() {
     setSig(g, s);
   });
 }
-function renderJobs() {
-  const host = $('#jobs');
-  host.innerHTML = LV.jobs.map(({ job, S, sum }) => `<button type="button" class="jobcard" data-id="${esc(job.id)}" aria-pressed="${LV.job && LV.job.id === job.id}">
-      <span class="jt"><span class="jid">${esc(job.id)}</span><span class="jr">${esc(job.recipe || '')}</span></span>
-      <span class="jn">${esc(job.title)}</span>
-      <span class="jb"><span class="jw w-${sum[0]}">${esc(sum[1])}</span><span class="lamps" aria-hidden="true">${ORDER.map((st) => `<i class="${stageStatus(job, S, st)}"></i>`).join('')}</span></span>
-    </button>`).join('');
-  host.querySelectorAll('.jobcard').forEach((b) => b.addEventListener('click', () => openJob(b.dataset.id, true)));
-}
 function renderHead(job) {
   $('#j-title').textContent = `${job.id} · ${job.title}`;
   const S = LV.states[LV.states.length - 1];
@@ -2491,112 +3005,1494 @@ function renderBelow(job) {
   if (S.guards) html.push(`<section class="panel"><h3>Guard</h3><p>The guard hook blocked ${S.guards} tool call(s) during this job. They show in the event log.</p></section>`);
   $('#below').innerHTML = html.join('');
 }
-function openJob(id, user) {
-  const entry = LV.jobs.find((x) => x.job.id === id) || LV.jobs[0];
-  if (!entry) return;
-  stopPlay();
-  buildFlow(entry.job);
-  renderJobs();
-  renderHead(entry.job);
-  renderBelow(entry.job);
-  const host = $('#street');
-  host.scrollLeft = 0;
-  renderAt(LV.END);
-  if (user) { try { history.replaceState(null, '', `#${id}`); } catch (e) { /* sandboxed */ } }
-}
-function liveEmpty(kind) {
-  $('#live-body').hidden = true;
-  const e = $('#live-empty');
-  e.hidden = false;
-  e.innerHTML = kind === 'template'
-    ? `<div class="panel empty"><h2>No factory data in this page</h2><p>This is the console's template. Run <code>factory console</code> in a repository that uses the factory: it writes <code>.factory/console.html</code> with every job, and this tab replays them on the line.</p><div class="cmd"><code>factory console</code><button type="button" data-copy="factory console">Copy</button></div><p>Meanwhile the recipe map shows the whole factory.</p><button type="button" class="linkbtn" data-go="plan">Open the recipe map</button></div>`
-    : `<div class="panel empty"><h2>No jobs on the floor yet</h2><p>Start one in Claude Code, then run <code>factory console</code> again to see it drive down the line.</p><div class="cmd"><code>/factory:start &lt;what you want&gt;</code><button type="button" data-copy="/factory:start ">Copy</button></div><button type="button" class="linkbtn" data-go="plan">Open the recipe map</button></div>`;
-  e.querySelectorAll('[data-copy]').forEach((b) => b.addEventListener('click', () => {
-    const txt = b.dataset.copy;
-    const done = () => { b.textContent = 'Copied'; setTimeout(() => { b.textContent = 'Copy'; }, 1400); };
-    try { navigator.clipboard.writeText(txt).then(done, () => { b.textContent = 'Select the text to copy'; }); } catch (err) { b.textContent = 'Select the text to copy'; }
-  }));
-  e.querySelectorAll('[data-go]').forEach((b) => b.addEventListener('click', () => show(b.dataset.go)));
-}
-function paintFlags() {
-  const flags = [];
-  if (DATA && DATA.label) flags.push(`<span class="flag sample" title="${esc(DATA.label)}">${esc(DATA.label)}</span>`);
-  if (DATA) {
-    const s = DATA.integrity && DATA.integrity.status;
-    flags.push(s === 'verified' ? `<span class="flag ok" title="${DATA.integrity.valid} sealed records checked">seals verified</span>` : s === 'tampered' ? `<span class="flag bad" title="${DATA.integrity.invalid} records fail their seal">seal mismatch</span>` : '<span class="flag unk" title="This machine has no factory key, so seals were not checked">seals not checked</span>');
-  }
-  if (LIVE.on) flags.push(`<span class="flag live${LIVE.connected ? '' : ' off'}" title="${LIVE.connected ? 'Streaming from factory console --serve: the page updates as hooks and the CLI write to .factory/' : 'Lost the connection to factory console --serve; retrying'}">${LIVE.connected ? 'live' : 'reconnecting'}</span>`);
-  $('#flags').innerHTML = flags.join('');
-  $('#foot').innerHTML = DATA
-    ? `${LIVE.on ? 'Streaming' : 'Generated'} ${esc(fmtDate(DATA.generated_at))} by <code>factory console${LIVE.on ? ' --serve' : ''}</code>${DATA.plugin_version ? ` (factory ${esc(DATA.plugin_version)})` : ''} from <code>${esc(DATA.project)}/.factory/</code>: routing decisions, the ledger, the event log and job state, read without changing anything. ${LIVE.on ? 'Updates arrive as they happen.' : 'Re-run it to refresh, or run <code>factory console --serve</code> to watch it live.'}`
-    : 'Built from the factory\'s own definitions: recipes, skills, workflows, agents and the router\'s checks. Generate it with <code>factory console</code> to see real jobs.';
-}
-function sortJobs() {
-  LV.jobs = DATA.jobs.map((job) => { const S = finalState(job); return { job, S, sum: jobSummary(job, S) }; })
-    .sort((a, b) => (SORT[a.sum[0]] - SORT[b.sum[0]]) || (a.job.updated_at < b.job.updated_at ? 1 : -1));
-}
-function bootLive() {
-  paintFlags();
-  bindTransport();
-  siglegend();
-  if (!DATA) { liveEmpty('template'); return; }
-  if (!DATA.jobs || !DATA.jobs.length) { liveEmpty('none'); return; }
-  sortJobs();
-  const hash = (location.hash || '').replace('#', '');
-  const pick = LV.jobs.find((x) => x.job.id === hash) ? hash : LV.jobs[0].job.id;
-  openJob(pick, false);
+// ===================================================================== switchboard
+// The operations floor around the line: every job as a dense board row (or a transit line
+// on one time axis), five KPI housings that double as filters, a facet rail, a query box,
+// and the wire. Each job is derived once per rev; a live update re-renders only the rows
+// whose rev changed.
+const BUCKETS = [['turn', 'Your turn'], ['running', 'Running'], ['parked', 'Parked'], ['stopped', 'Stopped'], ['done', 'Done']];
+const BUCKET_NAME = Object.fromEntries(BUCKETS);
+const ATTN = { turn: 0, stopped: 1, running: 2, parked: 3, done: 4 };
+const RISK_ORDER = { high: 0, medium: 1, low: 2 };
+const UI = {
+  view: 'board', jobTab: 'line', q: '', facets: {}, group: 'attention', sort: 'urgency', collapsed: new Set(['done']), cursor: null,
+  wirePaused: false, wireJob: false, wireHealth: false, wireOpen: false, wireLimit: 160, mpane: 'main', notify: false, theme: 'auto', booted: false,
+};
+const MODELS = new Map(); // id → derived model (cached by rev)
+let VISIBLE = []; // ids in board order, after filters
+let SEEN = {};
+const store = {
+  get(k, d) { try { const v = localStorage.getItem(k); return v === null ? d : v; } catch (e) { return d; } },
+  set(k, v) { try { localStorage.setItem(k, v); } catch (e) { /* storage unavailable */ } },
+};
+try { SEEN = JSON.parse(store.get('fc-seen', '{}')) || {}; } catch (e) { SEEN = {}; }
+UI.notify = store.get('fc-notify', '0') === '1';
+UI.theme = store.get('fc-theme', 'auto');
+UI.group = store.get('fc-group', 'attention');
+UI.sort = store.get('fc-sort', 'urgency');
+
+const hashStr = (s) => { let h = 5381; for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) | 0; return (h >>> 0).toString(16); };
+const jobRev = (job) => job.rev || hashStr(JSON.stringify(job));
+const nowMs = () => Date.now();
+const durTok = (s) => { const m = /^(\d+(?:\.\d+)?)(m|h|d|w)$/i.exec(String(s || '')); return m ? +m[1] * { m: 60e3, h: 3600e3, d: 864e5, w: 6048e5 }[m[2].toLowerCase()] : null; };
+const shortAgo = (ms) => (!(ms >= 0) ? '' : ms < 60000 ? 'now' : fmtDur(ms).split(' ')[0]);
+const roleShort = (t) => String(t || '').replace(/^factory:/, '');
+const gateReply = (job, gate) => (!gate ? null : gate === 'P' ? `resume ${job.id}` : gate === 'H4' ? `merged ${job.id} <commit>` : `approve ${job.id} ${gate}`);
+
+function bucketOf(job, sum) {
+  if (job.status === 'closed') return 'done';
+  if (job.status === 'cancelled' || job.status === 'abandoned') return 'stopped';
+  if (job.status === 'parked' || (job.pending_gate && job.pending_gate.id === 'P')) return 'parked';
+  if (job.pending_gate || sum[0] === 'waiting') return 'turn';
+  if (sum[0] === 'failed' || sum[0] === 'blocked') return 'stopped';
+  return 'running';
 }
 
-// ---------- live: factory console --serve streams fresh data over server-sent events
-const LIVE = { on: false, connected: false, sig: {} };
-const jobSig = (job) => JSON.stringify(job);
-// New data for the page. The open job stays open; if you were watching its latest
-// moment, the new steps play in; if you were scrubbing back, you keep your place.
-function refresh(next) {
-  const prevId = LV.job && LV.job.id;
-  const prevSig = prevId ? LIVE.sig[prevId] : null;
+function modelOf(job) {
+  const rev = jobRev(job);
+  const old = MODELS.get(job.id);
+  if (old && old.rev === rev) { old.job = job; return old; }
+  const p = prepare(job);
+  const S = p.states[p.states.length - 1];
+  const sum = jobSummary(job, S);
+  const bucket = bucketOf(job, sum);
+  const def = job.steps.find((s) => s.id === S.pos);
+  const roles = new Set();
+  let runs = 0;
+  let retries = 0;
+  for (const c of p.crew) { roles.add(c.role); runs += 1; if (c.retry || /^build \S+ #([2-9]|\d{2,})/.test(c.label || '')) retries += 1; }
+  const tasks = job.tasks || [];
+  const hay = [job.id, job.title, job.recipe, job.work_type, ...job.timeline.map((t) => [t.text, t.reason, t.raw_step, t.workflow, t.gate].filter(Boolean).join(' ')), ...(job.inspector || []).map((f) => `${f.summary} ${f.rule}`)].join(' \u0001 ').toLowerCase();
+  const gate = job.pending_gate && job.pending_gate.id !== 'P' ? job.pending_gate.id : null;
+  const m = {
+    id: job.id, job, rev, S, sum, bucket, p,
+    lamps: ORDER.map((st) => stageStatus(job, S, st)),
+    stage: def ? def.stage : job.status === 'closed' ? 'learn' : 'request',
+    stepLabel: S.pos === 'finish' ? 'Off the line' : stepName(S.pos),
+    gate, waitSince: job.pending_gate ? Date.parse(job.pending_gate.at) : null,
+    created: Date.parse(job.created_at), updated: Date.parse(job.updated_at || job.created_at), closed: job.closed_at ? Date.parse(job.closed_at) : null,
+    loops: S.loops.length, retries, runs, roles,
+    tasksTotal: tasks.length, tasksPassed: tasks.filter((t) => t.pass === true || t.outcome === 'done').length,
+    findings: (job.inspector || []).filter((f) => f.status === 'open').length, findingsTotal: (job.inspector || []).length,
+    times: job.timeline.map((t) => Date.parse(t.t)).filter((x) => x === x),
+    guards: S.guards, amends: S.amendments || 0, spawned: job.timeline.filter((t) => t.type === 'spawn').map((t) => t.job),
+    hay, titleL: String(job.title || '').toLowerCase(),
+  };
+  MODELS.set(job.id, m);
+  return m;
+}
+
+// ---------- query: tokens + fuzzy words
+const QTOKENS = ['is:waiting', 'is:running', 'is:parked', 'is:stopped', 'is:done', 'is:unread', 'risk:high', 'risk:medium', 'risk:low', 'recipe:bug@low', 'gate:H2', 'gate:any', 'has:finding', 'has:rework', 'has:retry', 'has:agents', 'has:guard', 'agent:builder', 'stage:build', 'since:2d', 'since:3h'];
+function parseQ(q) {
+  const out = { toks: [], words: [] };
+  for (const part of String(q || '').trim().split(/\s+/).filter(Boolean)) {
+    const m = /^(-?)(is|risk|recipe|gate|has|agent|since|stage|id|status):(.+)$/i.exec(part);
+    if (m) out.toks.push({ neg: Boolean(m[1]), k: m[2].toLowerCase(), v: m[3].toLowerCase() });
+    else out.words.push(part.toLowerCase());
+  }
+  return out;
+}
+function fuzzy(word, text) {
+  let i = 0;
+  let first = -1;
+  for (let k = 0; k < text.length && i < word.length; k++) if (text[k] === word[i]) { if (first < 0) first = k; i += 1; if (i === word.length) return k - first <= word.length * 2.5; }
+  return false;
+}
+const unreadOf = (m) => Boolean(SEEN[m.id]) && SEEN[m.id] !== m.rev;
+function tokOk(m, t) {
+  const j = m.job;
+  switch (t.k) {
+    case 'is': case 'status': {
+      const v = { waiting: 'turn', yours: 'turn', turn: 'turn', 'your-turn': 'turn', blocked: 'stopped', failed: 'stopped', closed: 'done', merged: 'done' }[t.v] || t.v;
+      if (BUCKET_NAME[v]) return m.bucket === v;
+      if (v === 'active') return j.status === 'active';
+      if (v === 'cancelled' || v === 'abandoned') return j.status === v;
+      if (v === 'epic') return Boolean(j.epic);
+      if (v === 'child') return Boolean(j.parent);
+      if (v === 'followup' || v === 'follow-up') return Boolean(j.followup_of);
+      if (v === 'unread') return unreadOf(m);
+      return false;
+    }
+    case 'risk': return String(j.risk || '').toLowerCase().startsWith(t.v);
+    case 'recipe': return String(j.recipe || '').toLowerCase().startsWith(t.v);
+    case 'gate': return t.v === 'any' ? Boolean(m.gate) : String(m.gate || '').toLowerCase() === t.v;
+    case 'has': return ({ finding: m.findingsTotal > 0, findings: m.findingsTotal > 0, rework: m.loops > 0, retry: m.retries > 0, retries: m.retries > 0, agents: (j.running_agents || []).length > 0, running: (j.running_agents || []).length > 0, tasks: m.tasksTotal > 0, guard: m.guards > 0, amend: m.amends > 0, followup: m.spawned.length > 0 || Boolean(j.followup_of), lessons: (j.lessons || []).length > 0, pr: Boolean(j.pr) })[t.v] || false;
+    case 'agent': return [...m.roles].some((r) => r.includes(t.v)) || (j.running_agents || []).some((a) => roleShort(a.agent_type).includes(t.v));
+    case 'since': { const d = durTok(t.v); return d ? m.updated >= nowMs() - d : true; }
+    case 'stage': return String(m.stage).startsWith(t.v);
+    case 'id': return m.id.toLowerCase().includes(t.v);
+    default: return true;
+  }
+}
+function qOk(m, pq) {
+  for (const t of pq.toks) if (tokOk(m, t) === t.neg) return false;
+  for (const w of pq.words) {
+    if (m.id.toLowerCase().includes(w) || m.titleL.includes(w) || m.hay.includes(w)) continue;
+    if (w.length >= 3 && fuzzy(w, m.titleL)) continue;
+    return false;
+  }
+  return true;
+}
+
+// ---------- facets
+const AGE = (m) => { const a = nowMs() - m.updated; return a < 3600e3 ? '< 1 hour' : a < 864e5 ? '< 1 day' : a < 6048e5 ? '< 1 week' : 'older'; };
+const FACETS = [
+  ['status', 'Status', (m) => m.bucket, (k) => BUCKET_NAME[k] || k, BUCKETS.map((b) => b[0])],
+  ['recipe', 'Recipe', (m) => m.job.recipe || '—', null, null],
+  ['risk', 'Risk', (m) => m.job.risk || '—', null, ['high', 'medium', 'low']],
+  ['gate', 'Waiting at', (m) => m.gate || (m.bucket === 'parked' ? 'parked (resume)' : null), (k) => (STEP_INFO[k] ? STEP_INFO[k][0] : k), null],
+  ['insp', 'Inspector', (m) => (m.findings ? 'open findings' : m.findingsTotal ? 'settled findings' : 'no findings'), null, ['open findings', 'settled findings', 'no findings']],
+  ['shape', 'Shape', (m) => (m.job.epic ? 'epic' : m.job.parent ? 'slice of an epic' : m.job.followup_of ? 'follow-up' : 'single job'), null, ['single job', 'epic', 'slice of an epic', 'follow-up']],
+  ['age', 'Updated', AGE, null, ['< 1 hour', '< 1 day', '< 1 week', 'older']],
+];
+const facetSet = (k) => (UI.facets[k] = UI.facets[k] || new Set());
+function facetOk(m, except) {
+  for (const [k, , fn] of FACETS) {
+    if (k === except) continue;
+    const s = UI.facets[k];
+    if (s && s.size && !s.has(fn(m))) return false;
+  }
+  return true;
+}
+
+// ---------- grouping and order
+function urgencyCmp(a, b) {
+  return (ATTN[a.bucket] - ATTN[b.bucket])
+    || (a.bucket === 'turn' ? (a.waitSince || 0) - (b.waitSince || 0) : 0)
+    || (b.updated - a.updated);
+}
+const SORTS = {
+  urgency: urgencyCmp,
+  updated: (a, b) => b.updated - a.updated,
+  created: (a, b) => b.created - a.created,
+  id: (a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0),
+};
+const dayKey = (ms) => { const d = new Date(ms); return Number.isNaN(+d) ? '—' : d.toLocaleDateString([], { weekday: 'short', day: 'numeric', month: 'short' }); };
+const GROUPS = {
+  attention: (m) => [ATTN[m.bucket], m.bucket, BUCKET_NAME[m.bucket]],
+  status: (m) => [['active', 'parked', 'closed', 'cancelled', 'abandoned'].indexOf(m.job.status), m.job.status, m.job.status],
+  recipe: (m) => [0, m.job.recipe || '—', m.job.recipe || 'no recipe'],
+  risk: (m) => [RISK_ORDER[m.job.risk] ?? 9, m.job.risk || '—', `${m.job.risk || 'no'} risk`],
+  stage: (m) => (m.bucket === 'done' ? [99, 'off', 'Off the line'] : [ORDER.indexOf(m.stage), m.stage, `${String(ORDER.indexOf(m.stage) + 1).padStart(2, '0')} ${STAGE_NAME[m.stage]}`]),
+  epic: (m) => { const e = m.job.epic ? m.id : m.job.parent; return e ? [0, `e:${e}`, `Epic ${e}`] : [1, 'none', 'Not in an epic']; },
+  day: (m) => [-m.updated, dayKey(m.updated), `Updated ${dayKey(m.updated)}`],
+};
+function computeGroups() {
+  const pq = parseQ(UI.q);
+  const all = [...MODELS.values()];
+  const vis = all.filter((m) => qOk(m, pq) && facetOk(m));
+  const by = new Map();
+  for (const m of vis) {
+    const [rank, key, label] = GROUPS[UI.group](m);
+    const g = by.get(key) || { key, label, rank, ms: [], bucket: UI.group === 'attention' ? key : null };
+    if (UI.group === 'day') g.rank = Math.min(g.rank, rank);
+    g.ms.push(m);
+    by.set(key, g);
+  }
+  const groups = [...by.values()].sort((a, b) => (a.rank - b.rank) || (a.key < b.key ? -1 : 1));
+  const cmp = SORTS[UI.sort] || urgencyCmp;
+  for (const g of groups) {
+    g.ms.sort(cmp);
+    // epics nest their slices when both are in the group
+    const ids = new Set(g.ms.map((m) => m.id));
+    const kids = new Map();
+    const roots = [];
+    for (const m of g.ms) {
+      const par = m.job.parent;
+      if (par && ids.has(par)) { const l = kids.get(par) || []; l.push(m); kids.set(par, l); } else roots.push(m);
+    }
+    g.rows = [];
+    for (const m of roots) { g.rows.push({ m, depth: 0 }); for (const k of kids.get(m.id) || []) g.rows.push({ m: k, depth: 1 }); }
+  }
+  VISIBLE = groups.flatMap((g) => g.rows.map((r) => r.m.id));
+  return { groups, pq, vis, all };
+}
+
+// ---------- board rows
+function lampsHtml(m) { return `<span class="lamps" aria-hidden="true">${m.lamps.map((s) => `<i class="${s}"></i>`).join('')}</span>`; }
+function sparkHtml(m, w0, w1) {
+  const N = 28;
+  const bins = new Array(N).fill(0);
+  for (const t of m.times) { if (t < w0 || t > w1) continue; bins[Math.min(N - 1, Math.floor(((t - w0) / (w1 - w0)) * N))] += 1; }
+  const max = Math.max(1, ...bins);
+  const pts = bins.map((b, i) => [((i + 0.5) / N) * 100, 17 - (Math.sqrt(b) / Math.sqrt(max)) * 15]);
+  const d = `M${pts.map((p) => `${p[0].toFixed(1)},${p[1].toFixed(1)}`).join(' L')}`;
+  return `<svg viewBox="0 0 100 18" preserveAspectRatio="none" aria-hidden="true"><path class="area" d="${d} L100,18 L0,18 Z"/><path d="${d}" vector-effect="non-scaling-stroke"/></svg>`;
+}
+function pipsHtml(m) {
+  const j = m.job;
+  const fam = (t) => modelFamily((j.models || {})[roleShort(t)]);
+  const run = (j.running_agents || []).slice(0, 3).map((a) => `<span class="pip live ${fam(a.agent_type)}" title="${esc(roleShort(a.agent_type))} running since ${esc(fmtClock(a.since))}">${esc(modelLetter((j.models || {})[roleShort(a.agent_type)]))}</span>`);
+  const stale = (j.stale_agents || []).length && m.bucket !== 'done' ? [`<span class="pip stale" title="${(j.stale_agents || []).length} agent(s) started but never reported back: their session probably ended">?</span>`] : [];
+  const more = (j.running_agents || []).length > 3 ? `<span class="nest">+${j.running_agents.length - 3}</span>` : '';
+  return run.concat(stale).join('') + more;
+}
+function nowCell(m) {
+  const j = m.job;
+  if (m.bucket === 'turn') return `<b>${esc(m.gate ? stepName(m.gate) : m.stepLabel)}</b><span class="w" data-since="${m.waitSince || ''}">waits ${esc(shortAgo(nowMs() - (m.waitSince || m.updated)))}</span>`;
+  if (m.bucket === 'parked') return `<b>Parked · ${esc(stepName(m.S.pos))}</b><span class="w">${esc(((j.park && j.park.reason) || '').slice(0, 60))}</span>`;
+  if (m.bucket === 'done') return `<b>${esc(j.pr && j.pr.merged ? 'Merged · closed' : 'Closed')}</b><span class="w">${esc(m.closed ? fmtDate(j.closed_at) : '')}</span>`;
+  if (j.status === 'cancelled' || j.status === 'abandoned') return `<b>${esc(j.status === 'cancelled' ? 'Cancelled' : 'Abandoned')}</b><span class="w">at ${esc(stepName(m.S.pos))}</span>`;
+  return `<b>${esc(m.stepLabel)}</b><span class="w">${esc(m.sum[1].replace(/^.*· /, ''))}</span>`;
+}
+function rowHtml(m, depth, win) {
+  const j = m.job;
+  const risk = String(j.risk || '').toLowerCase();
+  const nest = depth ? '<span class="nest" aria-hidden="true">↳</span>' : j.followup_of ? `<span class="nest" title="Follow-up to ${esc(j.followup_of)}">⇢ ${esc(j.followup_of)}</span>` : j.epic ? '<span class="nest">EPIC</span>' : '';
+  const flags = [m.loops ? `<span class="rw" title="${m.loops} return trip(s): fix rounds, re-proofs, denials">↺${m.loops}</span>` : '', m.retries ? `<span class="rt" title="${m.retries} agent retry(ies)">↻${m.retries}</span>` : '', m.findingsTotal ? `<span class="${m.findings ? 'fd' : ''}" title="${m.findingsTotal} inspector finding(s), ${m.findings} open">⚑${m.findingsTotal}</span>` : ''].join('');
+  const tasks = m.tasksTotal ? `<span class="tbar" aria-hidden="true"><i style="width:${Math.round((m.tasksPassed / m.tasksTotal) * 100)}%"></i></span><span>${m.tasksPassed}/${m.tasksTotal} tasks</span>` : '<span>—</span>';
+  return `<span class="bc"><i class="beacon"></i></span>
+    <span class="bid">${esc(m.id)}${unreadOf(m) ? '<i class="unread" title="Changed since you last opened it"></i>' : ''}</span>
+    <span class="btt">${nest}<span class="bti" title="${esc(j.title)}">${esc(j.title)}</span></span>
+    <span class="brc"><span class="rchip rk-${esc(risk)}" title="recipe ${esc(j.recipe || '')} · ${esc(j.risk || '')} risk"><i></i><span>${esc(j.recipe || '—')}</span></span></span>
+    ${lampsHtml(m)}
+    <span class="bnow">${nowCell(m)}</span>
+    <span class="bpip">${pipsHtml(m)}</span>
+    <span class="btask">${tasks}</span>
+    <span class="bflags">${flags}</span>
+    <span class="bspark" title="Activity over the last three days">${sparkHtml(m, win[0], win[1])}</span>
+    <span class="bago" data-ago="${m.updated}" title="Updated ${esc(fmtDate(j.updated_at))}">${esc(shortAgo(nowMs() - m.updated))}</span>`;
+}
+const ROWS = new Map(); // id → { el, sig }
+const GHEAD = new Map();
+function rowLabel(m) { return `${m.id}, ${m.job.title}. ${BUCKET_NAME[m.bucket]}: ${m.sum[1]}. Recipe ${m.job.recipe}.`; }
+function renderBoard({ live = false } = {}) {
+  const host = $('#board');
+  const { groups, vis, all } = computeGroups();
+  $('#bcount').textContent = `${vis.length} of ${all.length} job${all.length === 1 ? '' : 's'}`;
+  if (!DATA || !DATA.jobs || !DATA.jobs.length) { boardEmpty(host); return; }
+  if (!vis.length) {
+    ROWS.clear(); GHEAD.clear();
+    host.innerHTML = `<div class="bempty"><h2>Nothing matches</h2><p>No job fits <code>${esc(UI.q || 'these filters')}</code>${Object.values(UI.facets).some((s) => s.size) ? ' with the filters on the left' : ''}.</p><button type="button" class="tbtn" data-act="clear">Clear filters</button></div>`;
+    host.querySelector('[data-act="clear"]').addEventListener('click', clearFilters);
+    return;
+  }
+  const end = Date.parse(DATA.generated_at) || nowMs();
+  const win = [end - 3 * 864e5, end];
+  const animate = live && !reduceMotion && UI.view === 'board';
+  const before = new Map();
+  if (animate) for (const [id, r] of ROWS) if (r.el.isConnected) before.set(id, r.el.getBoundingClientRect().top);
+  const focused = document.activeElement && document.activeElement.closest && document.activeElement.closest('.brow, .bgh');
+  const nodes = [];
+  const keep = new Set();
+  const changed = [];
+  for (const g of groups) {
+    const collapsed = UI.collapsed.has(g.key) && !UI.q;
+    let h = GHEAD.get(g.key);
+    if (!h) {
+      h = document.createElement('button');
+      h.type = 'button';
+      h.className = 'bgh';
+      h.dataset.g = g.key;
+      h.addEventListener('click', () => { if (UI.collapsed.has(g.key)) UI.collapsed.delete(g.key); else UI.collapsed.add(g.key); renderBoard(); saveHash(); });
+      GHEAD.set(g.key, h);
+    }
+    h.className = `bgh${g.bucket ? ` g-${g.bucket}` : ''}`;
+    h.setAttribute('aria-expanded', String(!collapsed));
+    const sub = g.bucket === 'turn' ? `oldest waits ${shortAgo(nowMs() - Math.min(...g.ms.map((m) => m.waitSince || m.updated)))}` : g.bucket === 'running' ? `${g.ms.reduce((n, m) => n + (m.job.running_agents || []).length, 0)} agent(s) on the floor` : g.bucket === 'done' && collapsed ? 'collapsed · click to show' : '';
+    h.innerHTML = `<svg class="chev" viewBox="0 0 10 10" aria-hidden="true"><path d="M1.5 3 L5 7 L8.5 3" fill="none" stroke="currentColor" stroke-width="1.6"/></svg><span class="gl">${esc(g.label)}</span><span class="gn">${g.ms.length}</span><span class="gs">${esc(sub)}</span><span class="gr"></span>`;
+    nodes.push(h);
+    keep.add(`g:${g.key}`);
+    if (collapsed) continue;
+    for (const { m, depth } of g.rows) {
+      const sig = `${m.rev}|${unreadOf(m)}|${depth}|${m.bucket}|${UI.cursor === m.id}`;
+      let r = ROWS.get(m.id);
+      if (!r) {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.setAttribute('role', 'listitem');
+        b.dataset.id = m.id;
+        b.addEventListener('click', () => openJob(m.id, { user: true }));
+        b.addEventListener('focus', () => { if (UI.cursor !== m.id) { UI.cursor = m.id; paintCursor(); if (UI.wireJob) renderWire(); } });
+        r = { el: b, sig: '' };
+        ROWS.set(m.id, r);
+      }
+      if (r.sig !== sig) {
+        const wasRev = r.sig.split('|')[0];
+        r.el.className = `brow b-${m.bucket}${depth ? ' d1' : ''}${UI.cursor === m.id ? ' cur' : ''}`;
+        r.el.innerHTML = rowHtml(m, depth, win);
+        r.el.setAttribute('aria-label', rowLabel(m));
+        if (live && wasRev && wasRev !== m.rev) changed.push(r.el);
+        r.sig = sig;
+      }
+      nodes.push(r.el);
+      keep.add(m.id);
+    }
+  }
+  for (const id of [...ROWS.keys()]) if (!keep.has(id)) ROWS.delete(id);
+  for (const k of [...GHEAD.keys()]) if (!keep.has(`g:${k}`)) GHEAD.delete(k);
+  host.replaceChildren(...nodes);
+  if (focused && focused.isConnected) focused.focus({ preventScroll: true });
+  for (const el2 of changed) { el2.classList.remove('sweep'); void el2.offsetWidth; el2.classList.add('sweep'); setTimeout(() => el2.classList.remove('sweep'), 1000); }
+  if (animate) {
+    for (const [id, top] of before) {
+      const r = ROWS.get(id);
+      if (!r || !r.el.isConnected) continue;
+      const dy = top - r.el.getBoundingClientRect().top;
+      if (Math.abs(dy) > 2) r.el.animate([{ transform: `translateY(${dy}px)` }, { transform: 'none' }], { duration: 240, easing: 'cubic-bezier(.2,.7,.2,1)' });
+    }
+  }
+}
+function paintCursor() {
+  for (const [id, r] of ROWS) r.el.classList.toggle('cur', id === UI.cursor);
+}
+function boardEmpty(host) {
+  ROWS.clear(); GHEAD.clear();
+  host.innerHTML = !DATA
+    ? `<div class="bempty"><h2>No factory data in this page</h2><p>This is the console's template. Run <code>factory console</code> in a repository that uses the factory: it writes <code>.factory/console.html</code> with every job. Or run <code>factory console --serve</code> to watch them live.</p><div class="reply"><code>factory console --serve</code><button type="button" class="copy" data-copy="factory console --serve">Copy</button></div><p>Meanwhile the recipe map shows the whole factory.</p><button type="button" class="tbtn" data-go="plan">Open the recipe map</button></div>`
+    : `<div class="bempty"><h2>No jobs on the floor yet</h2><p>Start one in Claude Code. ${LIVE.on ? 'It appears here as soon as the CLI writes it.' : 'Then run <code>factory console</code> again, or <code>factory console --serve</code> to watch it live.'}</p><div class="reply"><code>/factory:start &lt;what you want&gt;</code><button type="button" class="copy" data-copy="/factory:start ">Copy</button></div><button type="button" class="tbtn" data-go="plan">Open the recipe map</button></div>`;
+  bindCopies(host);
+  host.querySelectorAll('[data-go]').forEach((b) => b.addEventListener('click', () => setView(b.dataset.go)));
+}
+function bindCopies(root) {
+  root.querySelectorAll('[data-copy]').forEach((b) => {
+    if (b.dataset.bound) return;
+    b.dataset.bound = '1';
+    b.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const txt = b.dataset.copy;
+      const label0 = b.textContent;
+      const done = () => { b.textContent = 'Copied'; b.classList.add('done'); setTimeout(() => { b.textContent = label0; b.classList.remove('done'); }, 1400); };
+      const fallback = () => { const c = b.previousElementSibling; if (c) { const r = document.createRange(); r.selectNodeContents(c); const s = getSelection(); s.removeAllRanges(); s.addRange(r); } b.textContent = 'Selected: press ⌘C'; };
+      try { navigator.clipboard.writeText(txt).then(done, fallback); } catch (err) { fallback(); }
+    });
+  });
+}
+
+// ---------- KPI tiles and facet rail
+function renderKpis() {
+  const all = [...MODELS.values()];
+  const n = (b) => all.filter((m) => m.bucket === b);
+  const sel = facetSet('status');
+  const sub = {
+    turn: (l) => (l.length ? `oldest waits ${shortAgo(nowMs() - Math.min(...l.map((m) => m.waitSince || m.updated)))}` : 'nothing waits on you'),
+    running: (l) => { const a = l.reduce((k, m) => k + (m.job.running_agents || []).length, 0); return l.length ? `${a} agent${a === 1 ? '' : 's'} on the floor` : 'the floor is quiet'; },
+    parked: (l) => (l.length ? `${l.map((m) => m.id).slice(0, 3).join(' · ')}` : 'none parked'),
+    stopped: (l) => (l.length ? `${l.filter((m) => m.job.status === 'cancelled').length} cancelled · ${l.filter((m) => m.job.status === 'abandoned').length} abandoned` : 'none stopped'),
+    done: (l) => { const d = l.filter((m) => m.closed && nowMs() - m.closed < 864e5).length; return l.length ? `${d} closed in the last day` : 'none closed yet'; },
+  };
+  $('#kpis').innerHTML = BUCKETS.map(([k, name], i) => {
+    const l = n(k);
+    return `<button type="button" class="kpi k-${k}${l.length ? '' : ' zero'}" data-b="${k}" aria-pressed="${sel.has(k)}" aria-label="${esc(name)}: ${l.length}. Press to ${sel.has(k) ? 'remove' : 'add'} this filter (key ${i + 1})"><span class="n">${l.length}</span><span class="k"><i></i>${esc(name)}</span><span class="s">${esc(sub[k](l))}</span><span class="hk" aria-hidden="true"><kbd>${i + 1}</kbd></span></button>`;
+  }).join('');
+  $('#kpis').querySelectorAll('.kpi').forEach((b) => b.addEventListener('click', () => toggleFacet('status', b.dataset.b)));
+  const turn = n('turn').length;
+  document.title = `${turn ? `(${turn}) ` : ''}Factory Console${DATA && DATA.project ? ` · ${DATA.project}` : ''}`;
+  $('#mark-a').className = turn ? 'a' : '';
+}
+function renderRail() {
+  const all = [...MODELS.values()];
+  const pq = parseQ(UI.q);
+  const base = all.filter((m) => qOk(m, pq));
+  const html = [];
+  for (const [k, title, fn, name, order] of FACETS) {
+    const sub = base.filter((m) => facetOk(m, k));
+    const counts = new Map();
+    for (const m of all) { const v = fn(m); if (v !== null && v !== undefined && !counts.has(v)) counts.set(v, 0); }
+    for (const m of sub) { const v = fn(m); if (v !== null && v !== undefined) counts.set(v, (counts.get(v) || 0) + 1); }
+    if (!counts.size) continue;
+    const keys = [...counts.keys()].sort((a, b) => (order ? (order.indexOf(a) + 1 || 99) - (order.indexOf(b) + 1 || 99) : 0) || (counts.get(b) - counts.get(a)) || String(a).localeCompare(String(b)));
+    const max = Math.max(1, ...counts.values());
+    const s = UI.facets[k];
+    html.push(`<section class="facet"><h3><span>${esc(title)}</span>${s && s.size ? `<button type="button" data-clear="${k}">clear</button>` : ''}</h3>${keys.map((v) => {
+      const c = counts.get(v);
+      const on = Boolean(s && s.has(v));
+      return `<button type="button" class="fopt${c ? '' : ' zero'}" data-f="${k}" data-v="${esc(v)}" aria-pressed="${on}" style="--w:${Math.round((c / max) * 100)}%"><span class="sw2"></span><span class="fl${k === 'recipe' || k === 'gate' ? ' mono' : ''}">${esc(name ? name(v) : v)}</span><span class="fc">${c}</span></button>`;
+    }).join('')}</section>`);
+  }
+  html.push(`<section class="facet"><h3><span>Tokens</span></h3><p class="label" style="text-transform:none;letter-spacing:0;line-height:1.5;margin:0">Type in the box above, e.g. <code>is:waiting</code> <code>has:rework</code> <code>agent:builder</code> <code>since:2d</code>, or <kbd>⌘K</kbd> for everything.</p></section>`);
+  $('#rail').innerHTML = html.join('');
+  $('#rail').querySelectorAll('.fopt').forEach((b) => b.addEventListener('click', () => toggleFacet(b.dataset.f, b.dataset.v)));
+  $('#rail').querySelectorAll('[data-clear]').forEach((b) => b.addEventListener('click', () => { UI.facets[b.dataset.clear] = new Set(); refreshFloor(); }));
+}
+function toggleFacet(k, v) {
+  const s = facetSet(k);
+  if (s.has(v)) s.delete(v); else s.add(v);
+  if (k === 'status' && s.has(v)) UI.collapsed.delete(v);
+  if (UI.view !== 'board' && UI.view !== 'lines') setView('board');
+  refreshFloor();
+}
+function clearFilters() { UI.facets = {}; UI.q = ''; $('#q').value = ''; refreshFloor(); }
+function renderQchips() {
+  const chips = [];
+  for (const [k, title, , name] of FACETS) for (const v of UI.facets[k] || []) chips.push(`<button type="button" class="qchip" data-f="${k}" data-v="${esc(v)}" aria-label="Remove filter ${esc(title)} ${esc(v)}"><b>${esc(title.toLowerCase())}</b>${esc(name ? name(v) : v)} ×</button>`);
+  $('#qchips').innerHTML = chips.join('');
+  $('#qchips').querySelectorAll('.qchip').forEach((b) => b.addEventListener('click', () => toggleFacet(b.dataset.f, b.dataset.v)));
+}
+function refreshFloor(opts = {}) {
+  if (!UI.booted) return;
+  renderKpis();
+  renderRail();
+  renderQchips();
+  renderBoard(opts);
+  if (UI.view === 'lines') renderLines();
+  if (UI.view === 'job') renderJList();
+  saveHash();
+}
+
+// ---------- the wire: every timeline item of every job, newest first
+const WIRE_CACHE = new Map(); // id → { rev, items }
+const WIRE_SEEN = new Set();
+let wireQueued = 0;
+function wireGlyph(it) {
+  switch (it.type) {
+    case 'route': return it.action === 'parked' ? ['⏸', 'park'] : it.action === 'gate' || it.action === 'wait' ? ['◇', 'you'] : ['→', 'route'];
+    case 'result': return it.ok ? ['✓', 'ok'] : it.outcome === 'ask' ? ['?', 'you'] : ['✕', 'bad'];
+    case 'agents': return ['◆', 'agents'];
+    case 'human': return it.action === 'deny' ? ['✋', 'bad'] : it.action === 'resume' ? ['▶', 'you'] : ['✓', 'you'];
+    case 'guard': case 'refused': case 'stop_block': return ['⛔', 'bad'];
+    case 'hook_error': return ['⚠', 'bad'];
+    case 'unparsed': return ['?', 'you'];
+    case 'park': return ['⏸', 'park'];
+    case 'stopped': return ['■', 'bad'];
+    case 'amend': return ['✎', 'amend'];
+    case 'spawn': return ['⇢', 'route'];
+    case 'created': return ['＋', 'you'];
+    case 'error': return ['!', 'bad'];
+    case 'finding': return ['⚑', 'insp'];
+    default: return ['·', ''];
+  }
+}
+function wireItems(job) {
+  const rev = jobRev(job);
+  const c = WIRE_CACHE.get(job.id);
+  if (c && c.rev === rev) return c.items;
+  const items = job.timeline.map((it, i) => {
+    const [head, sub] = describe(it, job);
+    return { key: `${job.id}|${i}|${it.t}|${it.type}`, job: job.id, i, t: Date.parse(it.t), it, head, sub };
+  });
+  for (const f of job.inspector || []) {
+    const t = Date.parse(f.anchor_t || '') || Date.parse(job.updated_at);
+    items.push({ key: `${job.id}|F|${f.id}`, job: job.id, i: null, t, it: { type: 'finding' }, head: `Inspector ${f.id} (${f.severity}): ${f.summary}`, sub: f.question, finding: f });
+  }
+  WIRE_CACHE.set(job.id, { rev, items });
+  return items;
+}
+function wireAll() {
+  const out = [];
+  for (const job of (DATA && DATA.jobs) || []) out.push(...wireItems(job));
+  // factory-wide: hook errors and unparsed replies outside any job, and the inspector's health findings
+  ((DATA && DATA.factory_events) || []).forEach((e, k) => out.push({ key: `F|e|${k}|${e.t}`, job: null, i: null, t: Date.parse(e.t), it: { type: e.type }, head: e.text, sub: '' }));
+  for (const f of (DATA && DATA.inspector && DATA.inspector.health) || []) out.push({ key: `F|h|${f.id}`, job: null, i: null, t: Date.parse(f.at || '') || Date.parse(DATA.generated_at), it: { type: 'finding' }, head: `Health ${f.id} (${f.severity}, ${f.status}): ${f.summary}`, sub: f.question, finding: f });
+  return out.sort((a, b) => b.t - a.t || (b.i || 0) - (a.i || 0));
+}
+function wireFocusJob() { return UI.view === 'job' && LV.job ? LV.job.id : UI.cursor; }
+function renderWire({ live = false } = {}) {
+  const wire = $('#wire');
+  wire.classList.toggle('paused', UI.wirePaused);
+  wire.classList.toggle('static', !LIVE.on);
+  $('#w-pause').setAttribute('aria-pressed', String(UI.wirePaused));
+  $('#w-pause').textContent = UI.wirePaused ? 'Paused' : 'Pause';
+  $('#w-job').setAttribute('aria-pressed', String(UI.wireJob));
+  let items = wireAll();
+  const fj = wireFocusJob();
+  $('#w-job').textContent = UI.wireHealth ? 'Health only' : UI.wireJob && fj ? `Only ${fj}` : 'This job';
+  if (UI.wireHealth) items = items.filter((x) => !x.job || x.it.type === 'hook_error' || x.it.type === 'stop_block' || x.it.type === 'unparsed');
+  else if (UI.wireJob && fj) items = items.filter((x) => x.job === fj);
+  if (live && UI.wirePaused) {
+    wireQueued = items.filter((x) => !WIRE_SEEN.has(x.key)).length;
+    const b = $('#w-new');
+    b.hidden = !wireQueued;
+    b.textContent = `${wireQueued} new event${wireQueued === 1 ? '' : 's'} · resume`;
+    return;
+  }
+  $('#w-new').hidden = true;
+  const firstPaint = !WIRE_SEEN.size;
+  const html = [];
+  let day = '';
+  for (const x of items.slice(0, UI.wireLimit)) {
+    const d = dayKey(x.t);
+    if (d !== day) { html.push(`<li class="wday">${esc(d)}</li>`); day = d; }
+    const [g, cls] = wireGlyph(x.it);
+    const fresh = !firstPaint && live && !WIRE_SEEN.has(x.key);
+    const m = MODELS.get(x.job);
+    html.push(`<li><button type="button" class="witem w-${cls}${fresh ? ' fresh' : ''}" data-j="${esc(x.job)}" data-i="${x.i === null ? '' : x.i}" title="${esc(x.sub || '')}"><span class="wt">${esc(fmtClock(new Date(x.t).toISOString()).slice(0, 5))}</span><span class="wg" aria-hidden="true">${g}</span><span class="wb"><span class="wh">${esc(x.head)}</span><span class="wj">${x.job ? `<b>${esc(x.job)}</b> · ${esc(m ? m.job.title : '')}` : '<b>factory</b> · health'}</span></span></button></li>`);
+  }
+  for (const x of items) WIRE_SEEN.add(x.key);
+  if (items.length > UI.wireLimit) html.push(`<li><button type="button" class="tbtn wmore" id="w-more">Show ${Math.min(200, items.length - UI.wireLimit)} more of ${items.length - UI.wireLimit}</button></li>`);
+  if (!items.length) html.push(`<li class="wday" style="position:static">${DATA ? 'Nothing on the wire yet.' : 'No factory data in this page.'}</li>`);
+  $('#wlist').innerHTML = html.join('');
+  $('#wlist').querySelectorAll('.witem').forEach((b) => b.addEventListener('click', () => {
+    if (!b.dataset.j) return;
+    const i = b.dataset.i === '' ? null : +b.dataset.i;
+    openJob(b.dataset.j, { user: true, item: i, tab: 'line' });
+  }));
+  const more = $('#w-more');
+  if (more) more.addEventListener('click', () => { UI.wireLimit += 200; renderWire(); });
+}
+
+// ---------- line map: every job as a transit line on one time axis
+const LM = { k: 0, v0: 0, squeeze: true, rowH: 34, scale: null, rows: [], raf: 0, fitted: false, hov: null };
+function lmScale(models) {
+  const T = new Set();
+  const now = Math.max(nowMs(), Date.parse((DATA && DATA.generated_at) || 0) || 0);
+  for (const m of models) { T.add(m.created); for (const t of m.times) T.add(t); }
+  T.add(now);
+  const ts = [...T].filter((x) => x === x).sort((a, b) => a - b);
+  const CAP = 25 * 60e3;
+  const V = [0];
+  const breaks = [];
+  for (let i = 1; i < ts.length; i++) {
+    const gap = ts[i] - ts[i - 1];
+    const g2 = LM.squeeze ? Math.min(gap, CAP + Math.log1p(gap / CAP) * 4 * 60e3) : gap;
+    V.push(V[i - 1] + g2);
+    if (LM.squeeze && gap > CAP * 2) breaks.push({ v: V[i - 1] + g2 / 2, gap });
+  }
+  const find = (arr, x) => { let lo = 0; let hi = arr.length - 1; let r = -1; while (lo <= hi) { const mid = (lo + hi) >> 1; if (arr[mid] <= x) { r = mid; lo = mid + 1; } else hi = mid - 1; } return r; };
+  const toV = (t) => {
+    const i = find(ts, t);
+    if (i < 0) return V[0] - (ts[0] - t);
+    if (i >= ts.length - 1) return V[V.length - 1] + (t - ts[ts.length - 1]);
+    const span = ts[i + 1] - ts[i];
+    return V[i] + (span ? ((t - ts[i]) / span) * (V[i + 1] - V[i]) : 0);
+  };
+  const fromV = (v) => {
+    const i = find(V, v);
+    if (i < 0) return ts[0] - (V[0] - v);
+    if (i >= V.length - 1) return ts[ts.length - 1] + (v - V[V.length - 1]);
+    const span = V[i + 1] - V[i];
+    return ts[i] + (span ? ((v - V[i]) / span) * (ts[i + 1] - ts[i]) : 0);
+  };
+  return { toV, fromV, vmin: V[0], vmax: V[V.length - 1], breaks, now };
+}
+const LINE_COLOR = { turn: 'var(--signal)', running: 'var(--live)', parked: 'var(--skill)', stopped: 'var(--stop)', done: 'var(--track)' };
+const TRACK = (stage) => Math.max(0, ORDER.indexOf(stage));
+function lmWidth() { return Math.max(200, $('#lm-plot').clientWidth); }
+function lmFit() {
+  const s = LM.scale;
+  if (!s) return;
+  const w = lmWidth() - 36;
+  const span = Math.max(60e3, s.vmax - s.vmin);
+  LM.k = w / span;
+  LM.v0 = s.vmin - 14 / LM.k;
+  LM.fitted = true;
+}
+const lmX = (t) => (LM.scale.toV(t) - LM.v0) * LM.k;
+function lmZoom(f, px) {
+  const w = lmWidth();
+  px = px === undefined ? w / 2 : px;
+  const v = LM.v0 + px / LM.k;
+  const s = LM.scale;
+  const minK = (w - 36) / Math.max(60e3, s.vmax - s.vmin) / 1.5;
+  LM.k = Math.max(minK, Math.min(w / (5 * 60e3), LM.k * f));
+  LM.v0 = v - px / LM.k;
+  lmPaint();
+}
+function renderLines() {
+  if (UI.view !== 'lines') return;
+  computeGroups();
+  const ms = VISIBLE.map((id) => MODELS.get(id)).filter(Boolean);
+  LM.rows = ms;
+  LM.scale = lmScale(ms.length ? ms : [...MODELS.values()]);
+  if (!LM.fitted) lmFit();
+  $('#lmcount').textContent = `${ms.length} line${ms.length === 1 ? '' : 's'} · ${LM.squeeze ? 'quiet hours squeezed' : 'linear time'} · drag to pan, ctrl + scroll to zoom`;
+  $('#lm-sizer').style.height = `${ms.length * LM.rowH}px`;
+  $('#lm-sq').setAttribute('aria-pressed', String(LM.squeeze));
+  $('#lm-lin').setAttribute('aria-pressed', String(!LM.squeeze));
+  lmPaint();
+}
+function lmStations(m) {
+  // stations, waits, parks and the end of the line, from the job's own timeline
+  const j = m.job;
+  const tl = j.timeline;
+  const st = [];
+  let track = 0;
+  st.push({ t: m.created, track: 0, kind: 'start', i: 0, step: 'request' });
+  const waits = [];
+  const parks = [];
+  let openWait = null;
+  let openPark = null;
+  tl.forEach((it, i) => {
+    const t = Date.parse(it.t);
+    if (it.type === 'route' && it.step) {
+      const def = j.steps.find((s) => s.id === it.step);
+      const nt = TRACK((def && def.stage) || it.stage || 'build');
+      const back = j.steps.findIndex((s) => s.id === it.step) < j.steps.findIndex((s) => s.id === (st[st.length - 1].step || 'request'));
+      if (openWait) { openWait.t1 = t; openWait = null; }
+      const gate = Boolean(def && (def.human || def.kind === 'gate'));
+      st.push({ t, track: nt, kind: gate ? 'gate' : 'stop', i, step: it.step, back, rule: it.rule });
+      if (gate || it.action === 'gate' || it.action === 'wait') { openWait = { t0: t, t1: null, track: nt }; waits.push(openWait); }
+      track = nt;
+    } else if (it.type === 'human') {
+      if (openWait && ['approve', 'deny', 'merged'].includes(it.action)) { openWait.t1 = t; openWait = null; }
+      if (it.action === 'resume' && openPark) { openPark.t1 = t; openPark = null; }
+    } else if (it.type === 'result' && !it.ok && it.step) {
+      const last = st[st.length - 1];
+      if (last && last.step === it.step) last.bad = true;
+      if (it.outcome === 'ask' && !openWait) { openWait = { t0: t, t1: null, track }; waits.push(openWait); }
+    } else if (it.type === 'park') {
+      openPark = { t0: t, t1: null, track, i };
+      parks.push(openPark);
+    } else if (it.type === 'spawn') st.push({ t, track, kind: 'spawn', i, job: it.job, step: st[st.length - 1].step });
+  });
+  const end = m.bucket === 'done' ? (m.closed || m.updated) : (m.job.status === 'cancelled' || m.job.status === 'abandoned') ? Math.max(m.updated, st[st.length - 1].t) : LM.scale.now;
+  return { st, waits, parks, end, track };
+}
+function lmPaint() {
+  cancelAnimationFrame(LM.raf);
+  LM.raf = requestAnimationFrame(lmPaintNow);
+}
+function lmPaintNow() {
+  const s = LM.scale;
+  if (!s || UI.view !== 'lines') return;
+  const W = lmWidth();
+  const rowH = LM.rowH;
+  const scroller = $('#lm-scroll');
+  const top = scroller.scrollTop;
+  const vh = scroller.clientHeight || 600;
+  const a = Math.max(0, Math.floor(top / rowH) - 6);
+  const b = Math.min(LM.rows.length, Math.ceil((top + vh) / rowH) + 6);
+  // labels (only those in view)
+  $('#lm-labels').innerHTML = LM.rows.slice(a, b).map((m, q) => `<button type="button" class="lml b-${m.bucket}${LM.hov === m.id ? ' hov' : ''}" style="top:${(a + q) * rowH}px" data-id="${esc(m.id)}" aria-label="${esc(rowLabel(m))}"><i class="beacon"></i><span class="bid">${esc(m.id)}</span><span class="bti">${esc(m.job.title)}</span></button>`).join('');
+  const svg = $('#lm-svg');
+  svg.setAttribute('width', W);
+  svg.setAttribute('height', Math.max(1, (b - a) * rowH));
+  svg.style.top = `${a * rowH}px`;
+  const out = [];
+  const pos = new Map();
+  const X = (t) => lmX(t);
+  const yOf = (r, track) => (r - a) * rowH + 5 + track * 3.45;
+  for (let r = a; r < b; r++) {
+    const m = LM.rows[r];
+    const y0 = (r - a) * rowH;
+    out.push(`<rect class="rowbg${r % 2 ? ' alt' : ''}${LM.hov === m.id ? ' hov' : ''}" x="0" y="${y0}" width="${W}" height="${rowH}"/>`);
+    const L = lmStations(m);
+    pos.set(m.id, { r, L });
+    const lc = LINE_COLOR[m.bucket];
+    const g = [`<g style="--lc:${lc}">`];
+    // the line: horizontal at each stage's track, 45° bends into the next station
+    let d = '';
+    const backs = [];
+    L.st.forEach((p, q) => {
+      const x = X(p.t);
+      const y = yOf(r, p.track);
+      if (!q) { d = `M${x.toFixed(1)},${y.toFixed(1)}`; return; }
+      const prev = L.st[q - 1];
+      const py = yOf(r, prev.track);
+      const dy = Math.abs(y - py);
+      const px = X(prev.t);
+      const bx = Math.max(px, x - dy);
+      const seg = `M${px.toFixed(1)},${py.toFixed(1)} L${bx.toFixed(1)},${py.toFixed(1)} L${x.toFixed(1)},${y.toFixed(1)}`;
+      if (p.back) backs.push({ seg, x, y, px, py });
+      d += ` L${bx.toFixed(1)},${py.toFixed(1)} L${x.toFixed(1)},${y.toFixed(1)}`;
+    });
+    const last = L.st[L.st.length - 1];
+    const ex = X(L.end);
+    const ey = yOf(r, last.track);
+    d += ` L${Math.max(ex, X(last.t)).toFixed(1)},${ey.toFixed(1)}`;
+    g.push(`<path class="ln" d="${d}"/>`);
+    for (const bk of backs) {
+      g.push(`<path class="ln rtn" d="${bk.seg}"/>`);
+      const lx = Math.min(bk.x, bk.px + 4);
+      g.push(`<path class="loop" d="M${(bk.x - 1).toFixed(1)},${(bk.y - 4).toFixed(1)} C${(bk.x - 2).toFixed(1)},${(y0 + 1).toFixed(1)} ${(lx - 10).toFixed(1)},${(y0 + 1).toFixed(1)} ${(lx - 9).toFixed(1)},${(bk.py - 3).toFixed(1)}"/>`);
+    }
+    for (const w of L.waits) {
+      const x0 = X(w.t0);
+      const x1 = X(w.t1 === null ? L.end : w.t1);
+      if (x1 - x0 < 3) continue;
+      const yy = yOf(r, w.track);
+      g.push(`<path class="ln erase" d="M${(x0 + 5).toFixed(1)},${yy.toFixed(1)} H${(x1 - 4).toFixed(1)}"/><path class="ln wait" d="M${(x0 + 5).toFixed(1)},${yy.toFixed(1)} H${(x1 - 4).toFixed(1)}"/>`);
+    }
+    for (const p of L.parks) {
+      const x0 = X(p.t0);
+      const x1 = X(p.t1 === null ? L.end : p.t1);
+      const yy = yOf(r, p.track);
+      if (x1 - x0 > 6) g.push(`<path class="ln erase" d="M${(x0 + 4).toFixed(1)},${yy.toFixed(1)} H${(x1 - 3).toFixed(1)}"/><path class="ln parkd" d="M${(x0 + 4).toFixed(1)},${yy.toFixed(1)} H${(x1 - 3).toFixed(1)}"/>`);
+      g.push(`<text class="pk" x="${(x0 - 3).toFixed(1)}" y="${(yy - 5).toFixed(1)}">⏸</text>`);
+    }
+    // stations
+    L.st.forEach((p) => {
+      const x = X(p.t);
+      const y = yOf(r, p.track);
+      if (x < -20 || x > W + 20) return;
+      const attrs = `data-j="${esc(m.id)}" data-i="${p.i}"`;
+      if (p.kind === 'gate') g.push(`<circle class="gate1" cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="5" ${attrs}/><circle class="gate2" cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="2.2"/>`);
+      else if (p.kind === 'spawn') g.push(`<circle class="stn" cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="3" ${attrs}/>`);
+      else g.push(`<circle class="stn${p.bad ? ' bad' : ''}" cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="${p.kind === 'start' ? 3.6 : 3}" ${attrs}/>`);
+    });
+    // end of the line
+    if (m.bucket === 'done') g.push(`<circle class="term" cx="${ex.toFixed(1)}" cy="${ey.toFixed(1)}" r="5.5"/><circle cx="${ex.toFixed(1)}" cy="${ey.toFixed(1)}" r="2" style="fill:var(--paper)"/>`);
+    else if (m.job.status === 'cancelled' || m.job.status === 'abandoned') g.push(`<path class="buf" d="M${(ex + 3).toFixed(1)},${(ey - 6).toFixed(1)} V${(ey + 6).toFixed(1)}"/><path class="buf" d="M${(ex + 7).toFixed(1)},${(ey - 3).toFixed(1)} V${(ey + 3).toFixed(1)}" style="stroke-width:1.6"/>`);
+    else {
+      g.push(`<circle class="head2" cx="${ex.toFixed(1)}" cy="${ey.toFixed(1)}" r="3.6"/>`);
+      if (m.bucket === 'running' || m.bucket === 'turn') g.push(`<circle class="headp" cx="${ex.toFixed(1)}" cy="${ey.toFixed(1)}" r="7"/>`);
+    }
+    g.push('</g>');
+    out.push(g.join(''));
+  }
+  // transfers to follow-ups, when both lines are in view
+  for (const [, { r, L }] of pos) for (const p of L.st.filter((x) => x.kind === 'spawn')) {
+    const to = pos.get(p.job);
+    if (!to) continue;
+    const x0 = X(p.t);
+    const y0 = yOf(r, p.track);
+    const f = MODELS.get(p.job);
+    const x1 = X(f.created);
+    const y1 = yOf(to.r, 0);
+    out.push(`<path class="xfer" d="M${x0.toFixed(1)},${y0.toFixed(1)} C${x0.toFixed(1)},${((y0 + y1) / 2).toFixed(1)} ${x1.toFixed(1)},${((y0 + y1) / 2).toFixed(1)} ${x1.toFixed(1)},${y1.toFixed(1)}"/>`);
+  }
+  const nx = X(s.now);
+  out.push(`<line class="nowl" x1="${nx.toFixed(1)}" x2="${nx.toFixed(1)}" y1="0" y2="${(b - a) * rowH}"/>`);
+  svg.innerHTML = out.join('');
+  lmAxis(W);
+  $('#lm-labels').querySelectorAll('.lml').forEach((btn) => btn.addEventListener('click', () => openJob(btn.dataset.id, { user: true })));
+}
+function lmAxis(W) {
+  const s = LM.scale;
+  const ax = $('#lm-axis');
+  const out = [];
+  const step = W < 500 ? 96 : 140;
+  let lastDay = '';
+  const nx = (s.toV(s.now) - LM.v0) * LM.k;
+  const placed = [[nx - 22, nx + 22]]; // the top row: day names, gap sizes and NOW never overlap
+  const label = (x, txt, cls) => { const w = txt.length * 6.2 + 6; if (placed.some(([a, b]) => x < b + 4 && x + w > a - 4)) return; out.push(`<text x="${x.toFixed(1)}" y="13"${cls ? ` class="${cls}"` : ''}>${esc(txt)}</text>`); placed.push([x, x + w]); };
+  const marks = [];
+  for (const bk of s.breaks) {
+    const x = (bk.v - LM.v0) * LM.k;
+    if (x < 6 || x > W - 6 || bk.gap < 3600e3) continue;
+    marks.push({ x, bk });
+  }
+  for (let x = 24; x < W - 30; x += step) {
+    const t = s.fromV(LM.v0 + x / LM.k);
+    const d = new Date(t);
+    const day = d.toDateString();
+    out.push(`<line class="tk" x1="${x}" x2="${x}" y1="22" y2="34"/><text x="${x + 4}" y="30">${esc(d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }))}</text>`);
+    if (day !== lastDay) label(x + 4, d.toLocaleDateString([], { weekday: 'short', day: 'numeric', month: 'short' }), 'day');
+    lastDay = day;
+  }
+  for (const { x, bk } of marks) {
+    if (Math.abs(((x - 24) % step + step) % step) < 8 || Math.abs(((x - 24) % step + step) % step - step) < 8) continue;
+    out.push(`<path class="brk" d="M${(x - 5).toFixed(1)},21 l2.5,-4 l2.5,4 l2.5,-4 l2.5,4"/>`);
+    if (bk.gap > 2 * 3600e3) label(x - 4, `+${fmtDur(bk.gap).split(' ')[0]}`);
+  }
+  if (nx > 0 && nx < W) out.push(`<g class="nowt"><rect x="${nx - 18}" y="3" width="36" height="14" rx="3"/><text x="${nx}" y="13.5" text-anchor="middle">NOW</text></g>`);
+  ax.innerHTML = out.join('');
+}
+function lmTip(e) {
+  const t = e.target.closest && e.target.closest('[data-j][data-i]');
+  const tip = $('#lm-tip');
+  const plot = $('#lm-plot');
+  if (!t) { tip.hidden = true; return; }
+  const m = MODELS.get(t.dataset.j);
+  if (!m) { tip.hidden = true; return; }
+  const i = +t.dataset.i;
+  const tl = m.job.timeline;
+  const it = tl[i];
+  const step = it.step || 'request';
+  const parts = [`<div class="k2">${esc(m.id)} · ${esc(fmtDate(it.t))}</div><h4>${esc(stepName(step))}</h4>`];
+  if (it.type === 'route') parts.push(`<p>${esc(RULES[it.rule] || it.rule || '')}${it.reason ? ` — ${esc(it.reason)}` : ''}</p>`);
+  else if (it.type === 'created') parts.push(`<p>${esc(m.job.title)} → ${esc(m.job.recipe)}</p>`);
+  else if (it.type === 'spawn') parts.push(`<p>${esc(it.text)}</p>`);
+  const ags = [];
+  let res = null;
+  for (let k = i + 1; k < tl.length; k++) {
+    const x = tl[k];
+    if (x.type === 'route') break;
+    if (x.type === 'agents') ags.push(...(x.agents || []));
+    if (x.type === 'result') res = x;
+  }
+  if (ags.length) parts.push(`<div class="ag">${chipsFor(ags).map((c) => `<span class="pip ${modelFamily(c.models[0])}">${esc(modelLetter(c.models[0]))}</span><span class="nest">${esc(c.role)}${esc(c.suffix)}</span>`).join(' ')}</div>`);
+  if (res) parts.push(`<p style="color:${res.ok ? 'var(--track)' : 'var(--stop)'}">${res.ok ? '✓' : '✕'} ${esc(res.text)}</p>`);
+  tip.innerHTML = parts.join('');
+  tip.hidden = false;
+  const box = $('#lm').getBoundingClientRect();
+  const r = t.getBoundingClientRect();
+  let x = r.left - box.left + 14;
+  if (x + 310 > box.width) x = r.left - box.left - 314;
+  let y = r.top - box.top + 14;
+  if (y + tip.offsetHeight > box.height - 6) y = r.top - box.top - tip.offsetHeight - 8;
+  tip.style.left = `${Math.max(6, x)}px`;
+  tip.style.top = `${Math.max(6, y)}px`;
+  void plot;
+}
+function bindLines() {
+  const plot = $('#lm-plot');
+  const scroller = $('#lm-scroll');
+  scroller.addEventListener('scroll', lmPaint, { passive: true });
+  let drag = null;
+  let moved = false;
+  plot.addEventListener('pointerdown', (e) => { drag = { x: e.clientX, v0: LM.v0 }; moved = false; });
+  plot.addEventListener('pointermove', (e) => {
+    if (drag) {
+      const dx = e.clientX - drag.x;
+      if (Math.abs(dx) > 3) { moved = true; plot.classList.add('dragging'); if (!plot.hasPointerCapture(e.pointerId)) plot.setPointerCapture(e.pointerId); }
+      if (moved) { LM.v0 = drag.v0 - dx / LM.k; $('#lm-tip').hidden = true; lmPaint(); }
+      return;
+    }
+    lmTip(e);
+    const t = e.target.closest && e.target.closest('[data-j]');
+    const id = t ? t.dataset.j : null;
+    if (id !== LM.hov) { LM.hov = id; lmPaint(); }
+  });
+  const end = () => { drag = null; plot.classList.remove('dragging'); };
+  plot.addEventListener('pointerup', end);
+  plot.addEventListener('pointercancel', end);
+  plot.addEventListener('pointerleave', () => { $('#lm-tip').hidden = true; if (LM.hov) { LM.hov = null; lmPaint(); } });
+  plot.addEventListener('click', (e) => {
+    if (moved) return;
+    const t = e.target.closest && e.target.closest('[data-j][data-i]');
+    if (t) openJob(t.dataset.j, { user: true, item: +t.dataset.i, tab: 'line' });
+  });
+  plot.addEventListener('wheel', (e) => {
+    const box = plot.getBoundingClientRect();
+    if (e.ctrlKey || e.metaKey) { e.preventDefault(); lmZoom(Math.exp(-e.deltaY * 0.0025), e.clientX - box.left); return; }
+    if (e.shiftKey || Math.abs(e.deltaX) > Math.abs(e.deltaY)) { e.preventDefault(); LM.v0 += (e.shiftKey && !e.deltaX ? e.deltaY : e.deltaX) / LM.k; lmPaint(); }
+  }, { passive: false });
+  $('#lm-in').addEventListener('click', () => lmZoom(1.4));
+  $('#lm-out').addEventListener('click', () => lmZoom(1 / 1.4));
+  $('#lm-fit').addEventListener('click', () => { lmFit(); lmPaint(); });
+  $('#lm-sq').addEventListener('click', () => { LM.squeeze = true; LM.fitted = false; renderLines(); });
+  $('#lm-lin').addEventListener('click', () => { LM.squeeze = false; LM.fitted = false; renderLines(); });
+  scroller.addEventListener('keydown', (e) => {
+    if (e.key === '+' || e.key === '=') { e.preventDefault(); lmZoom(1.4); }
+    else if (e.key === '-') { e.preventDefault(); lmZoom(1 / 1.4); }
+    else if (e.key === '0') { e.preventDefault(); lmFit(); lmPaint(); }
+    else if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') { e.preventDefault(); LM.v0 += (e.key === 'ArrowLeft' ? -80 : 80) / LM.k; lmPaint(); }
+  });
+  window.addEventListener('resize', () => { if (UI.view === 'lines') { LM.fitted = false; renderLines(); } });
+  const sw = (cls, extra = '') => `<svg width="34" height="10" aria-hidden="true"><path d="M2,5 H32" class="${cls}" style="fill:none;stroke-width:3;stroke-linecap:round;${extra}"/></svg>`;
+  $('#lmlegend').innerHTML = [
+    `<span>${sw('', 'stroke:var(--live)')}running</span>`,
+    `<span>${sw('', 'stroke:var(--signal);stroke-dasharray:4 4')}waiting on you</span>`,
+    `<span>${sw('', 'stroke:var(--skill);stroke-dasharray:1 5')}parked</span>`,
+    `<span>${sw('', 'stroke:var(--stop)')}return trip</span>`,
+    '<span><svg width="14" height="14" aria-hidden="true"><circle cx="7" cy="7" r="5" style="fill:var(--paper);stroke:var(--signal);stroke-width:1.6"/><circle cx="7" cy="7" r="2.2" style="fill:none;stroke:var(--signal);stroke-width:1.4"/></svg>your gate</span>',
+    '<span><svg width="14" height="14" aria-hidden="true"><path d="M5,1 V13 M10,4 V10" style="stroke:var(--stop);stroke-width:3"/></svg>cancelled · abandoned</span>',
+    '<span><svg width="14" height="14" aria-hidden="true"><circle cx="7" cy="7" r="5.5" style="fill:var(--track)"/><circle cx="7" cy="7" r="2" style="fill:var(--paper)"/></svg>closed</span>',
+    `<span>${sw('', 'stroke:var(--muted);stroke-dasharray:1 4;stroke-width:1.6')}follow-up</span>`,
+    '<span class="mono">each line steps down one track per stage: request → learn</span>',
+  ].join('');
+}
+
+// ---------- the job: narrow list, header tiles and the five tabs
+function renderJList() {
+  const ids = VISIBLE.length ? VISIBLE : [...MODELS.keys()];
+  const cur = LV.job && LV.job.id;
+  $('#jlist').innerHTML = `<div class="jlh"><span class="label">${ids.length} job${ids.length === 1 ? '' : 's'}</span><span class="hint2" aria-hidden="true"><kbd>j</kbd><kbd>k</kbd></span></div>${ids.map((id) => {
+    const m = MODELS.get(id);
+    if (!m) return '';
+    return `<button type="button" class="jrow b-${m.bucket}" data-id="${esc(id)}" aria-current="${id === cur}" aria-label="${esc(rowLabel(m))}"><i class="beacon"></i><span class="bid">${esc(id)}${unreadOf(m) && id !== cur ? '<i class="unread"></i>' : ''}</span>${lampsHtml(m)}<span class="jt2">${esc(m.job.title)}</span><span class="jw2">${esc(m.bucket === 'turn' ? `Your turn · ${m.gate ? stepName(m.gate) : m.stepLabel}` : m.sum[1])}</span></button>`;
+  }).join('')}`;
+  $('#jlist').querySelectorAll('.jrow').forEach((b) => b.addEventListener('click', () => openJob(b.dataset.id, { user: true })));
+  const on = $('#jlist').querySelector('[aria-current="true"]');
+  if (on) { const l = $('#jlist'); const t = on.offsetTop; if (t < l.scrollTop + 40 || t > l.scrollTop + l.clientHeight - 50) l.scrollTop = t - 120; }
+}
+function setJobTab(tab, { keep } = {}) {
+  UI.jobTab = tab;
+  document.querySelectorAll('.jtabs [data-jt]').forEach((b) => b.setAttribute('aria-selected', String(b.dataset.jt === tab)));
+  $('#live-body').hidden = tab !== 'line';
+  for (const t of ['story', 'tasks', 'events', 'lessons']) $(`#jt-${t}`).hidden = t !== tab;
+  if (tab === 'line') { applyZoom(); if (!keep) renderAt(LV.t); } else stopPlay();
+  paintJobTab();
+  saveHash();
+}
+function paintJobTab() {
+  const job = LV.job;
+  if (!job) return;
+  $('#n-tasks').textContent = (job.tasks || []).length || '';
+  $('#n-events').textContent = job.timeline.length;
+  $('#n-lessons').textContent = (job.lessons || []).length || '';
+  if (UI.jobTab === 'story') renderStory();
+  else if (UI.jobTab === 'tasks') renderTasks();
+  else if (UI.jobTab === 'events') renderEvents();
+  else if (UI.jobTab === 'lessons') renderLessons();
+}
+function nowCard(job) {
+  const m = MODELS.get(job.id);
+  if (!m || m.bucket === 'done') return '';
+  const reply = (txt) => `<div class="reply"><code>${esc(txt)}</code><button type="button" class="copy" data-copy="${esc(txt)}">Copy</button></div>`;
+  const parts = [];
+  if (m.bucket === 'turn') {
+    const g = m.gate || job.pending_gate && job.pending_gate.id;
+    parts.push(`<div class="nk"><i class="beacon" style="--bk:var(--sig-amber)"></i>Now · your turn</div>`);
+    parts.push(`<p>The job waits on you at <b>${esc(g ? `${g} · ${stepName(g).replace(/^\S+ · /, '')}` : m.stepLabel)}</b>, and has for <b data-since="${m.waitSince || ''}">${esc(fmtDur(nowMs() - (m.waitSince || m.updated)))}</b>. ${esc((STEP_INFO[g] || [, ''])[1])} Reply in Claude Code:</p>`);
+    if (g && g !== 'P') { parts.push(reply(gateReply(job, g))); if (g !== 'H4') parts.push(reply(`deny ${job.id} <what must change>`)); }
+    else parts.push('<p>Answer the questions in chat; the round runs again with your answers.</p>');
+  } else if (m.bucket === 'parked') {
+    parts.push(`<div class="nk"><i class="beacon" style="--bk:var(--skill)"></i>Now · parked</div><p>${esc((job.park && job.park.reason) || 'Parked.')} Fix what the reason names, then reply:</p>${reply(`resume ${job.id}`)}`);
+  } else if (m.bucket === 'stopped') {
+    parts.push(`<div class="nk"><i class="beacon" style="--bk:var(--sig-red)"></i>Now · ${esc(m.sum[1].toLowerCase())}</div><p>${job.status === 'active' ? `${esc(m.sum[1])}. The router will send it back or park it; nothing is needed from you yet.` : `This job is ${esc(job.status)} and stays off the line.`}</p>`);
+  } else {
+    const ra = job.running_agents || [];
+    parts.push(`<div class="nk"><i class="beacon" style="--bk:var(--live)"></i>Now · running</div><p><b>${esc(m.stepLabel)}</b> is running${ra.length ? ` with ${ra.length} agent${ra.length === 1 ? '' : 's'} on the floor (${esc(ra.map((a) => roleShort(a.agent_type)).join(', '))})` : ''}. Nothing is needed from you.${(job.stale_agents || []).length ? ` ${job.stale_agents.length} agent(s) started earlier never reported back; their session probably ended.` : ''}</p>`);
+  }
+  return `<div class="nowcard b-${m.bucket}">${parts.join('')}</div>`;
+}
+function agentsProse(agents) {
+  const cs = chipsFor(agents);
+  const fam = (mm) => ({ opus: 'Opus', sonnet: 'Sonnet', haiku: 'Haiku' })[modelFamily(mm)] || mm;
+  return cs.map((c) => `${c.n > 1 ? `${c.n}× ` : ''}${c.role}${c.models.length ? ` on ${c.models.map(fam).join(' then ')}` : ''}${c.retries ? ` (${c.retries} retr${c.retries === 1 ? 'y' : 'ies'})` : ''}${c.fails ? ` (${c.fails} failed)` : ''}`).join(', ');
+}
+function renderStory() {
+  const job = LV.job;
+  const items = LV.items;
+  const rows = LV.rows;
+  const t0 = Date.parse(items[0].t);
+  const anchored = new Map();
+  for (const f of job.inspector || []) {
+    let k = f.anchor_decision ? items.findIndex((it) => it.type === 'route' && it.id === f.anchor_decision) : -1;
+    if (k < 0 && f.anchor_t) { const at = Date.parse(f.anchor_t); for (let q = 0; q < items.length; q++) if (Date.parse(items[q].t) <= at + 1000) k = q; }
+    if (k < 0) k = items.length - 1;
+    const r = LV.rowOf[k];
+    (anchored.get(r) || anchored.set(r, []).get(r)).push(f);
+  }
+  const out = [nowCard(job)];
+  rows.forEach((row, r) => {
+    const first = items[row.first];
+    const tm = Date.parse(first.t);
+    const nextT = rows[r + 1] ? Date.parse(items[rows[r + 1].first].t) : null;
+    const [title, tags] = rowTitle(job, row);
+    const def = job.steps.find((s) => s.id === row.step);
+    const gate = def && (def.human || def.kind === 'gate') && row.kind === 'stop';
+    const S = [];
+    const it0 = items[row.first];
+    if (row.kind === 'start') S.push(`You asked for <span class="q">“${esc(job.title)}”</span>. It was filed as ${esc(job.work_type || 'work')} at <b>${esc(job.risk)}</b> risk${job.risk_proposed && job.risk_proposed !== job.risk ? ` (proposed ${esc(job.risk_proposed)})` : ''}, so the CLI chose the <code>${esc(job.recipe)}</code> recipe by rule.`);
+    else if (row.kind === 'stop') {
+      const why = RULES[row.rule] || row.rule || '';
+      if (row.back) S.push(`<span class="bad">The router sent the job back to ${esc(stepName(row.step))}</span>: ${esc(why.charAt(0).toLowerCase() + why.slice(1))}.`);
+      else if (row.rule === 'order.next_step') S.push(`Every check passed, so the router moved on to the recipe's next step${gate ? ', a gate where you decide' : ''}.`);
+      else if (why) S.push(`${esc(why)}, so the router chose ${esc(stepName(row.step))}.`);
+      if (it0.reason && it0.reason !== why) S.push(`Its note: <span class="q">“${esc(it0.reason)}”</span>.`);
+    } else if (row.kind === 'park') S.push('');
+    else if (row.kind === 'resume') S.push('');
+    else if (row.kind === 'finish') S.push(`The job came off the line ${esc(fmtDate(job.closed_at || first.t))}${job.pr && job.pr.merged ? ', merged' : ''}, ${esc(fmtDur(tm - t0))} after you asked.`);
+    for (const i of row.items) {
+      const it = items[i];
+      if (i === row.first && !['park', 'amend', 'stopped'].includes(it.type)) continue;
+      const after = fmtDur(Date.parse(it.t) - tm);
+      switch (it.type) {
+        case 'agents': S.push(`${esc(it.workflow ? `${it.workflow}${it.config ? ` (${it.config})` : ''}` : 'The hooks saw')} ran ${it.runs} agent run${it.runs === 1 ? '' : 's'}: ${esc(agentsProse(it.agents))}, done ${esc(after)} in.`); break;
+        case 'result': S.push(it.ok ? `<span class="ok">✓ ${esc(it.text)}.</span>` : it.outcome === 'ask' ? `<b class="y">? ${esc(it.text)}.</b>` : `<span class="bad">✕ ${esc(it.text)}.</span>`); for (const f of (it.findings || []).filter((x) => x.status === 'confirmed')) S.push(`<span class="bad">Confirmed ${esc(f.severity)} finding ${esc(f.id)}: ${esc(f.summary)}.</span>`); break;
+        case 'human': {
+          const g = it.gate || stepName(it.step);
+          if (it.action === 'approve') S.push(`<b class="y">You approved ${esc(g)}</b>${it.via ? ` (${esc(it.via)})` : ''}, ${esc(after)} after it was put to you.`);
+          else if (it.action === 'deny') S.push(`<b class="y">You asked for changes at ${esc(g)}</b>${it.reason ? `: <span class="q">“${esc(it.reason)}”</span>` : ''}, after ${esc(after)}.`);
+          else if (it.action === 'merged') S.push(`<b class="y">You merged it</b>${it.commit ? ` at <code>${esc(it.commit)}</code>` : ''}, ${esc(after)} after the pull request was ready.`);
+          else if (it.action === 'resume') { const pk = rows[r - 1] && rows[r - 1].kind === 'park' ? Date.parse(items[rows[r - 1].first].t) : null; S.push(`<b class="y">You resumed the job</b>${pk ? ` after ${esc(fmtDur(Date.parse(it.t) - pk))} parked` : ''}.`); }
+          else if (it.action === 'cancelled' || it.action === 'abandoned') S.push(`<b class="y">You ${esc(it.action === 'cancelled' ? 'cancelled' : 'abandoned')} the job</b>${it.reason ? `: <span class="q">“${esc(it.reason)}”</span>` : ''}.`);
+          else S.push(`<b class="y">You: ${esc(it.action)}</b>${it.reason ? ` — ${esc(it.reason)}` : ''}.`);
+          break;
+        }
+        case 'park': S.push(`<span style="color:var(--skill)">⏸ The job was parked: ${esc(it.text)}.</span>`); break;
+        case 'stopped': S.push(`<span class="bad">${esc(it.text)}.</span>`); break;
+        case 'amend': S.push(`✎ ${esc(it.text)}.`); break;
+        case 'spawn': S.push(`⇢ ${esc(it.text)}.`); break;
+        case 'guard': S.push(`<span class="bad">⚠ ${esc(it.text)}${it.who ? `, by ${esc(it.who)}` : ''}.</span>`); break;
+        case 'refused': case 'error': S.push(`<span class="bad">${esc(it.text)}.</span>`); break;
+        case 'route': if (it.action === 'parked') S.push(`<span class="bad">The router parked the job: ${esc(RULES[it.rule] || it.rule)}.</span>`); break;
+        default: break;
+      }
+    }
+    if (nextT && row.kind === 'stop' && gate && !row.items.some((i) => items[i].type === 'human')) S.push(`It waited ${esc(fmtDur(nextT - tm))} for you.`);
+    const cls = `para${row.back || row.kind === 'amend' ? ' rtn' : ''}${row.kind === 'park' ? ' park' : ''}${gate ? ' gate you' : ''}`;
+    const ret = row.back ? `<span class="rt2">${esc(tags[0] || 'back')}</span>` : row.kind === 'amend' ? '<span class="rt2">amendment</span>' : '';
+    out.push(`<article class="${cls}" data-i="${row.first}"><div class="ph"><h4>${esc(title)}</h4>${ret}<span class="tm">${esc(fmtDate(first.t))} · +${esc(fmtDur(tm - t0))}${nextT ? ` · ${esc(fmtDur(nextT - tm))} here` : ''}</span></div><p>${S.filter(Boolean).join(' ')}</p></article>`);
+    for (const f of anchored.get(r) || []) out.push(`<aside class="mnote"><b>⚑ Inspector ${esc(f.id)} · ${esc(f.severity)} · ${esc(f.status)}</b>${esc(f.summary)}${f.question ? `<br><span style="color:var(--muted)">${esc(f.question)}</span>` : ''}</aside>`);
+  });
+  $('#jt-story').innerHTML = `<div class="story">${out.join('')}</div>`;
+  bindCopies($('#jt-story'));
+}
+function renderTasks() {
+  const job = LV.job;
+  const tasks = job.tasks || [];
+  const m = MODELS.get(job.id);
+  $('#jt-tasks').innerHTML = tasks.length
+    ? `<p class="lede" style="margin:0 0 12px">${m.tasksPassed} of ${tasks.length} task${tasks.length === 1 ? '' : 's'} passed their own verify. Each runs in its own worktree; only <code>factory task verify</code> produces evidence.</p><div class="tblwrap"><table class="tbl"><tr><th>Task</th><th>Objective</th><th>After</th><th>Tries</th><th>Evidence</th><th>Outcome</th></tr>${tasks.map((t) => `<tr class="taskrow"><td class="n">${esc(t.id)}</td><td>${esc(t.objective)}</td><td class="n">${esc((t.depends_on || []).join(', ') || '—')}</td><td class="n">${t.attempts || '—'}${t.attempts > 1 ? ' <span class="stt fail">↻</span>' : ''}</td><td><span class="tbar" style="width:70px"><i style="width:${t.pass ? 100 : t.pass === false ? 30 : 0}%;${t.pass === false ? 'background:var(--stop)' : ''}"></i></span></td><td class="stt ${t.outcome === 'done' ? 'done' : t.outcome ? 'fail' : ''}">${esc(t.outcome || 'not started')}</td></tr>`).join('')}</table></div>`
+    : '<p class="lede">No plan yet: tasks appear once the plan is validated (or, for bug@low, written straight from the contract).</p>';
+}
+const EV = { q: '', type: '' };
+function renderEvents() {
+  const items = LV.items.slice(0, -1);
+  const t0 = items[0] ? Date.parse(items[0].t) : 0;
+  const types = [...new Set(items.map((x) => x.type))];
+  const q = EV.q.toLowerCase();
+  const rows = items.map((it, k) => ({ it, k })).filter(({ it }) => (!EV.type || it.type === EV.type) && (!q || JSON.stringify(it).toLowerCase().includes(q)));
+  const host = $('#jt-events');
+  const had = host.querySelector('input');
+  if (!had) {
+    host.innerHTML = `<div class="evbar"><input type="search" id="ev-q" placeholder="Filter events" aria-label="Filter events"><span class="segb" role="group" aria-label="Type" id="ev-types"></span><span class="label" id="ev-n"></span></div><div class="tblwrap" id="ev-t"></div>`;
+    $('#ev-q').addEventListener('input', (e) => { EV.q = e.target.value; renderEvents(); });
+  }
+  $('#ev-types').innerHTML = ['', ...types].map((t) => `<button type="button" data-t="${t}" aria-pressed="${EV.type === t}">${t || 'all'}</button>`).join('');
+  $('#ev-types').querySelectorAll('button').forEach((b) => b.addEventListener('click', () => { EV.type = b.dataset.t; renderEvents(); }));
+  $('#ev-n').textContent = `${rows.length} of ${items.length}`;
+  $('#ev-t').innerHTML = `<table class="tbl"><tr><th>When</th><th>+</th><th>Type</th><th>Step</th><th>What</th></tr>${rows.map(({ it, k }) => { const [h, sub] = describe(it); return `<tr class="clk2" data-k="${k}" tabindex="0"><td class="n">${esc(fmtDate(it.t))}</td><td class="n">${esc(fmtDur(Date.parse(it.t) - t0))}</td><td class="n">${esc(it.type)}${it.action ? ` · ${esc(it.action)}` : ''}</td><td class="n">${esc(it.step || it.raw_step || '')}</td><td><b style="font-weight:600">${esc(h)}</b>${sub ? `<br><span style="color:var(--muted)">${esc(sub)}</span>` : ''}</td></tr>`; }).join('')}</table>`;
+  $('#ev-t').querySelectorAll('tr[data-k]').forEach((tr) => {
+    const go = () => { setJobTab('line'); seekItem(+tr.dataset.k); };
+    tr.addEventListener('click', go);
+    tr.addEventListener('keydown', (e) => { if (e.key === 'Enter') go(); });
+  });
+}
+function renderLessons() {
+  const job = LV.job;
+  const ls = job.lessons || [];
+  $('#jt-lessons').innerHTML = ls.length
+    ? `<p class="lede" style="margin:0 0 12px">Lessons proposed from what went wrong in this job. Nothing is learned without you.</p>${ls.map((l) => `<section class="panel" style="padding:12px 14px;margin-bottom:10px;display:grid;gap:8px"><div><span class="kindtag ${l.status === 'accepted' ? 'k-workflow' : l.status === 'rejected' ? 'k-artifact' : 'k-you'}">${esc(l.id)} · ${esc(l.status)}</span></div><p style="margin:0">${esc(l.text)}</p>${l.status === 'proposed' ? `<div class="reply"><code>accept lesson ${esc(l.id)}</code><button type="button" class="copy" data-copy="accept lesson ${esc(l.id)}">Copy</button><code>reject lesson ${esc(l.id)} &lt;why&gt;</code></div>` : ''}</section>`).join('')}`
+    : '<p class="lede">No lessons from this job (yet). Distill proposes them from confirmed findings and verify-fix rounds near the end of the line.</p>';
+  bindCopies($('#jt-lessons'));
+}
+
+// ---------- seen / unread
+function markSeen(id) {
+  const m = MODELS.get(id);
+  if (!m) return;
+  SEEN[id] = m.rev;
+  store.set('fc-seen', JSON.stringify(SEEN));
+}
+function seedSeen() {
+  let changed = false;
+  for (const m of MODELS.values()) if (!SEEN[m.id]) { SEEN[m.id] = m.rev; changed = true; }
+  if (changed) store.set('fc-seen', JSON.stringify(SEEN));
+}
+
+// ---------- toasts and notifications
+const TOASTED = new Set();
+function toastGate(m) {
+  const job = m.job;
+  const g = (job.pending_gate && job.pending_gate.id) || '';
+  const key = `${job.id}|${g}|${job.pending_gate && job.pending_gate.at}`;
+  if (TOASTED.has(key)) return;
+  TOASTED.add(key);
+  const reply = gateReply(job, g);
+  const t = document.createElement('div');
+  t.className = 'toast';
+  t.setAttribute('role', 'alert');
+  t.innerHTML = `<div class="tt"><i class="beacon" style="--bk:var(--sig-amber)"></i>Your turn · ${esc(job.id)}<button type="button" class="x" aria-label="Dismiss">×</button></div><p><b>${esc(job.title)}</b> waits on you at ${esc(g === 'P' ? 'a park' : stepName(g))}.</p>${reply ? `<div class="reply"><code>${esc(reply)}</code><button type="button" class="copy" data-copy="${esc(reply)}">Copy</button><button type="button" class="tbtn" data-open>Open</button></div>` : ''}`;
+  $('#toasts').prepend(t);
+  bindCopies(t);
+  t.querySelector('.x').addEventListener('click', () => t.remove());
+  const o = t.querySelector('[data-open]');
+  if (o) o.addEventListener('click', () => { t.remove(); openJob(job.id, { user: true, tab: 'story' }); });
+  while ($('#toasts').children.length > 4) $('#toasts').lastElementChild.remove();
+  if (UI.notify && window.Notification && Notification.permission === 'granted') {
+    try { const n = new Notification(`Factory: your turn on ${job.id}`, { body: `${job.title}\nReply: ${reply || 'see the console'}`, tag: key }); n.onclick = () => { window.focus(); openJob(job.id, { user: true, tab: 'story' }); }; } catch (e) { /* not allowed here */ }
+  }
+}
+function paintNotify() {
+  const b = $('#b-notify');
+  b.setAttribute('aria-pressed', String(UI.notify));
+  b.title = UI.notify ? 'Desktop notifications are on: you are told when a job needs you' : 'Desktop notifications when a job needs you (off)';
+}
+function toggleNotify() {
+  if (!UI.notify && window.Notification && Notification.permission !== 'granted') {
+    try { Notification.requestPermission().then((p) => { UI.notify = p === 'granted'; store.set('fc-notify', UI.notify ? '1' : '0'); paintNotify(); }); } catch (e) { /* unsupported */ }
+    return;
+  }
+  UI.notify = !UI.notify;
+  store.set('fc-notify', UI.notify ? '1' : '0');
+  paintNotify();
+}
+
+// ---------- theme
+function paintTheme() {
+  const root = document.documentElement;
+  if (UI.theme === 'auto') root.removeAttribute('data-theme'); else root.setAttribute('data-theme', UI.theme);
+  $('#b-theme').title = `Theme: ${UI.theme === 'auto' ? 'follows your system' : UI.theme} (click to change)`;
+  $('#b-theme').setAttribute('aria-label', $('#b-theme').title);
+}
+function cycleTheme() {
+  UI.theme = { auto: 'dark', dark: 'light', light: 'auto' }[UI.theme] || 'auto';
+  store.set('fc-theme', UI.theme);
+  paintTheme();
+  if (LV.job && UI.view === 'job') { const t = LV.t; buildFlow(LV.job); LV.shown = -2; renderAt(t); }
+}
+
+// ---------- header: LED, clock, flags
+function paintLed() {
+  const led = $('#led');
+  const state = LIVE.on ? (LIVE.connected ? 'live' : 'reconnecting') : 'snapshot';
+  led.dataset.led = state;
+  led.querySelector('span').textContent = state;
+  led.title = state === 'live' ? 'Streaming from factory console --serve: the page updates as hooks and the CLI write to .factory/' : state === 'reconnecting' ? 'Lost the connection to factory console --serve; retrying' : 'A file written by factory console: run factory console --serve to watch live';
+  paintClock();
+}
+function paintClock() {
+  if (!DATA) { $('#clk').textContent = ''; return; }
+  const at = LIVE.on && LIVE.lastAt ? LIVE.lastAt : Date.parse(DATA.generated_at);
+  $('#clk').innerHTML = `${LIVE.on ? 'updated' : 'snapshot'} <b>${esc(fmtClock(new Date(at).toISOString()))}</b><br>${esc(shortAgo(nowMs() - at) === 'now' ? 'just now' : `${shortAgo(nowMs() - at)} ago`)}`;
+}
+function tickAgo() {
+  document.querySelectorAll('[data-ago]').forEach((e) => { e.textContent = shortAgo(nowMs() - +e.dataset.ago); });
+  document.querySelectorAll('.bnow .w[data-since]').forEach((e) => { if (e.dataset.since) e.textContent = `waits ${shortAgo(nowMs() - +e.dataset.since)}`; });
+  paintClock();
+}
+
+// ---------- views and the URL
+function setView(v, { push = true } = {}) {
+  if (v === 'live') v = LV.job ? 'job' : 'board';
+  UI.view = v;
+  const app = $('#app');
+  app.dataset.view = v;
+  app.classList.toggle('wire-open', v === 'job' && UI.wireOpen);
+  for (const b of document.querySelectorAll('.nav [data-view]')) b.setAttribute('aria-selected', String(b.dataset.view === v || (v === 'job' && b.dataset.view === 'board')));
+  $('#view-board').hidden = v !== 'board';
+  $('#view-lines').hidden = v !== 'lines';
+  $('#view-job').hidden = v !== 'job';
+  $('#view-plan').hidden = v !== 'plan';
+  $('#view-crew').hidden = v !== 'crew';
+  if (v !== 'plan') stopRun();
+  if (v !== 'job') stopPlay();
+  if (v === 'plan') {
+    if (LV.job && RECIPES[LV.job.recipe] && !planReady) { recipe = LV.job.recipe; renderPicker(); render(); }
+    planReady = true;
+    requestAnimationFrame(startView);
+  }
+  if (v === 'lines') { LM.fitted = false; renderLines(); }
+  if (v === 'board') { renderBoard(); if (UI.cursor) { const r = ROWS.get(UI.cursor); if (r) r.el.scrollIntoView({ block: 'nearest' }); } }
+  if (v === 'job') renderJList();
+  if (UI.wireJob) renderWire();
+  if (push) saveHash();
+}
+let planReady = false;
+let hashWritten = '';
+function hashOf() {
+  const p = new URLSearchParams();
+  if (UI.q) p.set('q', UI.q);
+  const f = Object.entries(UI.facets).filter(([, s]) => s.size).map(([k, s]) => `${k}:${[...s].join(',')}`).join(';');
+  if (f) p.set('f', f);
+  if (UI.group !== 'attention') p.set('g', UI.group);
+  if (UI.sort !== 'urgency') p.set('s', UI.sort);
+  if (UI.cursor && UI.view !== 'job') p.set('c', UI.cursor);
+  const qs = p.toString();
+  const base = UI.view === 'job' && LV.job ? `/job/${LV.job.id}${UI.jobTab !== 'line' ? `/${UI.jobTab}` : ''}` : UI.view === 'plan' ? '/map' : `/${UI.view}`;
+  return `#${base}${qs ? `?${qs}` : ''}`;
+}
+let hashT = 0;
+function saveHash() {
+  clearTimeout(hashT);
+  hashT = setTimeout(() => {
+    const h = hashOf();
+    if (h === location.hash) return;
+    hashWritten = h;
+    try { history.replaceState(null, '', h); } catch (e) { /* sandboxed */ }
+  }, 60);
+}
+function readHash() {
+  const raw = decodeURIComponent((location.hash || '').replace(/^#/, ''));
+  if (/^J-\d+$/.test(raw)) return { view: 'job', job: raw };
+  if (raw === 'map' || raw === 'plan') return { view: 'plan' };
+  if (raw === 'crew') return { view: 'crew' };
+  const [pathPart, qs] = raw.split('?');
+  const seg = pathPart.split('/').filter(Boolean);
+  const p = new URLSearchParams(qs || '');
+  const out = { q: p.get('q') || '', g: p.get('g'), s: p.get('s'), c: p.get('c'), f: p.get('f') };
+  if (seg[0] === 'job' && seg[1]) { out.view = 'job'; out.job = seg[1]; out.tab = seg[2] || 'line'; }
+  else if (seg[0] === 'map' || seg[0] === 'plan') out.view = 'plan';
+  else if (['board', 'lines', 'crew'].includes(seg[0])) out.view = seg[0];
+  return out;
+}
+function applyHash(h) {
+  if (h.q !== undefined) { UI.q = h.q; $('#q').value = h.q; }
+  if (h.g && GROUPS[h.g]) UI.group = h.g;
+  if (h.s && SORTS[h.s]) UI.sort = h.s;
+  if (h.c) UI.cursor = h.c;
+  if (h.f !== undefined) {
+    UI.facets = {};
+    for (const part of String(h.f || '').split(';').filter(Boolean)) { const [k, v] = [part.slice(0, part.indexOf(':')), part.slice(part.indexOf(':') + 1)]; if (FACETS.some((x) => x[0] === k)) UI.facets[k] = new Set(v.split(',').filter(Boolean)); }
+  }
+  $('#groupby').value = UI.group;
+  $('#sortby').value = UI.sort;
+  if (h.view === 'job' && h.job && MODELS.has(h.job)) { refreshFloor(); openJob(h.job, { tab: h.tab || 'line', push: false }); return; }
+  refreshFloor();
+  setView(h.view && h.view !== 'job' ? h.view : 'board', { push: false });
+}
+
+// ---------- opening a job
+function openJob(id, { user = false, item = null, tab = null, push = true } = {}) {
+  const job = DATA && DATA.jobs && DATA.jobs.find((j) => j.id === id);
+  if (!job) return;
+  UI.cursor = id;
+  setView('job', { push: false });
+  if (tab) UI.jobTab = tab;
+  stopPlay();
+  // the Line tab must be laid out to measure the canvas
+  $('#live-body').hidden = false;
+  buildFlow(job);
+  renderHead(job);
+  renderBelow(job);
+  $('#j-eyebrow').innerHTML = (() => { const m = MODELS.get(id); return m ? `<span class="rchip rk-${esc(String(job.risk || '').toLowerCase())}"><i></i><span>${esc(job.recipe)}</span></span><span class="state-word w-${m.sum[0]}">${esc(m.sum[1])}</span>` : ''; })();
+  $('#street').scrollLeft = 0;
+  renderAt(LV.END);
+  markSeen(id);
+  renderJList();
+  setJobTab(UI.jobTab, { keep: true });
+  if (item !== null && item !== undefined && UI.jobTab === 'line') seekItem(item);
+  if (UI.wireJob || UI.wireOpen) renderWire();
+  $('#jdetail').scrollTop = 0;
+  if (push) saveHash();
+  void user;
+}
+function stepJob(d) {
+  const ids = VISIBLE.length ? VISIBLE : [...MODELS.keys()];
+  if (!ids.length) return;
+  if (UI.view === 'job') {
+    const i = ids.indexOf(LV.job && LV.job.id);
+    const n = ids[Math.max(0, Math.min(ids.length - 1, (i < 0 ? 0 : i + d)))];
+    if (n && n !== (LV.job && LV.job.id)) openJob(n, { user: true, tab: UI.jobTab });
+    return;
+  }
+  const flat = [...ROWS.keys()].filter((id) => ROWS.get(id).el.isConnected);
+  const order = VISIBLE.filter((id) => flat.includes(id));
+  if (!order.length) return;
+  const i = order.indexOf(UI.cursor);
+  const n = order[Math.max(0, Math.min(order.length - 1, i < 0 ? 0 : i + d))];
+  UI.cursor = n;
+  paintCursor();
+  const r = ROWS.get(n);
+  if (r) { r.el.focus({ preventScroll: true }); r.el.scrollIntoView({ block: 'nearest' }); }
+  if (UI.wireJob) renderWire();
+  saveHash();
+}
+function nextWaiting() {
+  const turn = [...MODELS.values()].filter((m) => m.bucket === 'turn').sort(urgencyCmp).map((m) => m.id);
+  if (!turn.length) return;
+  const cur = UI.view === 'job' && LV.job ? LV.job.id : UI.cursor;
+  const i = turn.indexOf(cur);
+  openJob(turn[(i + 1) % turn.length], { user: true, tab: 'story' });
+}
+
+// ---------- palette, query help, keys
+const PAL = { items: [], sel: 0 };
+function palItems() {
+  const items = [];
+  const v = (label, view) => items.push({ k: 'view', label, sub: '', run: () => setView(view) });
+  v('Board', 'board'); v('Line map', 'lines'); v('Recipe map', 'plan'); v('The crew', 'crew');
+  for (const m of [...MODELS.values()].sort(urgencyCmp)) items.push({ k: 'job', label: `${m.id} · ${m.job.title}`, sub: m.sum[1], run: () => openJob(m.id, { user: true }), m });
+  BUCKETS.forEach(([b, name], i) => items.push({ k: 'filter', label: `${facetSet('status').has(b) ? 'Hide' : 'Show only'} ${name.toLowerCase()}`, sub: `${i + 1}`, run: () => toggleFacet('status', b) }));
+  for (const g of Object.keys(GROUPS)) items.push({ k: 'group', label: `Group by ${g}`, sub: UI.group === g ? 'current' : '', run: () => { UI.group = g; store.set('fc-group', g); $('#groupby').value = g; refreshFloor(); setView('board'); } });
+  for (const s of Object.keys(SORTS)) items.push({ k: 'sort', label: `Sort by ${s}`, sub: UI.sort === s ? 'current' : '', run: () => { UI.sort = s; store.set('fc-sort', s); $('#sortby').value = s; refreshFloor(); setView('board'); } });
+  for (const t of ['is:waiting', 'has:rework', 'has:finding', 'risk:high', 'since:1d']) items.push({ k: 'query', label: `Filter ${t}`, sub: '', run: () => { UI.q = t; $('#q').value = t; refreshFloor(); setView(UI.view === 'lines' ? 'lines' : 'board'); } });
+  items.push({ k: 'toggle', label: 'Clear all filters', sub: '', run: clearFilters });
+  items.push({ k: 'toggle', label: 'Next job waiting for you', sub: 'g w', run: nextWaiting });
+  items.push({ k: 'toggle', label: UI.wirePaused ? 'Resume the wire' : 'Pause the wire', sub: '', run: () => { UI.wirePaused = !UI.wirePaused; renderWire(); } });
+  items.push({ k: 'toggle', label: UI.collapsed.has('done') ? 'Expand done jobs' : 'Collapse done jobs', sub: '', run: () => { if (UI.collapsed.has('done')) UI.collapsed.delete('done'); else UI.collapsed.add('done'); refreshFloor(); } });
+  items.push({ k: 'toggle', label: 'Change theme', sub: UI.theme, run: cycleTheme });
+  items.push({ k: 'toggle', label: UI.notify ? 'Turn desktop notifications off' : 'Turn desktop notifications on', sub: '', run: toggleNotify });
+  items.push({ k: 'toggle', label: 'Mark every job as read', sub: '', run: () => { for (const m of MODELS.values()) SEEN[m.id] = m.rev; store.set('fc-seen', JSON.stringify(SEEN)); for (const r of ROWS.values()) r.sig = ''; refreshFloor(); } });
+  items.push({ k: 'toggle', label: 'Keyboard shortcuts', sub: '?', run: () => $('#keys').showModal() });
+  return items;
+}
+function palFilter() {
+  const q = $('#pal-q').value.trim().toLowerCase();
+  const all = palItems();
+  PAL.items = !q ? all : all.filter((x) => { const t = `${x.k} ${x.label} ${x.sub}`.toLowerCase(); return q.split(/\s+/).every((w) => t.includes(w) || fuzzy(w, t)); });
+  PAL.sel = Math.min(PAL.sel, Math.max(0, PAL.items.length - 1));
+  $('#pal-list').innerHTML = PAL.items.slice(0, 60).map((x, i) => `<li><button type="button" role="option" data-i="${i}" aria-selected="${i === PAL.sel}"><span class="pk2">${esc(x.k)}</span><span>${x.m ? `<i class="beacon" style="display:inline-block;margin-right:7px;--bk:${LINE_COLOR[x.m.bucket]}"></i>` : ''}${esc(x.label)}</span><span class="ps">${esc(x.sub)}</span></button></li>`).join('') || '<li style="padding:12px;color:var(--muted)">Nothing matches.</li>';
+  $('#pal-list').querySelectorAll('button').forEach((b) => b.addEventListener('click', () => palRun(+b.dataset.i)));
+  const on = $('#pal-list').querySelector('[aria-selected="true"]');
+  if (on) on.scrollIntoView({ block: 'nearest' });
+}
+function palRun(i) { const x = PAL.items[i]; $('#palette').close(); if (x) x.run(); }
+function openPalette() {
+  if ($('#palette').open) return;
+  $('#pal-q').value = '';
+  PAL.sel = 0;
+  palFilter();
+  $('#palette').showModal();
+  $('#pal-q').focus();
+}
+function qHelp(show) {
+  const h = $('#qhelp');
+  h.hidden = !show;
+  if (!show) return;
+  h.innerHTML = `<p>Tokens narrow the board and the line map; words match ids, titles and what happened.</p><div class="toks">${QTOKENS.map((t) => `<button type="button" data-t="${t}">${t}</button>`).join('')}</div><p>Prefix with <code>-</code> to exclude, e.g. <code>-is:done</code>. <kbd>esc</kbd> clears.</p>`;
+  h.querySelectorAll('[data-t]').forEach((b) => b.addEventListener('mousedown', (e) => {
+    e.preventDefault();
+    const inp = $('#q');
+    inp.value = `${inp.value.trim()} ${b.dataset.t}`.trim();
+    onQuery();
+  }));
+}
+let qT = 0;
+function onQuery() {
+  clearTimeout(qT);
+  qT = setTimeout(() => {
+    UI.q = $('#q').value;
+    if (UI.view !== 'board' && UI.view !== 'lines') setView('board', { push: false });
+    refreshFloor();
+  }, 70);
+}
+function typing(e) { const t = e.target; return t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable); }
+let gPending = 0;
+function bindKeys() {
+  document.addEventListener('keydown', (e) => {
+    if ((e.metaKey || e.ctrlKey) && (e.key === 'k' || e.key === 'K')) { e.preventDefault(); openPalette(); return; }
+    if ($('#palette').open || $('#keys').open) return;
+    if (typing(e)) {
+      if (e.target.id === 'q' && e.key === 'Escape') { if (e.target.value) { e.target.value = ''; onQuery(); } else e.target.blur(); }
+      if (e.target.id === 'q' && e.key === 'Enter') { e.preventDefault(); if (VISIBLE.length === 1) openJob(VISIBLE[0], { user: true }); else { e.target.blur(); stepJob(0); } }
+      if (e.target.id === 'q' && e.key === 'ArrowDown') { e.preventDefault(); e.target.blur(); stepJob(0); }
+      return;
+    }
+    if (e.metaKey || e.ctrlKey || e.altKey) return;
+    if (gPending && Date.now() - gPending < 1200) {
+      gPending = 0;
+      if (e.key === 'w') { e.preventDefault(); nextWaiting(); return; }
+      if (e.key === 'b') { e.preventDefault(); setView('board'); return; }
+      if (e.key === 'l') { e.preventDefault(); setView('lines'); return; }
+      if (e.key === 'm') { e.preventDefault(); setView('plan'); return; }
+      if (e.key === 'c') { e.preventDefault(); setView('crew'); return; }
+    }
+    if (e.key === 'g') { gPending = Date.now(); return; }
+    const inCanvas = e.target && e.target.closest && e.target.closest('#street, #s-range, #canvas, #lm-scroll');
+    if (e.key === '/') { e.preventDefault(); $('#q').focus(); $('#q').select(); return; }
+    if (e.key === '?') { e.preventDefault(); $('#keys').showModal(); return; }
+    if (e.key === 'j' || e.key === 'k') { e.preventDefault(); stepJob(e.key === 'j' ? 1 : -1); return; }
+    if (e.key === 'Escape') {
+      if (UI.view === 'job') { e.preventDefault(); const id = LV.job && LV.job.id; setView('board'); const r = ROWS.get(id); if (r) { r.el.focus({ preventScroll: true }); r.el.scrollIntoView({ block: 'nearest' }); } return; }
+      if (UI.view !== 'board') { setView('board'); return; }
+      return;
+    }
+    if (/^[1-5]$/.test(e.key) && !inCanvas && UI.view !== 'plan') { e.preventDefault(); toggleFacet('status', BUCKETS[+e.key - 1][0]); return; }
+    if (e.key === 'Enter' && UI.view === 'board' && UI.cursor && !(e.target && e.target.closest && e.target.closest('button, a, select'))) { e.preventDefault(); openJob(UI.cursor, { user: true }); }
+  });
+  $('#pal-q').addEventListener('input', () => { PAL.sel = 0; palFilter(); });
+  $('#pal-q').addEventListener('keydown', (e) => {
+    if (e.key === 'ArrowDown') { e.preventDefault(); PAL.sel = Math.min(PAL.items.length - 1, PAL.sel + 1); palFilter(); }
+    if (e.key === 'ArrowUp') { e.preventDefault(); PAL.sel = Math.max(0, PAL.sel - 1); palFilter(); }
+    if (e.key === 'Enter') { e.preventDefault(); palRun(PAL.sel); }
+  });
+  for (const d of [$('#palette'), $('#keys')]) d.addEventListener('click', (e) => { if (e.target === d) d.close(); });
+}
+
+// ---------- ingest: the first payload and every live one
+function ingest(next, { live = false } = {}) {
+  const prev = new Map(((DATA && DATA.jobs) || []).map((j) => [j.id, j]));
   DATA = next;
-  LIVE.sig = Object.fromEntries((DATA.jobs || []).map((j) => [j.id, jobSig(j)]));
+  if (live) LIVE.lastAt = nowMs();
+  const ids = new Set();
+  for (const job of (DATA && DATA.jobs) || []) { ids.add(job.id); modelOf(job); }
+  for (const id of [...MODELS.keys()]) if (!ids.has(id)) MODELS.delete(id);
+  if (!UI.booted) return;
+  if (live) {
+    for (const job of DATA.jobs || []) {
+      const was = prev.get(job.id);
+      const g = job.pending_gate;
+      if (g && (!was || !was.pending_gate || was.pending_gate.id !== g.id || was.pending_gate.at !== g.at)) {
+        const m = MODELS.get(job.id);
+        if (m && (m.bucket === 'turn' || g.id !== 'P')) toastGate(m);
+      }
+    }
+  }
   paintFlags();
   renderCrew();
-  if (!DATA.jobs || !DATA.jobs.length) { liveEmpty('none'); return; }
-  $('#live-body').hidden = false;
-  $('#live-empty').hidden = true;
-  sortJobs();
-  const entry = LV.jobs.find((x) => x.job.id === prevId);
-  if (!entry) { openJob(LV.jobs[0].job.id, false); return; }
-  if (LIVE.sig[prevId] === prevSig) { renderJobs(); return; }
+  refreshFloor({ live });
+  renderWire({ live });
+  if (UI.view === 'job' && LV.job) {
+    const job = DATA.jobs.find((j) => j.id === LV.job.id);
+    if (!job) { setView('board'); return; }
+    const was = prev.get(job.id);
+    if (!was || jobRev(was) !== jobRev(job)) refreshOpenJob(job);
+  }
+}
+// The open job stays open; if you were watching its latest moment, the new steps play in;
+// if you were scrubbing back, you keep your place.
+function refreshOpenJob(job) {
   const host = $('#street');
   const scroll = [host.scrollLeft, host.scrollTop];
   const wasPlaying = LV.playing;
   const atEnd = LV.t >= LV.END - 1;
   const oldLen = LV.items.length;
   const t = LV.t;
+  const onLine = UI.jobTab === 'line';
   stopPlay();
-  buildFlow(entry.job);
-  renderJobs();
-  renderHead(entry.job);
-  renderBelow(entry.job);
+  $('#live-body').hidden = false;
+  buildFlow(job);
+  renderHead(job);
+  renderBelow(job);
   host.scrollLeft = scroll[0];
   host.scrollTop = scroll[1];
   LV.shown = -2;
-  if (atEnd && LV.items.length > oldLen && oldLen > 0 && !reduceMotion) {
+  if (onLine && atEnd && LV.items.length > oldLen && oldLen > 0 && !reduceMotion) {
     renderAt(LV.sched[oldLen - 1].t1);
     play();
   } else {
     renderAt(atEnd ? LV.END : Math.min(t, LV.END));
-    if (wasPlaying) play();
+    if (wasPlaying && onLine) play();
   }
+  $('#live-body').hidden = !onLine;
+  markSeen(job.id);
+  paintJobTab();
+}
+
+function bindShell() {
+  document.querySelectorAll('.nav [data-view]').forEach((b) => b.addEventListener('click', () => setView(b.dataset.view)));
+  document.querySelectorAll('.nav [role="tab"]').forEach((b, i, all) => b.addEventListener('keydown', (e) => {
+    const d = e.key === 'ArrowRight' ? 1 : e.key === 'ArrowLeft' ? -1 : 0;
+    if (!d) return;
+    e.preventDefault();
+    const n = all[(i + d + all.length) % all.length];
+    n.focus();
+    setView(n.dataset.view);
+  }));
+  document.querySelectorAll('.jtabs [data-jt]').forEach((b) => b.addEventListener('click', () => setJobTab(b.dataset.jt)));
+  document.querySelectorAll('.mtabs [data-mpane]').forEach((b) => b.addEventListener('click', () => {
+    UI.mpane = b.dataset.mpane;
+    $('#app').dataset.mpane = UI.mpane;
+    document.querySelectorAll('.mtabs [data-mpane]').forEach((x) => x.setAttribute('aria-selected', String(x === b)));
+    if (UI.mpane === 'main' && UI.view === 'lines') renderLines();
+  }));
+  $('#q').addEventListener('input', onQuery);
+  $('#q').addEventListener('focus', () => qHelp(!$('#q').value));
+  $('#q').addEventListener('blur', () => qHelp(false));
+  $('#q').addEventListener('input', () => qHelp(!$('#q').value));
+  $('#groupby').addEventListener('change', (e) => { UI.group = e.target.value; store.set('fc-group', UI.group); for (const r of ROWS.values()) r.sig = ''; refreshFloor(); });
+  $('#sortby').addEventListener('change', (e) => { UI.sort = e.target.value; store.set('fc-sort', UI.sort); refreshFloor(); });
+  $('#w-pause').addEventListener('click', () => { UI.wirePaused = !UI.wirePaused; renderWire(); });
+  $('#w-new').addEventListener('click', () => { UI.wirePaused = false; renderWire({ live: true }); });
+  $('#w-job').addEventListener('click', () => { if (UI.wireHealth) { UI.wireHealth = false; paintFlags(); } else UI.wireJob = !UI.wireJob; renderWire(); });
+  $('#j-wire').addEventListener('click', () => { UI.wireOpen = !UI.wireOpen; $('#j-wire').setAttribute('aria-pressed', String(UI.wireOpen)); $('#app').classList.toggle('wire-open', UI.wireOpen); renderWire(); applyZoom(); });
+  $('#j-back').addEventListener('click', () => setView('board'));
+  $('#j-prev').addEventListener('click', () => stepJob(-1));
+  $('#j-next').addEventListener('click', () => stepJob(1));
+  $('#b-theme').addEventListener('click', cycleTheme);
+  $('#b-notify').addEventListener('click', toggleNotify);
+  $('#b-keys').addEventListener('click', () => $('#keys').showModal());
+  window.addEventListener('hashchange', () => { if (location.hash === hashWritten) return; applyHash(readHash()); });
+  bindKeys();
+  bindLines();
+  paintTheme();
+  paintNotify();
+  setInterval(tickAgo, 30000);
+}
+
+// ===================================================================== header flags, live link
+const LIVE = { on: false, connected: false, lastAt: 0 };
+function healthOpen() { return ((DATA && DATA.inspector && DATA.inspector.health) || []).filter((f) => f.status === 'open'); }
+function paintFlags() {
+  const flags = [];
+  if (DATA && DATA.label) flags.push(`<span class="flag sample" title="${esc(DATA.label)}">${esc(DATA.label)}</span>`);
+  if (DATA) {
+    const s = DATA.integrity && DATA.integrity.status;
+    flags.push(s === 'verified' ? `<span class="flag ok" title="${DATA.integrity.valid} sealed records checked">seals verified</span>` : s === 'tampered' ? `<span class="flag bad" title="${DATA.integrity.invalid} records fail their seal">seal mismatch</span>` : '<span class="flag unk" title="This machine has no factory key, so seals were not checked">seals not checked</span>');
+    const h = healthOpen();
+    if (h.length) flags.push(`<button type="button" class="flag bad" id="f-health" aria-pressed="${UI.wireHealth}" style="cursor:pointer;background:none" title="${esc(h.map((f) => `${f.id} ${f.rule}: ${f.summary}`).join('\n'))}">⚑ ${h.length} health</button>`);
+  }
+  $('#flags').innerHTML = flags.join('');
+  const hb = $('#f-health');
+  if (hb) hb.addEventListener('click', () => { UI.wireHealth = !UI.wireHealth; if (UI.wireHealth && UI.view === 'job') { UI.wireOpen = true; $('#app').classList.add('wire-open'); } if (window.innerWidth <= 960) { const t = document.querySelector('.mtabs [data-mpane="wire"]'); if (t) t.click(); } paintFlags(); renderWire(); });
+  $('#proj').textContent = DATA ? `${DATA.project} · read-only${DATA.plugin_version ? ` · factory ${DATA.plugin_version}` : ''}` : 'Software Factory · read-only';
+  paintLed();
+  $('#foot').innerHTML = DATA
+    ? `${LIVE.on ? 'Streaming from' : 'Written'} by <code>factory console${LIVE.on ? ' --serve' : ''}</code> from <code>${esc(DATA.project)}/.factory/</code>: routing decisions, the ledger, the event log and job state, read without changing anything. ${LIVE.on ? 'Updates arrive as they happen.' : `Snapshot of ${esc(fmtDate(DATA.generated_at))}: re-run it to refresh, or run <code>factory console --serve</code> to watch live.`}`
+    : 'Built from the factory\'s own definitions: recipes, skills, workflows, agents and the router\'s checks. Generate it with <code>factory console</code> to see real jobs.';
 }
 function connectLive() {
-  if (!DATA || !DATA.live || !/^https?:$/.test(location.protocol) || !window.EventSource) return;
+  if (!DATA || !DATA.live || !/^https?:$/.test(location.protocol) || !window.EventSource) { paintLed(); return; }
   LIVE.on = true;
-  LIVE.sig = Object.fromEntries((DATA.jobs || []).map((j) => [j.id, jobSig(j)]));
+  LIVE.lastAt = nowMs();
   const es = new EventSource('events');
-  es.addEventListener('open', () => { LIVE.connected = true; paintFlags(); });
-  es.addEventListener('error', () => { LIVE.connected = false; paintFlags(); }); // EventSource retries by itself
-  es.addEventListener('data', (e) => { try { refresh(JSON.parse(e.data)); } catch (err) { /* keep the last good page */ } });
+  es.addEventListener('open', () => { LIVE.connected = true; paintLed(); });
+  es.addEventListener('error', () => { LIVE.connected = false; paintLed(); }); // EventSource retries by itself
+  es.addEventListener('data', (e) => {
+    let next;
+    try { next = JSON.parse(e.data); } catch (err) { return; } // keep the last good page
+    LIVE.connected = true;
+    ingest(next, { live: true });
+  });
   paintFlags();
+  renderWire();
 }
 
 // ===================================================================== crew
@@ -2620,48 +4516,23 @@ function renderCrew() {
   }).join('');
 }
 
-// ===================================================================== tabs + boot
-const TABS = ['live', 'plan', 'crew'];
-let planReady = false;
-function show(name) {
-  TABS.forEach((t) => {
-    const on = t === name;
-    $(`#tab-${t}`).setAttribute('aria-selected', String(on));
-    $(`#tab-${t}`).tabIndex = on ? 0 : -1;
-    $(`#view-${t}`).hidden = !on;
-  });
-  if (name !== 'plan') stopRun();
-  if (name !== 'live') stopPlay();
-  if (name === 'plan') {
-    if (LV.job && RECIPES[LV.job.recipe] && !planReady) { recipe = LV.job.recipe; renderPicker(); render(); }
-    planReady = true;
-    requestAnimationFrame(startView);
-  }
-}
-TABS.forEach((t, i) => {
-  const b = $(`#tab-${t}`);
-  b.addEventListener('click', () => show(t));
-  b.addEventListener('keydown', (e) => {
-    const d = e.key === 'ArrowRight' ? 1 : e.key === 'ArrowLeft' ? -1 : 0;
-    if (!d) return;
-    e.preventDefault();
-    const n = TABS[(i + d + TABS.length) % TABS.length];
-    show(n);
-    $(`#tab-${n}`).focus();
-  });
-});
-
+// ===================================================================== boot
 function boot() {
+  paintTheme();
   renderPicker();
   render();
-  startView();
   showIntro();
+  bindTransport();
+  siglegend();
+  bindShell();
+  ingest(DATA);
+  UI.booted = true;
+  seedSeen();
+  paintFlags();
   renderCrew();
-  bootLive();
+  applyHash(readHash());
+  renderWire();
   connectLive();
-  const hash = (location.hash || '').replace('#', '');
-  if (hash === 'map' || hash === 'plan') show('plan');
-  else if (hash === 'crew') show('crew');
 }
 boot();
 // Text is measured for layout; redraw once the web fonts have loaded.
@@ -2670,7 +4541,8 @@ if (document.fonts && document.fonts.ready) document.fonts.ready.then(() => {
   render();
   apply();
   if (selected) select(selected);
-  if (LV.job) { const t = LV.t; const sl = $('#street').scrollLeft; buildFlow(LV.job); LV.shown = -2; renderAt(t); $('#street').scrollLeft = sl; }
+  if (LV.job && UI.view === 'job' && UI.jobTab === 'line') { const t = LV.t; const sl = $('#street').scrollLeft; buildFlow(LV.job); LV.shown = -2; renderAt(t); $('#street').scrollLeft = sl; }
+  if (UI.view === 'lines') lmPaint();
 });
 window.addEventListener('resize', () => { if (!$('#view-plan').hidden) apply(); });
 </script>
