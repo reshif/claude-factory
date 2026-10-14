@@ -210,6 +210,82 @@ test('contract parsing and placeholders', () => {
   assert.deepEqual(ok.allowedPaths, ['src/**', 'tests/**']);
 });
 
+test('contract Intent: parsed, placeholders fail the check, legacy contracts only where allowed', () => {
+  const t = contract.parse(contract.template({ title: 'x', workType: 'bug', risk: 'low' }));
+  assert.equal(t.intent.present, true);
+  const probs = contract.problems(t);
+  for (const f of ['Problem', 'Who', 'Outcome', 'Why now', 'Success signal']) assert.ok(probs.includes(`Intent: ${f} is missing or still a placeholder`), f);
+  const ok = contract.parse(F.contractText());
+  assert.equal(ok.intent.outcome, 'add returns the arithmetic sum');
+  assert.equal(ok.intent.success, 'tests/add.test.js passes');
+  assert.deepEqual(contract.problems(ok), []);
+  const legacy = contract.parse(F.contractText({ intent: null }));
+  assert.match(contract.problems(legacy)[0], /No "## Intent" section/);
+  assert.deepEqual(contract.problems(legacy, { requireIntent: false }), [], 'approved legacy contracts still amend and plan');
+  const noWhyNow = contract.parse(F.contractText({ intent: '- Problem: p is broken\n- Who is affected: ops\n- Desired outcome: p works\n- Success: alert clears' }));
+  assert.deepEqual(contract.problems(noWhyNow), [], 'Why now is optional; label variants parse');
+});
+
+test('question protocol: intent first and alone, priority order, budget, never re-ask, ids and defaults', () => {
+  const Q = require('../cli/core/questions');
+  const cfg = JSON.parse(fs.readFileSync(path.join(F.PLUGIN, 'config', 'workflows', 'clarify.json'), 'utf8'));
+  const L = { max_intent_rounds: 4 };
+  assert.deepEqual([1, 2, 3, 4].map((r) => Q.budget(cfg, r, L)), [5, 3, 3, 0], 'round 1 ≤ 5, later ≤ 3, last round none');
+  assert.equal(cfg.fanout[0].category, 'intent');
+  const list = [
+    { question: 'Which DB?', category: 'constraint', why: 'w', default: 'postgres' },
+    { question: 'Who is this for?', category: 'intent', why: 'w' },
+    { question: 'Mobile too?', category: 'scope', why: 'w', default: 'no', options: ['yes', 'no'] },
+  ];
+  let s = Q.shape(list, { budget: 5, startId: 2 });
+  assert.equal(s.intent_open, true);
+  assert.deepEqual(s.questions.map((q) => [q.id, q.question]), [['Q-3', 'Who is this for?']]);
+  assert.match(s.questions[0].default, /will not guess/);
+  assert.equal(s.held.length, 2, 'scope and constraint wait for intent');
+  s = Q.shape(list.slice(0, 1).concat(list.slice(2)), { budget: 1, asked: ['which db'] });
+  assert.deepEqual(s.questions.map((q) => q.question), ['Mobile too?']);
+  assert.deepEqual(s.questions[0].options, ['yes', 'no']);
+  assert.deepEqual(s.dropped.map((d) => d.reason), ['already asked']);
+  s = Q.shape([{ question: 'b', category: 'acceptance' }, { question: 'a', category: 'scope' }, { question: 'c', focus: 'constraints' }], { budget: 2 });
+  assert.deepEqual(s.questions.map((q) => q.category), ['scope', 'constraint'], 'sorted by priority, over-budget dropped');
+  assert.deepEqual(s.dropped, [{ question: 'b', reason: 'over budget' }]);
+});
+
+test('workflows: clarify runs the intent gate first and holds the other angles while intent is open', async () => {
+  const H = require('./helpers/workflow-harness');
+  const env = JSON.parse(fs.readFileSync(path.join(F.PLUGIN, 'schemas', 'envelope.json'), 'utf8'));
+  const item = (id, category, gate = false) => ({ id, label: id, category, gate, prompt: `p-${id}`, schema: {}, agent_type: 'factory:intent-analyst' });
+  const brief = { workflow: 'fanout-judge', job: 'J-0001', input_hash: 'h', budgets: { limit: {} }, config: 'clarify', limits: { max_questions: 2 }, asked: ['Old question?'], fanout: [item('intent', 'intent', true), item('scope', 'scope'), item('tests', 'acceptance')], judge: { prompt: 'J', schema: {}, agent_type: 'factory:judge' }, critique: { prompt: 'C', schema: {}, agent_type: 'factory:god-eye' } };
+  // intent unclear: only the gate runs; the judge is told; only intent questions come back
+  let r = await H.run(path.join(F.PLUGIN, 'workflows', 'fanout-judge.js'), brief, (prompt) => {
+    if (prompt.startsWith('J')) {
+      assert.match(prompt, /INTENT GATE/);
+      return { questions: [{ question: 'Old question?', category: 'intent', why: 'w', default: 'd' }, { question: 'Who uses it?', category: 'intent', why: 'w', default: 'd' }, { question: 'Edge?', category: 'acceptance', why: 'w', default: 'd' }], dismissed: [] };
+    }
+    if (prompt === 'p-intent') return { focus: 'intent', questions: [{ question: 'Who uses it?', why: 'w', blocking: true }] };
+    throw new Error(`held angle ran: ${prompt}`);
+  });
+  assert.equal(r.result.status, 'needs_user');
+  assert.deepEqual(r.result.questions.map((q) => q.question), ['Who uses it?'], 'never re-asks; intent alone');
+  assert.deepEqual(r.result.data.held_back, ['scope', 'tests']);
+  assert.deepEqual(r.result.data.degraded, [], 'held angles are not missing angles');
+  assert.equal(r.result.data.intent_open, true);
+  assert.deepEqual(validate(env, r.result), []);
+  // intent clear: gate then the rest; the judge's list is cut to the budget in priority order; God Eye must confirm the intent
+  r = await H.run(path.join(F.PLUGIN, 'workflows', 'fanout-judge.js'), brief, (prompt) => {
+    if (prompt.startsWith('J')) return { questions: [{ question: 'a', category: 'acceptance', why: 'w', default: 'd' }, { question: 'b', category: 'scope', why: 'w', default: 'd' }, { question: 'c', category: 'constraint', why: 'w', default: 'd' }], dismissed: [] };
+    return { focus: 'x', questions: [] };
+  });
+  assert.equal(r.calls.filter((c) => c.opts.agentType === 'factory:intent-analyst').length, 3);
+  assert.deepEqual(r.result.questions.map((q) => q.question), ['b', 'c']);
+  r = await H.run(path.join(F.PLUGIN, 'workflows', 'fanout-judge.js'), brief, (prompt) => {
+    if (prompt.startsWith('J')) return { questions: [], dismissed: [] };
+    if (prompt.startsWith('C')) return { verdict: 'approve', intent_confirmed: false, restatement: { problem: 'p', outcome: 'o' }, items: [] };
+    return { focus: 'x', questions: [] };
+  });
+  assert.equal(r.result.status, 'needs_user', 'approve without a confirmed intent is not ok');
+});
+
 test('plan validate: coverage, unknown criteria, protected paths, locks held by another job', () => {
   const root = F.makeRepo();
   const J = F.cli(root, ['job', 'new', '--title', 'x', '--type', 'feature', '--risk', 'medium']).job;
@@ -266,7 +342,12 @@ test('epic: slices spawn child jobs in order; depth is capped at 2; the epic gat
   const job = require('../cli/core/job');
   assert.throws(() => job.create(root, { title: 'deep', workType: 'bug', risk: 'low', parent: child.id }), /depth/);
   // the slice contract is seeded from the epic's criteria
-  assert.match(fs.readFileSync(path.join(F.jobDir(root, child.id), 'contract.md'), 'utf8'), /\[E-AC-1\]/);
+  const childText = fs.readFileSync(path.join(F.jobDir(root, child.id), 'contract.md'), 'utf8');
+  assert.match(childText, /\[E-AC-1\]/);
+  const ci = contract.parse(childText).intent;
+  assert.equal(ci.problem, contract.parse(F.contractText()).intent.problem, 'the slice inherits the epic intent');
+  assert.equal(ci.outcome, 'contracts and flag');
+  assert.match(ci.success, /E-AC-1/);
 });
 
 test('workflows: fanout-judge clarify / decide / challenge produce valid envelopes', async () => {

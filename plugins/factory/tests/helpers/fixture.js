@@ -53,9 +53,21 @@ function reply(root, text) {
   return human.applyReply(root, parsed, 'chat');
 }
 
-function contractText({ goal = 'add(a, b) returns the sum of a and b for all numbers.', allowed = ['src/**', 'tests/**'], verify = '`node tests/add.test.js` (AC-1)', ac = '- AC-1: add(2, 3) returns 5 (evidence: test)' } = {}) {
-  return `# Fix add
+const INTENT = [
+  '- Problem: add(2, 3) returns -1, so totals built on it are wrong',
+  '- Who: callers of src/add.js (the cart totals)',
+  '- Outcome: add returns the arithmetic sum',
+  '- Why now: a user reported a wrong total',
+  '- Success signal: tests/add.test.js passes',
+].join('\n');
 
+// intent: null leaves the section out (a contract from before the Intent section).
+function contractText({ goal = 'add(a, b) returns the sum of a and b for all numbers.', allowed = ['src/**', 'tests/**'], verify = '`node tests/add.test.js` (AC-1)', ac = '- AC-1: add(2, 3) returns 5 (evidence: test)', intent = INTENT } = {}) {
+  return `# Fix add
+${intent === null ? '' : `
+## Intent
+${intent}
+`}
 ## Goal
 ${goal}
 

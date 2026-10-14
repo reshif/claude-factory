@@ -9,6 +9,7 @@ const steps = require('./steps');
 const floors = require('./floors');
 const ledger = require('./ledger');
 const decisions = require('./decisions');
+const contractMod = require('./contract');
 
 function finalize(root, { jobId, mode = 'full' }) {
   const state = job.resolve(root, jobId);
@@ -90,6 +91,14 @@ function followup(root, { jobId, findings, workType }) {
     `# Follow-up to ${parent.id}: ${parent.title}`,
     '',
     `<!-- factory contract · follow-up of ${parent.id} · the merged job is never reopened -->`,
+    '',
+    '## Intent',
+    ...contractMod.intentLines({
+      problem: list.length ? `Confirmed after ${parent.id} merged: ${list.map((f) => f.summary).join('; ')}` : null,
+      outcome: list.length ? `None of these problems occur any more, and nothing else in ${parent.id} changes` : null,
+      why_now: `Found after ${parent.id} (${parent.title}) merged`,
+      success: list.length ? 'Every AC below passes on the merged follow-up' : null,
+    }),
     '',
     '## Goal',
     `Fix the confirmed problems found after ${parent.id} merged.`,

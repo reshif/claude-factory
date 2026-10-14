@@ -193,7 +193,7 @@ function validate(root, state) {
 // bug@low: one task built straight from the contract.
 function fromContract(root, state) {
   const parsed = contractMod.parse(contractMod.read(root, state.id));
-  const probs = contractMod.problems(parsed, { requirePlanFields: true });
+  const probs = contractMod.problems(parsed, { requirePlanFields: true, requireIntent: false }); // H1 already passed
   if (probs.length) fail(`The contract can't produce a plan:\n- ${probs.join('\n- ')}`, 'contract_incomplete', probs);
   const plan = {
     source: 'contract',

@@ -24,7 +24,7 @@ async function clarify(root) {
     if (opts.agentType === 'factory:god-eye') return { verdict: 'approve', items: [] };
     throw new Error(`unexpected ${opts.agentType}: ${instructions(prompt).slice(0, 80)}`);
   });
-  assert.ok(Array.isArray(result.agents) && result.agents.length === 5, 'the envelope carries the roster');
+  assert.ok(Array.isArray(result.agents) && result.agents.length === 6, 'the envelope carries the roster (intent gate + 3 angles, judge, God Eye)');
   return F.record(root, result);
 }
 
@@ -81,7 +81,7 @@ test('console: steps, timeline and the agents per step, read-only', async () => 
   for (const t of ['route', 'human', 'agents', 'result']) assert.ok(types.includes(t), `timeline has ${t}`);
   const a = job.timeline.find((t) => t.type === 'agents');
   assert.equal(a.step, 'clarify', 'agents are placed on the step that ran them');
-  assert.equal(a.agents.filter((x) => x.role === 'intent-analyst').length, 3);
+  assert.equal(a.agents.filter((x) => x.role === 'intent-analyst').length, 4);
   assert.equal(job.timeline.find((t) => t.type === 'human').step, 'H1');
   const park = job.timeline.find((t) => t.type === 'park');
   assert.ok(park && /API owners/.test(park.text), 'a park you asked for is on the timeline, even after a resume clears it from state');

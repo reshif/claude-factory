@@ -290,3 +290,65 @@ test('go on without a failed analyst: --accept-degraded runs the critique anyway
   assert.equal(result.status, 'ok');
   assert.equal(F.record(root, result).status, 'ok');
 });
+
+test('clarify protocol through the CLI: intent questions first with ids, answers by id, park when intent stays unclear, resume', () => {
+  const root = F.makeRepo();
+  const J = F.cli(root, ['job', 'new', '--title', 'x', '--type', 'bug', '--risk', 'low']).job;
+  fs.writeFileSync(path.join(F.jobDir(root, J), 'contract.md'), F.contractText());
+  const iq = (q) => ({ question: q, category: 'intent', why: 'w', default: 'd' });
+  const round = (qs) => {
+    const b = F.cli(root, ['wfargs', 'fanout-judge', '--config', 'clarify']);
+    return F.record(root, F.envelope(b, 'needs_user', { analysts: [], degraded: [], judge: { questions: qs, dismissed: [] }, critique: null }));
+  };
+  // round 1: a judge that ignores the protocol is corrected by record
+  let r = round([{ question: 'Which DB?', category: 'constraint', why: 'w', default: 'pg' }, iq('Who is it for?')]);
+  assert.equal(r.status, 'needs_user');
+  assert.equal(r.intent_first, true);
+  assert.equal(r.held, 1);
+  assert.deepEqual(r.questions.map((q) => [q.id, q.category]), [['Q-1', 'intent']]);
+  assert.equal(F.cli(root, ['answer', '--id', 'Q-1', '--answer', 'ops on call']).id, 'Q-1');
+  assert.equal(F.cli(root, ['answer', '--id', 'Q-9', '--answer', 'x']).code, 'bad_input');
+  // round 2: the answered question is never re-asked; a new intent question is
+  r = round([iq('Who is it for?'), iq('What does done look like?')]);
+  assert.deepEqual(r.questions.map((q) => q.id), ['Q-2']);
+  // round 3: intent still unclear after 2 intent rounds → park, nothing assumed
+  r = round([iq('Why now?')]);
+  assert.equal(r.status, 'park');
+  assert.equal(next(root).action, 'parked');
+  assert.match(F.cli(root, ['job', 'show']).park.reason, /intent is still unclear.*Why now\?/);
+  // resume: one more intent round, with a budget
+  F.reply(root, 'resume');
+  assert.equal(next(root).skill, 'clarify');
+  const b = F.cli(root, ['wfargs', 'fanout-judge', '--config', 'clarify']);
+  assert.equal(b.limits.max_questions, 3);
+  assert.deepEqual(b.asked.slice().sort(), ['What does done look like?', 'Who is it for?']);
+  r = F.record(root, F.envelope(b, 'needs_user', { analysts: [], degraded: [], judge: { questions: [iq('Why now?')], dismissed: [] }, critique: null }));
+  assert.deepEqual(r.questions.map((q) => q.id), ['Q-3']);
+  assert.deepEqual(F.cli(root, ['job', 'show']).question_log.map((q) => q.id), ['Q-1', 'Q-2', 'Q-3']);
+});
+
+test('clarify: God Eye must confirm the intent; contract check names the Intent section', () => {
+  const root = F.makeRepo();
+  const J = F.cli(root, ['job', 'new', '--title', 'x', '--type', 'bug', '--risk', 'low']).job;
+  let c = F.cli(root, ['contract', 'check']);
+  assert.ok(c.problems.includes('Intent: Problem is missing or still a placeholder'));
+  fs.writeFileSync(path.join(F.jobDir(root, J), 'contract.md'), F.contractText({ intent: null }));
+  c = F.cli(root, ['contract', 'check']);
+  assert.match(c.problems.join('\n'), /No "## Intent" section/);
+  fs.writeFileSync(path.join(F.jobDir(root, J), 'contract.md'), F.contractText());
+  let b = F.cli(root, ['wfargs', 'fanout-judge', '--config', 'clarify']);
+  let r = F.record(root, F.envelope(b, 'needs_user', { analysts: [], degraded: [], judge: { questions: [], dismissed: [] }, critique: { verdict: 'approve', intent_confirmed: false, restatement: { problem: 'p', outcome: 'o' }, items: [] } }));
+  assert.equal(r.status, 'needs_user');
+  assert.match(r.message, /could not confirm the intent/);
+  b = F.cli(root, ['wfargs', 'fanout-judge', '--config', 'clarify']);
+  r = F.record(root, F.envelope(b, 'ok', { analysts: [], degraded: [], judge: { questions: [], dismissed: [] }, critique: { verdict: 'approve', intent_confirmed: true, restatement: { problem: 'p', outcome: 'o' }, items: [] } }));
+  assert.equal(r.status, 'ok');
+  assert.deepEqual(r.restatement, { problem: 'p', outcome: 'o' });
+  // a follow-up contract carries an Intent section the check understands
+  F.write(root, '.factory/scratch/findings.json', JSON.stringify([{ summary: 'add overflows', file: 'src/add.js' }]));
+  const fu = F.cli(root, ['followup', '--findings-file', path.join(root, '.factory', 'scratch', 'findings.json')]).followup;
+  const text = fs.readFileSync(path.join(F.jobDir(root, fu), 'contract.md'), 'utf8');
+  assert.match(text, /## Intent\n- Problem: Confirmed after J-\d+ merged: add overflows/);
+  F.cli(root, ['use', fu]);
+  assert.deepEqual(F.cli(root, ['contract', 'check']).problems.filter((p) => /^Intent/.test(p)), ['Intent: Who is missing or still a placeholder'], 'only who is left to clarify');
+});
