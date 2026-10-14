@@ -338,7 +338,7 @@ function friction(obs, threshold) {
   return out;
 }
 
-// ---------------------------------------------------------------- health: R10–R18
+// ---------------------------------------------------------------- health: R10–R19
 // Everything the factory reports about itself — hook failures, hook pushback, CLI
 // failures, workflow and agent trouble, parks, idle jobs, slow gates — checked against
 // the thresholds in config "limits". Findings carry `latest` (newest evidence) so a
@@ -456,6 +456,12 @@ function jobHealth(job, L, now) {
     const waited = hours(g.ts, reply ? reply.ts : now);
     if (reply && waited >= L.reply_hours) out.push(f({ rule: 'R18.slow_reply', class: 'ambiguity', severity: 'low', subject: `${id}:${g.step}`, job: id, latest: reply.ts, summary: `${g.step} in ${id} waited ${Math.round(waited)} h for your reply (limit ${L.reply_hours} h).`, evidence: [g.id], question: `Is ${g.step} hard to review, or does it arrive at a bad time?` }));
   }
+  // R19 clarify: parked on unclear intent; questions over budget or re-asked
+  const clarify = job.ledger.filter((e) => e.kind === 'step' && e.step === 'clarify' && e.detail);
+  const intentParks = clarify.filter((e) => e.ok === false && e.detail.intent_open);
+  if (intentParks.length) out.push(f({ rule: 'R19.intent_parked', class: 'ambiguity', severity: 'medium', subject: id, job: id, latest: latest(intentParks, 'at'), summary: `${id} parked ${intentParks.length} time(s) because the intent was still unclear after ${Math.max(...intentParks.map((e) => e.detail.intent_rounds || 0))} intent round(s).`, question: 'Was the request too vague to start, or were the intent questions badly put?' }));
+  const dropped = clarify.reduce((n, e) => n + (Number(e.detail.dropped) || 0), 0);
+  if (dropped >= L.questions_dropped_per_job) out.push(f({ rule: 'R19.question_overrun', class: 'ambiguity', severity: 'low', subject: id, job: id, latest: latest(clarify.filter((e) => e.detail.dropped), 'at'), summary: `Clarify in ${id} proposed ${dropped} question(s) beyond the round budget or already asked; the CLI dropped them (limit ${L.questions_dropped_per_job}).`, question: 'Does the judge ignore the question budget or the never-re-ask list in its brief?' }));
   return out;
 }
 

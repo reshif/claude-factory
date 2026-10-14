@@ -231,23 +231,7 @@ test('hooks: after-close reports, session start mentions open findings, replies 
   assert.equal(spawnSync('node', [path.join(PLUGIN, 'hooks', 'guard.js')], { input: 'garbage', encoding: 'utf8' }).status, 0);
 });
 
-test('hooks: a job that ends outside Claude\'s Bash is caught at the end of the turn and at session start', () => {
-  const root = F.makeRepo();
-  const run = (hook, input) => spawnSync('node', [path.join(PLUGIN, 'hooks', hook)], { input: JSON.stringify({ cwd: root, ...input }), encoding: 'utf8' });
-  const J = F.cli(root, ['job', 'new', '--title', 'Never mind', '--type', 'bug', '--risk', 'low']).job;
-  assert.equal(run('catch-up.js', {}).stdout, '', 'an active job is not inspected');
-  F.reply(root, 'cancel job'); // applied by the factory's prompt hook: no Bash, no PostToolUse
-  assert.deepEqual(I.pending(root), [J]);
-  assert.match(JSON.parse(run('catch-up.js', {}).stdout).systemMessage, new RegExp(`inspected ${J}`));
-  assert.deepEqual(I.pending(root), []);
-  assert.equal(run('catch-up.js', {}).stdout, '', 'nothing pending: silent');
-
-  const J2 = F.cli(root, ['job', 'new', '--title', 'Also not', '--type', 'bug', '--risk', 'low']).job;
-  F.reply(root, `abandon job ${J2}`);
-  assert.match(JSON.parse(run('session-start.js', {}).stdout).hookSpecificOutput.additionalContext, new RegExp(`inspected ${J2}`));
-});
-
-test('job health from synthetic records (R12–R18)', () => {
+test('job health from synthetic records (R12–R19)', () => {
   const { LIMITS } = require('../inspector/config');
   const at = (h) => new Date(Date.UTC(2026, 0, 1) + h * 36e5).toISOString();
   const ev = (event, h, extra) => ({ event, ts: at(h), job: 'J-0001', decision_id: 'J-0001-D0003', ...extra });
@@ -269,6 +253,7 @@ test('job health from synthetic records (R12–R18)', () => {
     ledger: [
       { kind: 'error', workflow: 'ground', summary: 'boom', at: at(1) }, { kind: 'error', workflow: 'ground', summary: 'boom', at: at(2) },
       { kind: 'step', step: 'clarify', ok: true, at: at(1), detail: { degraded: ['security analyst'] } },
+      { kind: 'step', step: 'clarify', ok: true, at: at(1), detail: { round: 1, dropped: 2 } }, { kind: 'step', step: 'clarify', ok: false, at: at(2), detail: { round: 2, intent_open: true, intent_rounds: 2, dropped: 1 } },
       ...[1, 2, 3].map((h) => ({ kind: 'step', step: 'decompose', ok: false, at: at(h) })),
       { kind: 'agents', workflow: 'realize', at: at(3), agents: [
         { label: 'build T1 #1', agent_type: 'builder', model: null, outcome: 'done' }, { label: 'build T1 #2', agent_type: 'builder', model: 'opus', outcome: 'done' }, { label: 'build T1 #3', agent_type: 'builder', model: 'opus', outcome: 'exhausted' },
@@ -284,7 +269,7 @@ test('job health from synthetic records (R12–R18)', () => {
   };
   const found = rules.jobHealth(job, LIMITS, at(200));
   const ids = found.map((x) => x.rule);
-  for (const r of ['R12.guard_denials', 'R12.stop_blocks', 'R12.replies_refused', 'R12.replies_unparsed', 'R13.cli_failures', 'R13.stale_results', 'R14.workflow_errors', 'R14.degraded', 'R14.agent_retries', 'R14.agent_failures', 'R14.escalations', 'R14.step_failures', 'R15.orphaned_agents', 'R16.park_loop', 'R16.resumed_past_caps', 'R17.idle_job', 'R18.slow_reply']) assert.ok(ids.includes(r), `${r} in ${ids}`);
+  for (const r of ['R12.guard_denials', 'R12.stop_blocks', 'R12.replies_refused', 'R12.replies_unparsed', 'R13.cli_failures', 'R13.stale_results', 'R14.workflow_errors', 'R14.degraded', 'R14.agent_retries', 'R14.agent_failures', 'R14.escalations', 'R14.step_failures', 'R15.orphaned_agents', 'R16.park_loop', 'R16.resumed_past_caps', 'R17.idle_job', 'R18.slow_reply', 'R19.intent_parked', 'R19.question_overrun']) assert.ok(ids.includes(r), `${r} in ${ids}`);
   assert.match(found.find((x) => x.rule === 'R13.cli_failures').summary, /factory task verify" failed 3 times .* verify_failed/);
   assert.match(found.find((x) => x.rule === 'R15.orphaned_agents').summary, /factory:tester/);
   for (const x of found) assert.ok(['deviation', 'ambiguity', 'gap'].includes(x.class) && ['high', 'medium', 'low'].includes(x.severity), x.rule);
@@ -351,6 +336,22 @@ test('limits and rules_off come from config; a fixed health finding reopens only
   inspect(root, ['run', '--active']);
   fds = I.report(root, { status: 'all' }).findings;
   assert.equal(fds.find((x) => x.id === g.id).status, 'open', 'a new denial does');
+});
+
+test('hooks: a job that ends outside Claude\'s Bash is caught at the end of the turn and at session start', () => {
+  const root = F.makeRepo();
+  const run = (hook, input) => spawnSync('node', [path.join(PLUGIN, 'hooks', hook)], { input: JSON.stringify({ cwd: root, ...input }), encoding: 'utf8' });
+  const J = F.cli(root, ['job', 'new', '--title', 'Never mind', '--type', 'bug', '--risk', 'low']).job;
+  assert.equal(run('catch-up.js', {}).stdout, '', 'an active job is not inspected');
+  F.reply(root, 'cancel job'); // applied by the factory's prompt hook: no Bash, no PostToolUse
+  assert.deepEqual(I.pending(root), [J]);
+  assert.match(JSON.parse(run('catch-up.js', {}).stdout).systemMessage, new RegExp(`inspected ${J}`));
+  assert.deepEqual(I.pending(root), []);
+  assert.equal(run('catch-up.js', {}).stdout, '', 'nothing pending: silent');
+
+  const J2 = F.cli(root, ['job', 'new', '--title', 'Also not', '--type', 'bug', '--risk', 'low']).job;
+  F.reply(root, `abandon job ${J2}`);
+  assert.match(JSON.parse(run('session-start.js', {}).stdout).hookSpecificOutput.additionalContext, new RegExp(`inspected ${J2}`));
 });
 
 test('independence: the inspector imports nothing from the factory', () => {

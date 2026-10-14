@@ -40,6 +40,7 @@ The inspector has its own implementations of three things: seal verification, re
 | R16 parks and resumes | ambiguity | A job parked, or resumed past its caps, more than a limit |
 | R17 idle job | gap | Active, not waiting for you, and nothing has happened for a long time |
 | R18 slow reply | ambiguity | A gate that waited longer than a limit for your reply |
+| R19 clarify | ambiguity | A job parked because its intent was still unclear after the intent rounds; clarify proposing questions over the round budget or already asked (dropped by the CLI) beyond a limit |
 
 ## Use
 
@@ -57,7 +58,7 @@ It also runs on its own whenever a job ends (closed, cancelled or abandoned) and
 
 A finding marked fixed that is seen again reopens automatically (marked ↺).
 
-A finding from the health rules (R10–R18) is tied to its newest evidence: once marked fixed, it reopens only when something new happens, not because the old log lines are still there.
+A finding from the health rules (R10–R19) is tied to its newest evidence: once marked fixed, it reopens only when something new happens, not because the old log lines are still there.
 
 **CLI** (`factory-inspect`, on the PATH): `run [--job J | --all | --active]` · `report [--format md]` (findings plus a **Factory health** section) · `health [--format md]` · `status` · `show F3` · `trace --job J`. The commands `mark` and `mode` are human-only: use them from your own terminal, or reply in chat.
 
@@ -70,7 +71,7 @@ A finding from the health rules (R10–R18) is tied to its newest evidence: once
 
 Settings live in `.factory/inspect/config.json`: `mode`, `sample_every`, `settle_after`, `threshold` (R9), per-recipe overrides, and:
 
-- `limits` — the thresholds of R10–R18, e.g. `{ "guard_denials_per_job": 5, "stop_blocks_per_job": 2, "cli_failures": 3, "agent_retries_per_job": 4, "orphan_agent_minutes": 120, "idle_hours": 72, "reply_hours": 48 }` (full list and defaults: `factory-inspect status`).
+- `limits` — the thresholds of R10–R19, e.g. `{ "guard_denials_per_job": 5, "stop_blocks_per_job": 2, "cli_failures": 3, "agent_retries_per_job": 4, "orphan_agent_minutes": 120, "idle_hours": 72, "reply_hours": 48 }` (full list and defaults: `factory-inspect status`).
 - `rules_off` — rules or families you don't want, e.g. `["R18", "R14.agent_retries"]`.
 
 The register is `.factory/inspect/register.json`.
@@ -78,7 +79,7 @@ The register is `.factory/inspect/register.json`.
 ## Test
 
 ```bash
-npm test   # 13 tests: a clean job has no findings; forged records, gate-window actions, skipped work,
-           # synthetic deviations, cross-job ambiguity, friction, job and factory health (hook errors, torn lines,
-           # crashes, --active, health report), limits/rules_off, marks/regressions/modes/re-arming, hooks, independence
+npm test   # 14 tests: a clean job has no findings; forged records, gate-window actions, skipped work,
+           # synthetic deviations, cross-job ambiguity, friction, job and factory health (R10–R19: hook errors, torn lines, intent parks,
+           # crashes, --active, health report), limits/rules_off, marks/regressions/modes/re-arming, hooks, jobs ending outside Bash, independence
 ```
