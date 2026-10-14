@@ -11,7 +11,7 @@ user-invocable: false
 | Gate | Show |
 |---|---|
 | H1 / EH1 | The contract (it is short: show the goal and every acceptance criterion with its evidence type; mention allowed paths and verify commands). |
-| H2 / EH2 | The design record: the decision, rejected options, how criteria are met; the God Eye critique verdict and any open items (from `critiques/design.json`). For EH2, the contracts being frozen. |
+| H2 / EH2 | The design record: the decision, rejected options, how criteria are met, and the ADR's architecture diagram (paste its ```mermaid block as is so it renders); the God Eye critique verdict and any open items (from `critiques/design.json`). For EH2, the contracts being frozen. |
 | H3 / EH3 | The plan as a table: task, objective, allowed paths, depends on, criteria; then the waves. For EH3, the slices and their order. |
 | HF | The findings summary and the recommendation (spike). |
 | HS | Run `factory report` first, then show the floors table and the AC → proof table from the report. This signs off the irreversible step (push / PR). |

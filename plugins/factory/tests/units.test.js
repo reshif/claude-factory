@@ -238,8 +238,8 @@ test('epic: slices spawn child jobs in order; depth is capped at 2; the epic gat
   assert.equal(n.config, 'decide');
   assert.equal(n.mode, 'contracts');
   b = F.cli(root, ['wfargs', 'fanout-judge', '--config', 'decide']);
-  F.write(F.jobDir(root, E), 'adr-001-big.md', '# ADR\n');
-  F.write(F.jobDir(root, E), 'contracts.md', '# Contracts\n');
+  F.write(F.jobDir(root, E), 'adr-001-big.md', F.adrText({ job: E, acs: ['E-AC-1', 'E-AC-2'] }));
+  F.write(F.jobDir(root, E), 'contracts.md', F.contractsDocText({ job: E }));
   F.write(F.jobDir(root, E), 'contracts.json', '{"interfaces":[]}\n');
   F.record(root, F.envelope(b, 'ok', { options: [], degraded: [], judge: { kind: 'contracts', paths: [path.join(F.jobDir(root, E), 'adr-001-big.md')], summary: 's' }, critiques: [{ verdict: 'approve', items: [] }] }));
   assert.equal(F.cli(root, ['next']).step, 'EH2');
@@ -379,7 +379,7 @@ test('spike: grounded recommendation, HF gate, close without shipping code', () 
   assert.equal(n.mode, 'recommendation');
   b = F.cli(root, ['wfargs', 'fanout-judge', '--config', 'decide']);
   assert.ok(!b.fanout.some((f) => f.id === 'threat-modeler'));
-  F.write(F.jobDir(root, J), 'recommendation.md', '# Recommendation\nUse A.\n');
+  F.write(F.jobDir(root, J), 'recommendation.md', F.recommendationText({ job: J }));
   F.record(root, F.envelope(b, 'ok', { options: [], degraded: [], judge: { kind: 'recommendation', paths: [path.join(F.jobDir(root, J), 'recommendation.md')], summary: 'A' }, critiques: [{ verdict: 'approve', items: [] }] }));
   const g = F.cli(root, ['next']);
   assert.equal(g.step, 'HF');
