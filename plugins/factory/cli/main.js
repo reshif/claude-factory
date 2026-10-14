@@ -340,8 +340,7 @@ const PROSE = new Set(['reason', 'text', 'question', 'answer', 'title', 'note', 
 function logCommand(argv, res, err) {
   try {
     const { pos, opt } = parseArgs(argv);
-    // console and doc only read (doc index is a derived view of sealed state): no trace
-    if (['help', 'console', 'doc', undefined].includes(pos[0])) return;
+    if (['help', 'console', undefined].includes(pos[0])) return; // console is read-only: it leaves no trace (doc is logged; the inspector counts it read-only)
     const root = findRoot(opt.root ? path.resolve(opt.root) : process.cwd());
     if (!root) return;
     const events = require('./core/events');
