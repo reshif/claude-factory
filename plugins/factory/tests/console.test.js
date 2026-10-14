@@ -136,3 +136,57 @@ test('console --serve: streams fresh data when the factory writes, only to this 
     close();
   }
 });
+
+test('console: each job carries a rev that changes only when that job does, and items name their stage', () => {
+  const root = F.makeRepo();
+  const A = F.cli(root, ['job', 'new', '--title', 'First', '--type', 'bug', '--risk', 'low']).job;
+  F.cli(root, ['next']);
+  const B = F.cli(root, ['job', 'new', '--title', 'Second', '--type', 'bug', '--risk', 'low']).job;
+  const { build } = require('../cli/core/console');
+  const rev = (d, id) => d.jobs.find((j) => j.id === id).rev;
+  const d1 = build(root);
+  const d2 = build(root);
+  assert.match(rev(d1, A), /^[0-9a-f]{12}$/);
+  assert.equal(rev(d1, A), rev(d2, A), 'same files, same rev');
+  F.cli(root, ['park', '--reason', 'later', '--job', B]);
+  const d3 = build(root);
+  assert.notEqual(rev(d3, B), rev(d1, B), 'the parked job has a new rev');
+  assert.equal(rev(d3, A), rev(d1, A), 'the other job keeps its rev');
+  const route = d3.jobs.find((j) => j.id === A).timeline.find((t) => t.type === 'route' && t.step);
+  assert.equal(route.stage, 'contract', 'a routed step carries its stage');
+});
+
+test('console: an agent with no stop event is running only while recent and the job is active', () => {
+  const root = F.makeRepo();
+  const A = F.cli(root, ['job', 'new', '--title', 'Active', '--type', 'bug', '--risk', 'low']).job;
+  const B = F.cli(root, ['job', 'new', '--title', 'Parked', '--type', 'bug', '--risk', 'low']).job;
+  F.cli(root, ['park', '--reason', 'later', '--job', B]);
+  const { build, STALE_AGENT_MS } = require('../cli/core/console');
+  const now = Date.parse('2030-01-01T12:00:00.000Z');
+  const at = (ms) => new Date(now - ms).toISOString();
+  const ev = (job, id, ts, type = 'factory:builder') => JSON.stringify({ ts, event: 'SubagentStart', job, agent_id: id, agent_type: type });
+  fs.appendFileSync(path.join(root, '.factory', 'log', 'events.jsonl'), [
+    ev(A, 'fresh', at(10 * 60000)),
+    ev(A, 'crashed', at(STALE_AGENT_MS + 60000), 'factory:tester'),
+    ev(B, 'parked-job', at(60000)),
+  ].join('\n') + '\n');
+  const data = build(root, { now: new Date(now).toISOString() });
+  const a = data.jobs.find((j) => j.id === A);
+  const b = data.jobs.find((j) => j.id === B);
+  assert.deepEqual(a.running_agents.map((x) => x.agent_type), ['factory:builder'], 'only the recent one is running');
+  assert.deepEqual(a.stale_agents.map((x) => [x.agent_type, x.stale]), [['factory:tester', true]], 'the old one is marked stale');
+  assert.equal(b.running_agents.length, 0, 'a job that is not active has nothing running');
+  assert.equal(b.stale_agents.length, 1);
+});
+
+test('console page: one data slot, self-contained, and a static file says it is a snapshot', () => {
+  const tpl = fs.readFileSync(path.join(F.PLUGIN, 'console', 'console.html'), 'utf8');
+  assert.equal(tpl.split('/*__FACTORY_DATA__*/null').length, 2, 'exactly one data slot');
+  assert.ok(!/<script[^>]+src=/i.test(tpl), 'no external scripts: one self-contained page');
+  assert.ok(tpl.includes("'snapshot'"), 'the page has a snapshot state for a static file');
+  const { render } = require('../cli/core/console');
+  const html = render({ generated_at: '2030-01-01T00:00:00.000Z', project: 'p', integrity: { status: 'not_checked' }, jobs: [{ id: 'J-0001', title: '</script><script>alert(1)</script>', rev: 'x', timeline: [], steps: [] }] });
+  assert.ok(html.includes('"live":false'), 'a written file is not live');
+  assert.ok(!html.includes('</script><script>alert'), 'data cannot close the script tag');
+  assert.ok(!html.includes('/*__FACTORY_DATA__*/'), 'the slot is filled');
+});

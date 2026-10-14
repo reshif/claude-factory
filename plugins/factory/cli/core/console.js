@@ -25,6 +25,10 @@ const STAGE_OF = {
   distill: 'learn', close: 'learn',
 };
 const HUMAN_GATES = new Set(['H1', 'H2', 'H3', 'HF', 'HS', 'EH1', 'EH2', 'EH3', 'A']);
+// An agent started (SubagentStart) with no SubagentStop is "running" only while it is plausible:
+// a crashed or closed session never sends the stop, so past this age, or once the job is no
+// longer active, it is listed as stale instead of running forever.
+const STALE_AGENT_MS = 2 * 3600 * 1000;
 
 function secretFile() {
   return process.env.FACTORY_SECRET_FILE || path.join(require('os').homedir(), '.config', 'software-factory', 'secret');
@@ -74,7 +78,13 @@ function stepsOf(lock, state) {
 function resultText(step, ok, d) {
   d = d || {};
   switch (step) {
-    case 'clarify': return ok ? 'Contract judged clear; God Eye approved the intent' : num(d.questions) ? `${num(d.questions)} question(s) for you` : (d.contract_problems || []).length ? `Contract has problems: ${d.contract_problems.slice(0, 2).join('; ')}` : 'Not clear yet';
+    case 'clarify': {
+      if (ok) return 'Contract judged clear; God Eye approved the intent';
+      const cats = [...new Set(Array.isArray(d.categories) ? d.categories : [])];
+      const held = num(d.held);
+      if (num(d.questions)) return `${num(d.questions)} question(s) for you${cats.length ? ` (${cats.join(', ')})` : ''}${held ? `; ${held} more held back until the intent is settled` : ''}`;
+      return d.intent_open ? 'The intent is not settled yet' : (d.contract_problems || []).length ? `Contract has problems: ${d.contract_problems.slice(0, 2).join('; ')}` : 'Not clear yet';
+    }
     case 'ground': return `${num(d.claims)} sourced claim(s) across ${num(d.topics)} topic(s)${num(d.unverified) ? `, ${num(d.unverified)} unverified` : ''}${(d.blocking || []).length ? `, ${d.blocking.length} blocking` : ''}`;
     case 'decide': return `${d.kind === 'adr' ? 'ADR' : d.kind || 'Decision'} recorded after ${num(d.rounds) || 1} critique round(s)${d.threat_model ? ', with a threat model' : ''}; God Eye: ${d.critique || 'n/a'}`;
     case 'decompose': return ok ? (d.source === 'contract' ? 'One task, straight from the contract' : `${num(d.tasks)} task(s) in ${num(d.waves)} wave(s)`) : `Plan invalid: ${(d.errors || []).slice(0, 2).join('; ')}`;
@@ -118,7 +128,7 @@ function inspectorFor(root, id, decisions) {
   });
 }
 
-function jobData(root, id, all, checker) {
+function jobData(root, id, all, checker, nowMs = Date.now()) {
   const jp = jobPaths(root, id);
   const state = readJson(jp.state, null);
   if (!state) return null;
@@ -154,11 +164,18 @@ function jobData(root, id, all, checker) {
       delete started[e.agent_id];
     }
   }
-  const runningNow = Object.values(started).map((s) => ({ agent_type: s.agent_type, since: s.ts, decision_id: s.decision_id || null }));
+  const runningNow = [];
+  const staleNow = [];
+  for (const s of Object.values(started)) {
+    const a = { agent_type: s.agent_type, since: s.ts, decision_id: s.decision_id || null };
+    const age = nowMs - Date.parse(s.ts);
+    if (state.status === 'active' && age >= 0 && age < STALE_AGENT_MS) runningNow.push(a);
+    else staleNow.push({ ...a, stale: true });
+  }
 
   const T = [];
   let seq = 0;
-  const push = (o) => { if (o.t) { o.seq = seq++; T.push(o); } };
+  const push = (o) => { if (o.t) { o.seq = seq++; if (o.step && STAGE_OF[o.step]) o.stage = STAGE_OF[o.step]; T.push(o); } };
   push({ t: state.created_at, type: 'created', step: 'request', text: `Request submitted: “${short(state.title, 120)}”`, work_type: state.work_type, risk: state.risk, risk_proposed: state.risk_proposed, recipe: state.recipe && state.recipe.id });
 
   for (const d of decisions) {
@@ -192,6 +209,7 @@ function jobData(root, id, all, checker) {
       const item = { t: e.at, type: 'result', step: ids.has(step) ? step : null, raw_step: e.step, ok: Boolean(e.ok), outcome, text: resultText(e.step, e.ok, d) };
       if (/challenge/.test(e.step) && d.findings) item.findings = d.findings.map((f) => ({ id: String(f.id || ''), lane: String(f.lane || ''), severity: String(f.severity || ''), status: String(f.status || ''), file: f.file ? String(f.file) : null, line: Number.isInteger(f.line) ? f.line : null, summary: short(String(f.summary || ''), 200) }));
       if (e.step === 'prove') item.acs = d.acs || {};
+      if (e.step === 'clarify' && (d.categories || d.held)) Object.assign(item, { categories: d.categories || [], held: num(d.held), question_ids: d.question_ids || [] });
       push(item);
     } else if (e.kind === 'agents') {
       const step = ids.has(stepOfDecision[e.decision_id]) ? stepOfDecision[e.decision_id] : null;
@@ -235,13 +253,16 @@ function jobData(root, id, all, checker) {
       push({ t: e.ts, type: 'amend', phase: 'submit', id: a ? a.amendment : null, step: null, text: a ? `Submitted: ${(a.changed_criteria || []).length} criteria changed, ${(a.affected || []).length} step(s) affected` : 'Amendment submitted for your approval', affected: a ? a.affected || [] : [] });
     }
     if (e.event === 'guard_deny') push({ t: e.ts, type: 'guard', step: ids.has(stepOfDecision[e.decision_id]) ? stepOfDecision[e.decision_id] : null, text: short(`Guard blocked ${e.tool || 'a tool call'}: ${e.reason || ''}`, 200), who: e.agent_type ? String(e.agent_type) : 'Claude (main session)', target: e.target ? short(String(e.target), 160) : null });
+    if (e.event === 'hook_error') push({ t: e.ts, type: 'hook_error', step: ids.has(stepOfDecision[e.decision_id]) ? stepOfDecision[e.decision_id] : null, text: short(`The ${e.hook || 'factory'} hook failed${e.tool ? ` on ${e.tool}` : ''}: ${e.message || ''}`, 200) });
+    if (e.event === 'stop_block') push({ t: e.ts, type: 'stop_block', step: null, text: short(`The Stop hook refused a "done" claim: ${(e.missing || []).join(', ') || 'floors not met'}`, 200) });
+    if (e.event === 'reply_unparsed') push({ t: e.ts, type: 'unparsed', step: null, text: short(`A message looked like "${e.verb || 'a reply'}" but was not applied ("${e.word || ''}")`, 200) });
     if (e.event === 'reply_refused') push({ t: e.ts, type: 'refused', step: null, text: short(`Reply refused: ${e.reason || e.code || ''}`, 200) });
   }
   if (state.park && state.park.at && !parkTimes.some((x) => Math.abs(x - Date.parse(state.park.at)) < 5000)) push({ t: state.park.at, type: 'park', step: null, text: short(state.park.reason, 200), from: state.park.from || null });
   if (state.stopped && state.stopped.at) push({ t: state.stopped.at, type: 'stopped', step: null, text: short(state.stopped.reason || state.status, 200) });
 
   // Same-millisecond ties: what happened at a step comes before the router moving on from it.
-  const order = { created: 0, human: 1, agents: 2, result: 3, spawn: 3, amend: 4, error: 4, guard: 4, refused: 4, route: 5, park: 6, stopped: 7 };
+  const order = { created: 0, human: 1, agents: 2, result: 3, spawn: 3, amend: 4, error: 4, guard: 4, refused: 4, hook_error: 4, stop_block: 4, unparsed: 4, route: 5, park: 6, stopped: 7 };
   T.sort((a, b) => (a.t < b.t ? -1 : a.t > b.t ? 1 : order[a.type] - order[b.type] || a.seq - b.seq));
   for (const x of T) delete x.seq;
 
@@ -252,7 +273,7 @@ function jobData(root, id, all, checker) {
   });
   const lessons = (readJson(project(root).lessonsFile, { lessons: [] }).lessons || []).filter((l) => l.source_job === id).map((l) => ({ id: l.id, status: l.status, text: short(l.text, 200) }));
 
-  return {
+  const job = {
     id,
     title: state.title,
     work_type: state.work_type,
@@ -278,12 +299,16 @@ function jobData(root, id, all, checker) {
     steps,
     timeline: T,
     running_agents: runningNow,
+    stale_agents: staleNow,
     tasks,
     lessons,
   };
+  // A cheap revision: the page re-renders only the jobs whose rev changed.
+  job.rev = crypto.createHash('sha1').update(JSON.stringify(job)).digest('hex').slice(0, 12);
+  return job;
 }
 
-function build(root, { job: only } = {}) {
+function build(root, { job: only, now } = {}) {
   const p = project(root);
   if (!fs.existsSync(p.dir)) fail('No .factory/ folder here. Run factory init first.', 'no_root');
   const checker = sealChecker();
@@ -291,7 +316,8 @@ function build(root, { job: only } = {}) {
   let ids = [];
   try { ids = fs.readdirSync(p.jobsDir).filter((d) => /^J-\d+$/.test(d)).sort(); } catch { /* no jobs yet */ }
   if (only) ids = ids.filter((i) => i === only);
-  const jobs = ids.map((id) => jobData(root, id, all, checker)).filter(Boolean);
+  const nowMs = now ? Date.parse(now) : Date.now();
+  const jobs = ids.map((id) => jobData(root, id, all, checker, nowMs)).filter(Boolean);
   let current = null;
   try { current = fs.readFileSync(p.currentFile, 'utf8').trim() || null; } catch { /* none */ }
   let version = null;
@@ -301,7 +327,16 @@ function build(root, { job: only } = {}) {
     project: path.basename(root),
     plugin_version: version,
     current,
-    inspector: (() => { const reg = readJson(path.join(p.dir, 'inspect', 'register.json'), null); if (!reg) return null; const f = reg.findings || []; return { findings: f.length, open: f.filter((x) => x.status === 'open').length, runs: (reg.runs || []).length, last_run: (reg.runs || []).slice(-1)[0] ? reg.runs.slice(-1)[0].at || null : null }; })(),
+    inspector: (() => {
+      const reg = readJson(path.join(p.dir, 'inspect', 'register.json'), null);
+      if (!reg) return null;
+      const f = reg.findings || [];
+      // factory-wide health findings (hook errors, torn logs, CLI crashes) belong to no job
+      const health = f.filter((x) => !x.job).map((x) => ({ id: String(x.id), rule: String(x.rule || ''), severity: String(x.severity || ''), status: String(x.status || 'open'), summary: short(String(x.summary || ''), 240), question: short(String(x.question || ''), 240), at: x.latest || x.last_seen || x.first_seen || null }));
+      return { findings: f.length, open: f.filter((x) => x.status === 'open').length, runs: (reg.runs || []).length, last_run: (reg.runs || []).slice(-1)[0] ? reg.runs.slice(-1)[0].at || null : null, health };
+    })(),
+    // log lines that belong to no job: hooks failing outside a job, unparsed replies
+    factory_events: all.events.filter((e) => !e.job && ['hook_error', 'reply_unparsed', 'stop_block'].includes(e.event)).slice(-100).map((e) => ({ t: e.ts, type: e.event === 'reply_unparsed' ? 'unparsed' : e.event, text: short(e.event === 'hook_error' ? `The ${e.hook || 'factory'} hook failed${e.tool ? ` on ${e.tool}` : ''}: ${e.message || ''}` : e.event === 'reply_unparsed' ? `A message looked like "${e.verb || 'a reply'}" but was not applied ("${e.word || ''}")` : `The Stop hook refused a "done" claim`, 200) })),
     integrity: checker.hasKey ? { ...checker.tally, status: checker.tally.invalid ? 'tampered' : 'verified' } : { status: 'not_checked' },
     jobs,
   };
@@ -361,10 +396,13 @@ function serve(root, { port = 4477, job, label, interval = 400, onReady } = {}) 
   let print = fingerprint(root);
   const same = (a, b) => JSON.stringify({ ...a, generated_at: 0 }) === JSON.stringify({ ...b, generated_at: 0 });
   const send = (res, d) => res.write(`event: data\ndata: ${d}\n\n`);
+  let builtAt = Date.now();
   const tick = () => {
     const now = fingerprint(root);
-    if (now === print) return;
+    // Nothing written: still rebuild once a minute, so an agent whose session died turns stale.
+    if (now === print && Date.now() - builtAt < 60000) return;
     print = now;
+    builtAt = Date.now();
     let next;
     try { next = build(root, { job }); } catch { return; } // a file mid-write: try again next tick
     if (same(next, data)) return;
@@ -416,4 +454,4 @@ function runServe(root, { port, job, label }) {
   return null;
 }
 
-module.exports = { build, render, run, serve, runServe, fingerprint, STAGE_OF };
+module.exports = { build, render, run, serve, runServe, fingerprint, STAGE_OF, STALE_AGENT_MS };
