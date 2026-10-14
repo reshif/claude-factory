@@ -99,13 +99,13 @@ Run `factory console`, or `/factory:console` in Claude Code, then open `.factory
 
 ## The inspector (optional, separate plugin)
 
-`factory-inspector` audits the factory from the outside. For each job it checks whether the intended recipe was used and whether the factory behaved as that recipe says, including whether Claude did what the router told it. It keeps a register of deviations, ambiguities and gaps for you to decide on.
+`factory-inspector` audits the factory from the outside. For each job it checks whether the intended recipe was used and whether the factory behaved as that recipe says, including whether Claude did what the router told it. It also checks the factory's health from everything it logs: hook failures, repeated guard denials and blocked "done" claims, refused replies, CLI failures and crashes, stale or degraded workflow results, agent failures and retries, orphaned agents, parks, idle jobs and slow gates (thresholds are configurable). It keeps a register of deviations, ambiguities and gaps for you to decide on.
 
 ```bash
 claude plugin install factory-inspector@software-factory
 ```
 
-It runs when a job closes, and on demand with `/factory-inspector:inspect`. Once a recipe has a long clean streak it suggests sampling, then off. Disable the plugin to turn it off completely; the factory keeps logging either way. See [`plugins/factory-inspector/README.md`](plugins/factory-inspector/README.md).
+It runs when a job closes, and on demand with `/factory-inspector:inspect` (`active` also covers running jobs; `factory-inspect report` ends with a factory health summary). Once a recipe has a long clean streak it suggests sampling, then off. Disable the plugin to turn it off completely; the factory keeps logging either way. See [`plugins/factory-inspector/README.md`](plugins/factory-inspector/README.md).
 
 ## CI re-verify (recommended)
 
@@ -133,7 +133,7 @@ Recipes and floors live in the plugin ([`recipes/`](plugins/factory/recipes), [`
 
 ```bash
 cd plugins/factory
-npm test          # 42 tests (plus 10 in plugins/factory-inspector): end-to-end jobs, decision table, caps, guard, seals, hooks, workflows, schemas
+npm test          # 48 tests (plus 13 in plugins/factory-inspector): end-to-end jobs, decision table, caps, guard, seals, hooks, workflows, schemas, console
 ./bin/factory help
 ```
 

@@ -25,11 +25,14 @@ function humanOnly(channel) {
 }
 
 // pending: closed jobs not yet inspected since they closed. explicit: the given job (any status).
-function run(root, { job: only, all = false } = {}) {
+// active: also every active or parked job, as it stands now (issues happen mid-job).
+function run(root, { job: only, all = false, active = false } = {}) {
   const obs = observe(root);
   const cfg = config.load(root);
   const reg = register.load(root);
   const result = { at: nowIso(), inspected: [], skipped: [], added: [], reopened: [], rearmed: [] };
+  const opts = { limits: cfg.limits, now: result.at };
+  const keep = (list) => list.filter((fd) => config.ruleOn(cfg, fd.rule));
   const ids = only ? [only] : Object.keys(obs.jobs);
 
   for (const id of ids) {
@@ -41,7 +44,8 @@ function run(root, { job: only, all = false } = {}) {
     const status = job.state ? job.state.status : 'unknown';
     const prior = reg.inspected[id];
     const isClosed = ['closed', 'cancelled', 'abandoned'].includes(status);
-    if (!only && !all && (!isClosed || (prior && prior.status === status))) continue;
+    const isLive = ['active', 'parked'].includes(status);
+    if (!only && !all && !(active && isLive) && (!isClosed || (prior && prior.status === status))) continue;
     const recipeId = (job.lock && job.lock.id) || (job.state && job.state.recipe && job.state.recipe.id) || 'unknown';
     const rulebook = model.rulebookKey(job.lock);
     const re = config.rearmIfChanged(cfg, recipeId, rulebook);
@@ -52,7 +56,7 @@ function run(root, { job: only, all = false } = {}) {
       reg.inspected[id] = { at: nowIso(), status, skipped: gate.why, rulebook };
       continue;
     }
-    const found = rules.inspectJob(job);
+    const found = keep(rules.inspectJob(job, opts));
     const m = register.merge(reg, found, rulebook);
     result.added.push(...m.added);
     result.reopened.push(...m.reopened);
@@ -67,10 +71,10 @@ function run(root, { job: only, all = false } = {}) {
     reg.inspected[id] = { at: nowIso(), status, findings: ids4job, rulebook };
   }
 
-  const g = register.merge(reg, rules.inspectGlobal(obs, cfg.threshold), null);
+  const g = register.merge(reg, keep(rules.inspectGlobal(obs, cfg.threshold, opts)), null);
   result.added.push(...g.added);
   result.reopened.push(...g.reopened);
-  reg.runs.push({ at: result.at, scope: only || (all ? 'all' : 'pending'), inspected: result.inspected.length, added: result.added.length, reopened: result.reopened.length });
+  reg.runs.push({ at: result.at, scope: only || (all ? 'all' : active ? 'pending+active' : 'pending'), inspected: result.inspected.length, added: result.added.length, reopened: result.reopened.length });
   reg.runs = reg.runs.slice(-200);
   register.save(root, reg);
   config.save(root, cfg);
@@ -84,22 +88,93 @@ function counts(reg) {
   return { open: open.length, high: open.filter((x) => x.severity === 'high').length, deviations: open.filter((x) => x.class === 'deviation').length, ambiguities: open.filter((x) => x.class === 'ambiguity').length, gaps: open.filter((x) => x.class === 'gap').length };
 }
 
-function report(root, { status = 'open' } = {}) {
+function report(root, { status = 'open', health: withHealth = true } = {}) {
   const reg = register.load(root);
   const want = status === 'all' ? null : status === 'open' ? ['open', 'acknowledged'] : [status];
   const sev = { high: 0, medium: 1, low: 2 };
   const list = reg.findings.filter((x) => !want || want.includes(x.status)).sort((a, b) => sev[a.severity] - sev[b.severity] || a.id.localeCompare(b.id, undefined, { numeric: true }));
-  return { counts: counts(reg), findings: list };
+  return { counts: counts(reg), findings: list, ...(withHealth ? { health: health(root) } : {}) };
+}
+
+// Factory-wide health: what the factory says about itself, counted, whatever the findings.
+function health(root, { now = nowIso() } = {}) {
+  const obs = observe(root);
+  const L = config.load(root).limits;
+  const ev = obs.events;
+  const by = (pred) => ev.filter(pred);
+  const top = (items, keyFn, n = 3) => [...items.reduce((m, x) => m.set(keyFn(x), (m.get(keyFn(x)) || 0) + 1), new Map()).entries()].sort((a, b) => b[1] - a[1]).slice(0, n).map(([key, count]) => ({ key, count }));
+  const jobs = Object.values(obs.jobs);
+  const cli = by((e) => e.event === 'cli');
+  const failed = cli.filter((e) => e.ok === false);
+  const ledger = jobs.flatMap((j) => j.ledger);
+  const runs = ledger.filter((e) => e.kind === 'agents').flatMap((e) => e.agents || []);
+  const open = new Map();
+  for (const e of ev) {
+    if (e.event === 'SubagentStart' && e.agent_id) open.set(e.agent_id, e);
+    if (e.event === 'SubagentStop' && e.agent_id) open.delete(e.agent_id);
+  }
+  const hoursSince = (t) => (Date.parse(now) - Date.parse(t)) / 36e5;
+  const idle = jobs
+    .filter((j) => j.state && j.state.status === 'active' && !j.state.pending_gate)
+    .map((j) => {
+      const last = [...j.events.map((e) => e.ts), ...j.decisions.map((d) => d.ts), ...j.ledger.map((e) => e.at), j.state.updated_at].filter(Boolean).sort().pop();
+      return { job: j.id, idle_hours: last ? Math.round(hoursSince(last)) : null };
+    })
+    .filter((x) => x.idle_hours !== null && x.idle_hours >= L.idle_hours);
+  const waits = [];
+  for (const j of jobs) {
+    for (const g of j.decisions.filter((d) => isRouting(d) && d.action === 'gate')) {
+      const r = j.decisions.filter((d) => ['human.approve', 'human.deny'].includes(d.action) && (!d.gate || d.gate === g.step) && d.ts >= g.ts).sort((a, b) => (a.ts < b.ts ? -1 : 1))[0];
+      if (r) waits.push((Date.parse(r.ts) - Date.parse(g.ts)) / 36e5);
+    }
+  }
+  waits.sort((a, b) => a - b);
+  const r1 = (x) => Math.round(x * 10) / 10;
+  return {
+    jobs: { total: jobs.length, ...Object.fromEntries(top(jobs, (j) => (j.state && j.state.status) || 'unknown', 10).map((x) => [x.key, x.count])) },
+    seals: obs.sealsChecked ? 'checked' : 'not checked (no factory secret on this machine)',
+    unsealed_lines: obs.unsealed.events.length + obs.unsealed.decisions.length + jobs.reduce((n, j) => n + j.ledgerLines.filter((l) => !l.sealed && !l.torn).length, 0),
+    torn_lines: obs.torn.events.length + obs.torn.decisions.length + jobs.reduce((n, j) => n + (j.ledgerTorn || []).length, 0),
+    hook_errors: top(by((e) => e.event === 'hook_error'), (e) => e.hook || 'unknown', 10),
+    inspector_hook_errors: (obs.inspectorHookErrors || []).length,
+    guard_denials: { total: by((e) => e.event === 'guard_deny').length, top: top(by((e) => e.event === 'guard_deny'), (e) => `${e.agent_type || 'main session'}: ${String(e.reason || '').slice(0, 80)}`) },
+    stop_blocks: by((e) => e.event === 'stop_block').length,
+    replies: { refused: by((e) => e.event === 'reply_refused').length, unparsed: by((e) => e.event === 'reply_unparsed').length },
+    cli: { runs: cli.length, failed: failed.length, crashes: failed.filter((e) => e.code === 'internal').length, by_code: top(failed, (e) => `${e.cmd}${e.sub ? ` ${e.sub}` : ''}: ${e.code || 'error'}`, 6) },
+    records: { stale: cli.filter((e) => e.cmd === 'record' && e.status === 'stale').length, degraded: cli.filter((e) => e.cmd === 'record' && e.status === 'degraded').length, workflow_errors: ledger.filter((e) => e.kind === 'error').length },
+    agents: { runs: runs.length, retries: runs.filter((a) => a.retry || /#([2-9]|\d{2,})$/.test(a.label || '')).length, failed: runs.filter((a) => rules.AGENT_FAILED.has(a.outcome)).length, started: by((e) => e.event === 'SubagentStart').length, not_stopped: open.size },
+    parks: obs.decisions.filter((d) => d.action === 'parked').length,
+    resumes: obs.decisions.filter((d) => d.action === 'human.resume').length,
+    idle_jobs: idle,
+    gate_wait_hours: waits.length ? { median: r1(waits[Math.floor(waits.length / 2)]), max: r1(waits[waits.length - 1]), n: waits.length } : null,
+  };
+}
+
+function healthMd(h) {
+  const n = (x) => (x && x.length ? x.map((t) => `${t.key} ×${t.count}`).join(', ') : 'none');
+  return [
+    '## Factory health',
+    '',
+    `- Jobs: ${Object.entries(h.jobs).map(([k, v]) => `${k} ${v}`).join(' · ')}${h.idle_jobs.length ? ` · idle: ${h.idle_jobs.map((x) => `${x.job} (${x.idle_hours} h)`).join(', ')}` : ''}`,
+    `- Records: seals ${h.seals} · unsealed lines ${h.unsealed_lines} · torn lines ${h.torn_lines}`,
+    `- Hook errors: ${n(h.hook_errors)}${h.inspector_hook_errors ? ` · inspector hooks ${h.inspector_hook_errors}` : ''}`,
+    `- Hook pushback: guard denials ${h.guard_denials.total}${h.guard_denials.total ? ` (${n(h.guard_denials.top)})` : ''} · stop blocks ${h.stop_blocks} · replies refused ${h.replies.refused} · look-alike replies ${h.replies.unparsed}`,
+    `- CLI: ${h.cli.runs} commands, ${h.cli.failed} failed${h.cli.crashes ? `, ${h.cli.crashes} crashed` : ''}${h.cli.failed ? ` (${n(h.cli.by_code)})` : ''}`,
+    `- Workflows: stale results ${h.records.stale} · degraded ${h.records.degraded} · errors ${h.records.workflow_errors}`,
+    `- Agents: ${h.agents.runs} runs · ${h.agents.retries} retries · ${h.agents.failed} failed · ${h.agents.not_stopped} of ${h.agents.started} started never stopped`,
+    `- Parks ${h.parks} · resumes ${h.resumes}${h.gate_wait_hours ? ` · gate replies: median ${h.gate_wait_hours.median} h, max ${h.gate_wait_hours.max} h` : ''}`,
+  ].join('\n');
 }
 
 function reportMd(r) {
   const L = ['# Factory inspection', '', `Open: ${r.counts.open} (${r.counts.high} high) · deviations ${r.counts.deviations} · ambiguities ${r.counts.ambiguities} · gaps ${r.counts.gaps}`, ''];
-  if (!r.findings.length) return [...L, 'No findings. The factory behaved as its rulebooks say.'].join('\n');
+  const tail = r.health ? ['', healthMd(r.health)] : [];
+  if (!r.findings.length) return [...L, 'No findings. The factory behaved as its rulebooks say.', ...tail].join('\n');
   L.push('| ID | Severity | Class | Rule | Job | What happened | Question | Status |', '|---|---|---|---|---|---|---|---|');
   for (const x of r.findings) {
     L.push(`| ${x.id}${x.regressed ? ' ↺' : ''} | ${x.severity} | ${x.class} | ${x.rule} | ${x.job || '—'} | ${String(x.summary).replace(/\|/g, '\\|')} | ${String(x.question).replace(/\|/g, '\\|')} | ${x.status} |`);
   }
-  L.push('', 'Reply `ack finding F3`, `fixed finding F3` or `wontfix finding F3 <why>`. ↺ = came back after being marked fixed.');
+  L.push('', 'Reply `ack finding F3`, `fixed finding F3` or `wontfix finding F3 <why>`. ↺ = came back after being marked fixed.', ...tail);
   return L.join('\n');
 }
 
@@ -110,7 +185,7 @@ function status(root) {
     const m = config.modeFor(cfg, id);
     return { recipe: id, mode: m.mode, sample_every: m.mode === 'sample' ? m.every : null, clean_streak: r.streak || 0, inspected: r.inspected || 0, rearmed_at: r.rearmed_at };
   });
-  return { mode: cfg.mode, sample_every: cfg.sample_every, settle_after: cfg.settle_after, threshold: cfg.threshold, recipes, open: counts(reg), suggestions: config.suggestions(cfg), last_run: reg.runs[reg.runs.length - 1] || null };
+  return { mode: cfg.mode, sample_every: cfg.sample_every, settle_after: cfg.settle_after, threshold: cfg.threshold, limits: cfg.limits, rules_off: cfg.rules_off, recipes, open: counts(reg), suggestions: config.suggestions(cfg), last_run: reg.runs[reg.runs.length - 1] || null };
 }
 
 function mark(root, { id, to, reason, channel }) {
@@ -141,6 +216,7 @@ function trace(root, { job: id }) {
     for (const e of job.events.filter((x) => x.event === 'cli' && x.decision_id === d.id && x.cmd !== 'next')) L.push(`  - factory ${e.cmd}${e.sub ? ` ${e.sub}` : ''}${e.arg ? ` ${e.arg}` : ''}${e.workflow ? ` [${e.workflow}${e.config ? `/${e.config}` : ''}]` : ''} ${e.ok ? '' : `✗ ${e.code || ''}`}`);
     for (const h of human.filter((x) => x.during === d.id)) L.push(`  - you: ${h.action.replace('human.', '')}${h.gate ? ` ${h.gate}` : ''}${h.reason ? ` — ${h.reason}` : ''}`);
     for (const g of job.events.filter((x) => x.event === 'guard_deny' && x.decision_id === d.id)) L.push(`  - guard denied${g.agent_type ? ` ${g.agent_type}` : ''}: ${g.reason}`);
+    for (const g of job.events.filter((x) => ['stop_block', 'hook_error', 'reply_refused', 'reply_unparsed'].includes(x.event) && x.decision_id === d.id)) L.push(`  - ${g.event.replace('_', ' ')}: ${g.hook ? `${g.hook}: ${g.message}` : (g.missing || []).join(', ') || g.reason || g.word || ''}`);
   }
   return L.join('\n');
 }
@@ -169,7 +245,7 @@ function parseArgs(argv) {
     if (a.startsWith('--')) {
       const eq = a.indexOf('=');
       if (eq !== -1) opt[a.slice(2, eq)] = a.slice(eq + 1);
-      else if (['all', 'json'].includes(a.slice(2)) || argv[i + 1] === undefined || argv[i + 1].startsWith('--')) opt[a.slice(2)] = true;
+      else if (['all', 'json', 'active'].includes(a.slice(2)) || argv[i + 1] === undefined || argv[i + 1].startsWith('--')) opt[a.slice(2)] = true;
       else opt[a.slice(2)] = argv[++i];
     } else pos.push(a);
   }
@@ -178,8 +254,11 @@ function parseArgs(argv) {
 
 const HELP = `factory-inspect — audits the Software Factory against each job's declared rulebook
 
-  run [--job J-0001 | --all]     inspect closed jobs not yet inspected (or one job, or everything)
-  report [--status open|all|fixed|wont_fix] [--format md]
+  run [--job J-0001 | --all | --active]
+                                  inspect closed jobs not yet inspected (or one job, or everything,
+                                  or also every active/parked job as it stands now)
+  report [--status open|all|fixed|wont_fix] [--format md]   findings + factory health
+  health [--format md]            factory-wide health only (hook errors, denials, CLI failures, agents…)
   status                          modes, clean streaks, suggestions
   show <F3>                       one finding in full
   trace --job J-0001              the job's decisions and the commands run under each
@@ -196,7 +275,11 @@ function cli(argv) {
     case 'help':
       return HELP;
     case 'run':
-      return run(requireRoot(opt), { job: opt.job, all: Boolean(opt.all) });
+      return run(requireRoot(opt), { job: opt.job, all: Boolean(opt.all), active: Boolean(opt.active) });
+    case 'health': {
+      const h = health(requireRoot(opt));
+      return opt.format === 'md' ? healthMd(h) : h;
+    }
     case 'report': {
       const r = report(requireRoot(opt), { status: opt.status || 'open' });
       return opt.format === 'md' ? reportMd(r) : r;
@@ -229,4 +312,4 @@ function main(argv) {
   }
 }
 
-module.exports = { main, cli, run, report, reportMd, status, mark, setMode, trace, parseReply, applyReply, counts };
+module.exports = { main, cli, run, report, reportMd, health, healthMd, status, mark, setMode, trace, parseReply, applyReply, counts };
