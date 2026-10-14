@@ -2,7 +2,7 @@
 // Builds what happened, per job and overall, from the factory's sealed records.
 
 const fs = require('fs');
-const { readJson, readLog, sealOk, layout } = require('./io');
+const { readJson, readLog, sealOk, layout, secret } = require('./io');
 
 function jobIds(root) {
   const L = layout(root);
@@ -32,6 +32,7 @@ function observe(root) {
       stateSealed: state ? sealOk(state) !== false : false,
       lockSealed: lock ? sealOk(lock) !== false : false,
       ledgerLines,
+      ledgerTorn: ledgerLines.filter((l) => l.torn).map((l) => l.line),
       ledger: ledgerLines.filter((l) => l.sealed && l.rec && l.rec.job === id).map((l) => l.rec),
       decisionLines: decisions,
       decisions: decisions.filter((d) => d.sealed).map((d) => d.rec),
@@ -45,9 +46,16 @@ function observe(root) {
     decisions: decisionsAll.filter((d) => d.sealed && d.rec).map((d) => d.rec),
     events: eventsAll.filter((e) => e.sealed && e.rec).map((e) => e.rec),
     unsealed: {
-      decisions: decisionsAll.filter((d) => !d.sealed).map((d) => ({ line: d.line, job: d.rec && d.rec.job })),
-      events: eventsAll.filter((e) => !e.sealed).map((e) => ({ line: e.line, job: e.rec && e.rec.job })),
+      decisions: decisionsAll.filter((d) => !d.sealed && !d.torn).map((d) => ({ line: d.line, job: d.rec && d.rec.job })),
+      events: eventsAll.filter((e) => !e.sealed && !e.torn).map((e) => ({ line: e.line, job: e.rec && e.rec.job })),
     },
+    // Lines that aren't JSON at all: a crashed or concurrent writer, or a hand edit.
+    torn: {
+      events: eventsAll.filter((e) => e.torn).map((e) => e.line),
+      decisions: decisionsAll.filter((d) => d.torn).map((d) => d.line),
+    },
+    sealsChecked: Boolean(secret()),
+    inspectorHookErrors: readLog(L.hookErrors).filter((l) => l.rec).map((l) => l.rec),
   };
 }
 

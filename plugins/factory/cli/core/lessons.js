@@ -2,7 +2,8 @@
 // Lessons: short, scoped rules learned from confirmed problems. Agents propose,
 // you accept or reject in chat. Accepted lessons feed plans, builds and reviews.
 
-const { readJson, writeJson, nowIso, fail } = require('../lib/util');
+const path = require('path');
+const { readJson, writeJson, writeText, nowIso, fail } = require('../lib/util');
 const { project } = require('../lib/paths');
 const { matchesAny, globsOverlap } = require('../lib/glob');
 
@@ -12,9 +13,38 @@ function load(root) {
 
 function save(root, doc) {
   writeJson(project(root).lessonsFile, doc);
+  writeText(path.join(path.dirname(project(root).lessonsFile), 'lessons.md'), register(doc));
 }
 
-function add(root, { jobId, text, scope }) {
+// lessons.md: the human-readable register, rendered from lessons.json with
+// templates/docs/lessons.md (lessons@1). One card per lesson, same parts every time.
+function register(doc) {
+  const { frontBlock, cell, loadTemplate } = require('./doc');
+  const ls = doc.lessons || [];
+  const date = ls.flatMap((l) => [l.created_at, l.decided_at]).filter(Boolean).sort().pop() || '1970-01-01';
+  const L = [
+    frontBlock({ doc: 'lessons', template: loadTemplate('lessons').version, job: 'project', title: 'Lessons register', status: 'current', date: date.slice(0, 10), contract: 'none', related: ['lessons.json'] }),
+    '',
+    '# Lessons register',
+    '',
+    '## Summary',
+    '',
+    '| Lesson | Status | Scope | Source job | Rule |',
+    '|---|---|---|---|---|',
+    ...ls.map((l) => `| ${l.id} | ${l.status} | ${cell(l.scope.join(', '))} | ${l.source_job || '—'} | ${cell(l.text)} |`),
+    ...(ls.length ? [] : ['| — | — | — | — | — |']),
+    '',
+    '## Lessons',
+    '',
+  ];
+  for (const l of ls) {
+    L.push(`### ${l.id} — ${l.status}`, `- Rule: ${l.text}`, `- Scope: ${l.scope.join(', ')}`, `- Why: ${l.why || (l.source_job ? `confirmed problems in ${l.source_job}` : 'not recorded')}`, `- Check: ${l.check ? `\`${l.check}\`` : `review (findings cite "lesson:${l.id}")`}`, `- Decided: ${l.decided_at ? `${l.status} ${l.decided_at}${l.reason ? ` — ${l.reason}` : ''}` : 'awaiting your accept or reject'}`, '');
+  }
+  if (!ls.length) L.push('None yet.', '');
+  return L.join('\n');
+}
+
+function add(root, { jobId, text, scope, why }) {
   if (!text || text.length < 10) fail('A lesson needs a sentence of text.', 'bad_input');
   const scopes = (Array.isArray(scope) ? scope : String(scope || '**').split(',')).map((s) => s.trim()).filter(Boolean);
   const doc = load(root);
@@ -24,7 +54,7 @@ function add(root, { jobId, text, scope }) {
   const mine = doc.lessons.filter((l) => l.source_job === jobId);
   if (jobId && mine.length >= max) fail(`${jobId} already proposed ${max} lessons (the cap).`, 'cap');
   const id = `L${doc.lessons.length + 1}`;
-  const lesson = { id, status: 'proposed', text, scope: scopes, source_job: jobId || null, created_at: nowIso() };
+  const lesson = { id, status: 'proposed', text, scope: scopes, source_job: jobId || null, ...(why ? { why: String(why) } : {}), created_at: nowIso() };
   doc.lessons.push(lesson);
   save(root, doc);
   return lesson;
@@ -68,4 +98,4 @@ function inScope(root, pathsOrGlobs) {
     .map((l) => ({ id: l.id, text: l.text, scope: l.scope }));
 }
 
-module.exports = { load, add, decide, promote, inScope };
+module.exports = { load, add, decide, promote, inScope, register };

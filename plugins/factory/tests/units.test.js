@@ -150,7 +150,58 @@ test('prompt hook applies an exact reply and reports a refused one', () => {
   const b = F.cli(root, ['wfargs', 'fanout-judge', '--config', 'clarify']);
   F.record(root, F.envelope(b, 'ok', { analysts: [], degraded: [], judge: { questions: [], dismissed: [] }, critique: { verdict: 'approve', items: [] } }));
   assert.equal(F.cli(root, ['next']).step, 'H1');
-  assert.match(JSON.parse(run('approve').stdout).hookSpecificOutput.additionalContext, /Applied your reply: Approved H1/);
+  // a near miss is never applied, and says so with the exact forms
+  const miss = JSON.parse(run('aprove').stdout).hookSpecificOutput.additionalContext;
+  assert.match(miss, /NOTHING was applied/);
+  assert.match(miss, /`approve \[J-0001\] \[H1\]`/);
+  assert.match(JSON.parse(run('approve the contract please').stdout).hookSpecificOutput.additionalContext, /NOTHING was applied/);
+  assert.equal(F.cli(root, ['next']).step, 'H1', 'still waiting at H1');
+  assert.match(JSON.parse(run('Approve! 👍').stdout).hookSpecificOutput.additionalContext, /Applied your reply: Approved H1/);
+  const evs = fs.readFileSync(path.join(root, '.factory', 'log', 'events.jsonl'), 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l));
+  assert.equal(evs.filter((e) => e.event === 'reply_unparsed').length, 2);
+});
+
+test('hook failures leave a sealed hook_error trace and never block', () => {
+  const root = F.makeRepo();
+  const J = F.cli(root, ['job', 'new', '--title', 'x', '--type', 'bug', '--risk', 'low']).job;
+  const st = path.join(F.jobDir(root, J), 'state.json');
+  fs.writeFileSync(st, JSON.stringify({ ...JSON.parse(fs.readFileSync(st, 'utf8')), risk: 'high' }));
+  const { spawnSync } = require('child_process');
+  const r = spawnSync('node', [path.join(F.PLUGIN, 'hooks', 'session-start.js')], { input: JSON.stringify({ cwd: root, hook_event_name: 'SessionStart' }), encoding: 'utf8' });
+  assert.equal(r.status, 0);
+  assert.equal(r.stdout, '');
+  const evs = fs.readFileSync(path.join(root, '.factory', 'log', 'events.jsonl'), 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l));
+  const err = evs.find((e) => e.event === 'hook_error');
+  assert.ok(err, 'hook_error logged');
+  assert.equal(err.hook, 'session-start');
+  assert.equal(err.hook_event, 'SessionStart');
+  assert.equal(err.job, J);
+  assert.ok(err.message && err.seal);
+});
+
+test('hooks.json: PostToolUse skips read-only tools; the guard covers Glob', () => {
+  const H = JSON.parse(fs.readFileSync(path.join(F.PLUGIN, 'hooks', 'hooks.json'), 'utf8')).hooks;
+  const post = new RegExp(`^(${H.PostToolUse[0].matcher})$`);
+  for (const t of ['Bash', 'Write', 'Edit', 'MultiEdit', 'NotebookEdit', 'Task', 'Agent', 'WebFetch']) assert.ok(post.test(t), t);
+  for (const t of ['Read', 'Grep', 'Glob', 'TodoWrite']) assert.ok(!post.test(t), t);
+  const pre = new RegExp(`^(${H.PreToolUse[0].matcher})$`);
+  for (const t of ['Read', 'Grep', 'Glob', 'Write', 'Bash']) assert.ok(pre.test(t), t);
+});
+
+test('guard: Glob and Grep get the read rules (secret folder, glob filters)', () => {
+  const root = F.makeRepo();
+  const { spawnSync } = require('child_process');
+  const secretDir = path.dirname(require('../cli/lib/seal').secretFile());
+  const run = (tool_name, tool_input) => spawnSync('node', [path.join(F.PLUGIN, 'hooks', 'guard.js')], { input: JSON.stringify({ tool_name, tool_input, cwd: root }), encoding: 'utf8' }).stdout;
+  const denied = (out) => out && JSON.parse(out).hookSpecificOutput.permissionDecision === 'deny';
+  assert.ok(denied(run('Glob', { pattern: '*', path: secretDir })));
+  assert.ok(denied(run('Grep', { pattern: '.', path: secretDir })));
+  assert.ok(denied(run('Grep', { pattern: 'KEY', glob: '.env*' })));
+  assert.ok(denied(run('Grep', { pattern: 'x', glob: '*.pem' })));
+  assert.ok(denied(run('Glob', { pattern: '*', path: path.join(root, '.env') })));
+  assert.equal(run('Glob', { pattern: '**/*.js', path: root }), '');
+  assert.equal(run('Grep', { pattern: 'add', glob: '*.js' }), '');
+  assert.equal(run('Grep', { pattern: 'add', glob: '*' }), '');
 });
 
 test('stop hook blocks a "done" claim while floors fail', () => {
@@ -160,6 +211,24 @@ test('stop hook blocks a "done" claim while floors fail', () => {
   const run = (msg) => spawnSync('node', [path.join(F.PLUGIN, 'hooks', 'stop.js')], { input: JSON.stringify({ cwd: root, last_assistant_message: msg }), encoding: 'utf8' });
   assert.equal(JSON.parse(run('The fix is now complete and ready to merge.').stdout).decision, 'block');
   assert.equal(run('I drafted the contract; waiting for your answers.').stdout, '');
+  for (const m of ["I've completed the task.", 'Everything is done.', "That's done!", 'Shipped.', 'All done 🎉']) assert.equal(JSON.parse(run(m).stdout || '{}').decision, 'block', m);
+  for (const m of ['Is the fix complete?', 'The fix is not done yet.', 'Once the job is done, I will open the PR.', "The task isn't finished: tests fail."]) assert.equal(run(m).stdout, '', m);
+});
+
+test('stop hook checks every job the message names, not only the current one', () => {
+  const root = F.makeRepo();
+  const J1 = F.cli(root, ['job', 'new', '--title', 'one', '--type', 'bug', '--risk', 'low']).job;
+  F.cli(root, ['park', '--reason', 'later']);
+  const J2 = F.cli(root, ['job', 'new', '--title', 'two', '--type', 'bug', '--risk', 'low']).job;
+  F.cli(root, ['use', J1]);
+  F.cli(root, ['resume']); // human-only: refused, J1 stays parked
+  const { spawnSync } = require('child_process');
+  const run = (msg) => spawnSync('node', [path.join(F.PLUGIN, 'hooks', 'stop.js')], { input: JSON.stringify({ cwd: root, last_assistant_message: msg }), encoding: 'utf8' }).stdout;
+  assert.equal(run('The work is complete.'), '', 'the current job is parked: nothing owed');
+  const out = JSON.parse(run(`I have finished the work on ${J2}.`));
+  assert.equal(out.decision, 'block');
+  assert.match(out.reason, new RegExp(J2));
+  assert.doesNotMatch(out.reason, new RegExp(`${J1} \\(`));
 });
 
 test('schemas: agent outputs and envelope are valid JSON Schema the validator accepts', () => {
@@ -210,6 +279,82 @@ test('contract parsing and placeholders', () => {
   assert.deepEqual(ok.allowedPaths, ['src/**', 'tests/**']);
 });
 
+test('contract Intent: parsed, placeholders fail the check, legacy contracts only where allowed', () => {
+  const t = contract.parse(contract.template({ title: 'x', workType: 'bug', risk: 'low' }));
+  assert.equal(t.intent.present, true);
+  const probs = contract.problems(t);
+  for (const f of ['Problem', 'Who', 'Outcome', 'Why now', 'Success signal']) assert.ok(probs.includes(`Intent: ${f} is missing or still a placeholder`), f);
+  const ok = contract.parse(F.contractText());
+  assert.equal(ok.intent.outcome, 'add returns the arithmetic sum');
+  assert.equal(ok.intent.success, 'tests/add.test.js passes');
+  assert.deepEqual(contract.problems(ok), []);
+  const legacy = contract.parse(F.contractText({ intent: null }));
+  assert.match(contract.problems(legacy)[0], /No "## Intent" section/);
+  assert.deepEqual(contract.problems(legacy, { requireIntent: false }), [], 'approved legacy contracts still amend and plan');
+  const noWhyNow = contract.parse(F.contractText({ intent: '- Problem: p is broken\n- Who is affected: ops\n- Desired outcome: p works\n- Success: alert clears' }));
+  assert.deepEqual(contract.problems(noWhyNow), [], 'Why now is optional; label variants parse');
+});
+
+test('question protocol: intent first and alone, priority order, budget, never re-ask, ids and defaults', () => {
+  const Q = require('../cli/core/questions');
+  const cfg = JSON.parse(fs.readFileSync(path.join(F.PLUGIN, 'config', 'workflows', 'clarify.json'), 'utf8'));
+  const L = { max_intent_rounds: 4 };
+  assert.deepEqual([1, 2, 3, 4].map((r) => Q.budget(cfg, r, L)), [5, 3, 3, 0], 'round 1 ≤ 5, later ≤ 3, last round none');
+  assert.equal(cfg.fanout[0].category, 'intent');
+  const list = [
+    { question: 'Which DB?', category: 'constraint', why: 'w', default: 'postgres' },
+    { question: 'Who is this for?', category: 'intent', why: 'w' },
+    { question: 'Mobile too?', category: 'scope', why: 'w', default: 'no', options: ['yes', 'no'] },
+  ];
+  let s = Q.shape(list, { budget: 5, startId: 2 });
+  assert.equal(s.intent_open, true);
+  assert.deepEqual(s.questions.map((q) => [q.id, q.question]), [['Q-3', 'Who is this for?']]);
+  assert.match(s.questions[0].default, /will not guess/);
+  assert.equal(s.held.length, 2, 'scope and constraint wait for intent');
+  s = Q.shape(list.slice(0, 1).concat(list.slice(2)), { budget: 1, asked: ['which db'] });
+  assert.deepEqual(s.questions.map((q) => q.question), ['Mobile too?']);
+  assert.deepEqual(s.questions[0].options, ['yes', 'no']);
+  assert.deepEqual(s.dropped.map((d) => d.reason), ['already asked']);
+  s = Q.shape([{ question: 'b', category: 'acceptance' }, { question: 'a', category: 'scope' }, { question: 'c', focus: 'constraints' }], { budget: 2 });
+  assert.deepEqual(s.questions.map((q) => q.category), ['scope', 'constraint'], 'sorted by priority, over-budget dropped');
+  assert.deepEqual(s.dropped, [{ question: 'b', reason: 'over budget' }]);
+});
+
+test('workflows: clarify runs the intent gate first and holds the other angles while intent is open', async () => {
+  const H = require('./helpers/workflow-harness');
+  const env = JSON.parse(fs.readFileSync(path.join(F.PLUGIN, 'schemas', 'envelope.json'), 'utf8'));
+  const item = (id, category, gate = false) => ({ id, label: id, category, gate, prompt: `p-${id}`, schema: {}, agent_type: 'factory:intent-analyst' });
+  const brief = { workflow: 'fanout-judge', job: 'J-0001', input_hash: 'h', budgets: { limit: {} }, config: 'clarify', limits: { max_questions: 2 }, asked: ['Old question?'], fanout: [item('intent', 'intent', true), item('scope', 'scope'), item('tests', 'acceptance')], judge: { prompt: 'J', schema: {}, agent_type: 'factory:judge' }, critique: { prompt: 'C', schema: {}, agent_type: 'factory:god-eye' } };
+  // intent unclear: only the gate runs; the judge is told; only intent questions come back
+  let r = await H.run(path.join(F.PLUGIN, 'workflows', 'fanout-judge.js'), brief, (prompt) => {
+    if (prompt.startsWith('J')) {
+      assert.match(prompt, /INTENT GATE/);
+      return { questions: [{ question: 'Old question?', category: 'intent', why: 'w', default: 'd' }, { question: 'Who uses it?', category: 'intent', why: 'w', default: 'd' }, { question: 'Edge?', category: 'acceptance', why: 'w', default: 'd' }], dismissed: [] };
+    }
+    if (prompt === 'p-intent') return { focus: 'intent', questions: [{ question: 'Who uses it?', why: 'w', blocking: true }] };
+    throw new Error(`held angle ran: ${prompt}`);
+  });
+  assert.equal(r.result.status, 'needs_user');
+  assert.deepEqual(r.result.questions.map((q) => q.question), ['Who uses it?'], 'never re-asks; intent alone');
+  assert.deepEqual(r.result.data.held_back, ['scope', 'tests']);
+  assert.deepEqual(r.result.data.degraded, [], 'held angles are not missing angles');
+  assert.equal(r.result.data.intent_open, true);
+  assert.deepEqual(validate(env, r.result), []);
+  // intent clear: gate then the rest; the judge's list is cut to the budget in priority order; God Eye must confirm the intent
+  r = await H.run(path.join(F.PLUGIN, 'workflows', 'fanout-judge.js'), brief, (prompt) => {
+    if (prompt.startsWith('J')) return { questions: [{ question: 'a', category: 'acceptance', why: 'w', default: 'd' }, { question: 'b', category: 'scope', why: 'w', default: 'd' }, { question: 'c', category: 'constraint', why: 'w', default: 'd' }], dismissed: [] };
+    return { focus: 'x', questions: [] };
+  });
+  assert.equal(r.calls.filter((c) => c.opts.agentType === 'factory:intent-analyst').length, 3);
+  assert.deepEqual(r.result.questions.map((q) => q.question), ['b', 'c']);
+  r = await H.run(path.join(F.PLUGIN, 'workflows', 'fanout-judge.js'), brief, (prompt) => {
+    if (prompt.startsWith('J')) return { questions: [], dismissed: [] };
+    if (prompt.startsWith('C')) return { verdict: 'approve', intent_confirmed: false, restatement: { problem: 'p', outcome: 'o' }, items: [] };
+    return { focus: 'x', questions: [] };
+  });
+  assert.equal(r.result.status, 'needs_user', 'approve without a confirmed intent is not ok');
+});
+
 test('plan validate: coverage, unknown criteria, protected paths, locks held by another job', () => {
   const root = F.makeRepo();
   const J = F.cli(root, ['job', 'new', '--title', 'x', '--type', 'feature', '--risk', 'medium']).job;
@@ -238,8 +383,8 @@ test('epic: slices spawn child jobs in order; depth is capped at 2; the epic gat
   assert.equal(n.config, 'decide');
   assert.equal(n.mode, 'contracts');
   b = F.cli(root, ['wfargs', 'fanout-judge', '--config', 'decide']);
-  F.write(F.jobDir(root, E), 'adr-001-big.md', '# ADR\n');
-  F.write(F.jobDir(root, E), 'contracts.md', '# Contracts\n');
+  F.write(F.jobDir(root, E), 'adr-001-big.md', F.adrText({ job: E, acs: ['E-AC-1', 'E-AC-2'] }));
+  F.write(F.jobDir(root, E), 'contracts.md', F.contractsDocText({ job: E }));
   F.write(F.jobDir(root, E), 'contracts.json', '{"interfaces":[]}\n');
   F.record(root, F.envelope(b, 'ok', { options: [], degraded: [], judge: { kind: 'contracts', paths: [path.join(F.jobDir(root, E), 'adr-001-big.md')], summary: 's' }, critiques: [{ verdict: 'approve', items: [] }] }));
   assert.equal(F.cli(root, ['next']).step, 'EH2');
@@ -266,7 +411,12 @@ test('epic: slices spawn child jobs in order; depth is capped at 2; the epic gat
   const job = require('../cli/core/job');
   assert.throws(() => job.create(root, { title: 'deep', workType: 'bug', risk: 'low', parent: child.id }), /depth/);
   // the slice contract is seeded from the epic's criteria
-  assert.match(fs.readFileSync(path.join(F.jobDir(root, child.id), 'contract.md'), 'utf8'), /\[E-AC-1\]/);
+  const childText = fs.readFileSync(path.join(F.jobDir(root, child.id), 'contract.md'), 'utf8');
+  assert.match(childText, /\[E-AC-1\]/);
+  const ci = contract.parse(childText).intent;
+  assert.equal(ci.problem, contract.parse(F.contractText()).intent.problem, 'the slice inherits the epic intent');
+  assert.equal(ci.outcome, 'contracts and flag');
+  assert.match(ci.success, /E-AC-1/);
 });
 
 test('workflows: fanout-judge clarify / decide / challenge produce valid envelopes', async () => {
@@ -379,7 +529,7 @@ test('spike: grounded recommendation, HF gate, close without shipping code', () 
   assert.equal(n.mode, 'recommendation');
   b = F.cli(root, ['wfargs', 'fanout-judge', '--config', 'decide']);
   assert.ok(!b.fanout.some((f) => f.id === 'threat-modeler'));
-  F.write(F.jobDir(root, J), 'recommendation.md', '# Recommendation\nUse A.\n');
+  F.write(F.jobDir(root, J), 'recommendation.md', F.recommendationText({ job: J }));
   F.record(root, F.envelope(b, 'ok', { options: [], degraded: [], judge: { kind: 'recommendation', paths: [path.join(F.jobDir(root, J), 'recommendation.md')], summary: 'A' }, critiques: [{ verdict: 'approve', items: [] }] }));
   const g = F.cli(root, ['next']);
   assert.equal(g.step, 'HF');

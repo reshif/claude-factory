@@ -8,7 +8,7 @@ const path = require('path');
 const { FactoryError, fail, readText, writeJson } = require('./lib/util');
 const { requireRoot, findRoot, PLUGIN_ROOT } = require('./lib/paths');
 
-const BOOL = new Set(['epic', 'local', 'check', 'json', 'plan-fields', 'help', 'threat-model', 'plan-critique', 'no-threat-model', 'accept-degraded']);
+const BOOL = new Set(['epic', 'local', 'check', 'json', 'plan-fields', 'help', 'threat-model', 'plan-critique', 'no-threat-model', 'accept-degraded', 'serve']);
 
 function parseArgs(argv) {
   const pos = [];
@@ -50,7 +50,7 @@ const HELP = `factory — Software Factory CLI (plugin at ${PLUGIN_ROOT})
 Setup      init [--base <branch>] · doctor · ci install
 Jobs       job new --title "…" --type <work type> --risk low|medium|high [--epic] · job show · job list · use <job>
 Routing    next · why [--format md] · finalize [--mode before_ship|full] [--check]
-Contract   contract show · contract check [--plan-fields] · answer --question "…" --answer "…"
+Contract   contract show · contract check [--plan-fields] · answer --id Q-n | --question "…" --answer "…"
 Workflows  wfargs <ground|fanout-judge|decompose|realize|reconcile> [--config clarify|decide|challenge] [--mode m] [--scope s] [--lanes a,b]
            [--threat-model | --no-threat-model] [--plan-critique] [--accept-degraded] [--out file]
            record --file <envelope.json | ->
@@ -60,13 +60,18 @@ Build      reconcile run|continue|abort · verify run · evidence add <AC> --typ
 Ship       report · ship [--local] · pr sync · ci verify [--manifest-dir d | --commit sha] · close
 Change     amend start --reason "…" [--by who] · amend submit · park --reason "…" · followup
 Epic       epic spawn · epic gate
-Learning   distill context · distill done · lessons list · lessons add --text "…" --scope "glob,…"
+Docs       doc list · doc template <type> · doc check [<file>] [--type t] [--job J] · doc index
+           (templates/docs: adr, no-adr, recommendation, threat-model, contracts, findings, ship-report, lessons, index)
+Learning   distill context · distill done · lessons list · lessons add --text "…" --scope "glob,…" [--why "…"]
            telemetry report [--since 30] [--format md] · recipe list|show <id>|check|select --type t --risk r [--epic]
 Console    console [--out file.html] [--job J] [--label "…"] [--data data.json]   (read-only page of every job)
+           console --serve [--port 4477] [--job J]   (the same page, live: updates as Claude works)
 Human only (your terminal, or reply in chat):
            approve [gate] · deny --reason "…" · resume [step] · cancel · abandon · waive <floor> --reason "…"
            merged <commit> · confirm <AC> · lessons accept|reject <L> · lessons promote <L> --check "cmd" · reseal
 Global     --root <repo> · --job <J-0001>`;
+
+const LONG_RUNNING = Symbol('long-running'); // the command reports for itself (console --serve)
 
 function out(obj, opt) {
   if (opt.format === 'md' && typeof obj === 'string') process.stdout.write(obj + '\n');
@@ -92,6 +97,7 @@ function run(argv) {
     case 'doctor':
       return C('setup').doctor(opt.root || process.cwd());
     case 'console':
+      if (opt.serve) { C('console').runServe(R(), { port: opt.port, job: J, label: opt.label }); return LONG_RUNNING; } // prints its own URL once listening
       return C('console').run(R(), { out: opt.out, job: J, label: opt.label, data: opt.data });
     case 'job': {
       const job = C('job');
@@ -141,7 +147,7 @@ function run(argv) {
       return fail('contract show | check', 'bad_input');
     }
     case 'answer':
-      return C('record').answer(R(), { jobId: J, question: opt.question, answer: opt.answer });
+      return C('record').answer(R(), { jobId: J, id: opt.id, question: opt.question, answer: opt.answer });
     case 'wfargs': {
       const brief = C('wfargs').build(R(), {
         jobId: J,
@@ -229,6 +235,29 @@ function run(argv) {
       return C('lifecycle').close(R(), { jobId: J });
     case 'followup':
       return C('lifecycle').followup(R(), { jobId: J, findings: opt['findings-file'] ? JSON.parse(readText(path.resolve(opt['findings-file']))) : [], workType: opt.type });
+    case 'doc': {
+      const d = C('doc');
+      if (sub === 'list') return d.list();
+      if (sub === 'template') {
+        if (!pos[2]) fail('doc template <type>', 'bad_input');
+        return d.template(pos[2]).replace(/\n$/, '');
+      }
+      if (sub === 'check') {
+        let r;
+        if (pos[2]) {
+          // A file in a job folder is checked against that job (its ACs, threat ids, job id).
+          const file = path.resolve(pos[2]);
+          const root = findRoot(path.dirname(file)) || (opt.root ? path.resolve(opt.root) : null);
+          const jobId = J || (root && (/[\\/]\.factory[\\/]jobs[\\/](J-\d+)[\\/]/.exec(file) || [])[1]);
+          const extra = root && jobId ? d.jobOpts(root, C('job').resolve(root, jobId), file) : {};
+          r = d.checkFile(file, { type: opt.type, ...extra });
+        } else r = d.checkJob(R(), J);
+        if (!r.ok) process.exitCode = 1;
+        return r;
+      }
+      if (sub === 'index') return d.index(R(), { jobId: J });
+      return fail('doc list | template <type> | check [<file>] | index', 'bad_input');
+    }
     case 'distill':
       if (sub === 'context') return C('lifecycle').distillContext(R(), { jobId: J });
       if (sub === 'done') return C('lifecycle').distillDone(R(), { jobId: J });
@@ -236,7 +265,7 @@ function run(argv) {
     case 'lessons': {
       const l = C('lessons');
       if (sub === 'list') return l.load(R());
-      if (sub === 'add') return l.add(R(), { jobId: J || C('job').current(R()), text: opt.text, scope: opt.scope });
+      if (sub === 'add') return l.add(R(), { jobId: J || C('job').current(R()), text: opt.text, scope: opt.scope, why: opt.why });
       if (sub === 'accept' || sub === 'reject') return l.decide(R(), { id: pos[2], accept: sub === 'accept', reason: opt.reason, channel: tty });
       if (sub === 'promote') return l.promote(R(), { id: pos[2], check: opt.check, channel: tty });
       return fail('lessons list | add | accept | reject | promote', 'bad_input');
@@ -304,14 +333,14 @@ function run(argv) {
   }
 }
 
-const PROSE = new Set(['reason', 'text', 'question', 'answer', 'title', 'note', 'by', 'check', 'label']);
+const PROSE = new Set(['reason', 'text', 'question', 'answer', 'title', 'note', 'by', 'check', 'label', 'why']);
 
 // One sealed line per command in .factory/log/events.jsonl, tied to the job and the
 // routing decision in force, so an auditor can check Claude did what factory next said.
 function logCommand(argv, res, err) {
   try {
     const { pos, opt } = parseArgs(argv);
-    if (['help', 'console', undefined].includes(pos[0])) return; // console is read-only: it leaves no trace
+    if (['help', 'console', undefined].includes(pos[0])) return; // console is read-only: it leaves no trace (doc is logged; the inspector counts it read-only)
     const root = findRoot(opt.root ? path.resolve(opt.root) : process.cwd());
     if (!root) return;
     const events = require('./core/events');
@@ -349,7 +378,7 @@ function main(argv) {
   try {
     res = run(argv);
     if (typeof res === 'string') process.stdout.write(res + '\n');
-    else out(res, opt);
+    else if (res !== LONG_RUNNING) out(res, opt);
   } catch (e) {
     err = e;
     if (e instanceof FactoryError) {

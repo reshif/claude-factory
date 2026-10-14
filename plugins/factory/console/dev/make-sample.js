@@ -95,6 +95,10 @@ function cli(args, { allowFail = true, quick = false } = {}) {
   wait(quick ? between(0.5, 2) * S : between(2, 9) * S);
   return F.cli(root, args, { allowFail });
 }
+// Front matter for a design doc an agent writes (templates/docs).
+function fm(d, doc, title, status, related = ['findings.md']) {
+  return `---\ndoc: ${doc}\ntemplate: ${doc}@1\njob: ${path.basename(d)}\ntitle: ${title}\nstatus: ${status}\ndate: ${new Date().toISOString().slice(0, 10)}\ncontract: contract.md\nrelated: [${related.join(', ')}]\n---\n\n`;
+}
 function reply(text) {
   gitDate();
   return F.reply(root, text);
@@ -220,10 +224,18 @@ const BASE = {
 };
 
 // ---- contracts ---------------------------------------------------------------------
-function contract({ title, type, risk, goal, nonGoals, ac, constraints, allowed, verify, assumptions }) {
+function contract({ title, type, risk, goal, nonGoals, ac, constraints, allowed, verify, assumptions, intent = {} }) {
+  const signal = String(ac[0] || goal).replace(/^E?-?AC-\d+:\s*/, '').replace(/\s*\(evidence:[^)]*\)\s*$/, '');
   return `# ${title}
 
 <!-- factory contract · work_type: ${type} · risk: ${risk} -->
+
+## Intent
+- Problem: ${intent.problem || `Not true today: ${goal}`}
+- Who: ${intent.who || 'Callers of the search API; asked by the search team lead'}
+- Outcome: ${intent.outcome || goal}
+- Why now: ${intent.why_now || 'Raised in this week\'s search review'}
+- Success signal: ${intent.success || signal}
 
 ## Goal
 ${goal}
@@ -283,7 +295,7 @@ function crew(J, sc, st) {
       }
       case 'threat-modeler': {
         const p = path.join(dir(), 'threat-model.md');
-        fs.writeFileSync(p, sc.threat.doc);
+        fs.writeFileSync(p, typeof sc.threat.doc === "function" ? sc.threat.doc(dir()) : sc.threat.doc);
         return { path: p, threats: sc.threat.threats };
       }
       case 'architect':
@@ -536,19 +548,80 @@ function sc1(J) {
     ],
     architect: (d, revise) => {
       const p = path.join(d, 'adr-001-rate-limit-search.md');
-      fs.writeFileSync(p, [
+      fs.writeFileSync(p, fm(d, 'adr', 'Rate-limit search in process', 'proposed') + [
         '# ADR 001: Rate-limit search in process',
         '',
         '## Context',
-        'Search has no rate limit; one partner script took p95 from 80 ms to 1.4 s last month (findings.md, codebase).',
+        'Search has no rate limit; one partner script took p95 from 80 ms to 1.4 s last month (findings · codebase · src/search.js:3). AC-1 and AC-2 need a per-caller limit with a correct Retry-After.',
+        '',
+        '## Decision drivers',
+        '- AC-1/AC-2: exact 60-a-minute behaviour per caller, with a whole-second Retry-After.',
+        '- Constraint: no new dependency; Redis is not provisioned for this service (findings · history).',
+        '- Small blast radius: only GET /search changes.',
+        '',
+        '## Considered options',
+        '| # | Option | Pros | Cons | Verdict |',
+        '|---|---|---|---|---|',
+        '| 1 | In-process sliding window | No dependency; ~0.1 ms per call | Per instance; memory grows with callers | chosen |',
+        '| 2 | Token bucket in Redis | Exact across instances | New dependency and network hop | rejected: not provisioned |',
+        '| 3 | Middleware in server.js | Reusable | Touches every route | rejected: larger blast radius |',
         '',
         '## Decision',
-        'A sliding window of 60 requests a minute per caller, kept in process. A caller is its API key; calls without a key are limited by client IP.',
+        'We will add a sliding window of 60 requests a minute per caller, kept in process in src/limiter.js and called first in the search handler. A caller is its API key; calls without a key are limited by client IP.',
         ...(revise ? ['', 'Memory: entries older than the window are dropped on each hit; a key with no hits for a minute is pruned on the next sweep (every 10 000 calls).'] : []),
         '',
-        '## Rejected',
-        '- Redis token bucket: exact across instances but adds a dependency we do not run (option 2).',
-        '- Middleware for every route: larger blast radius than the contract asks for (option 3).',
+        '## Architecture diagram',
+        '```mermaid',
+        'flowchart LR',
+        '  client([API caller]) -->|GET /search, x-api-key| server',
+        '  subgraph api["search-api — this repository"]',
+        '    server[src/server.js router] -->|req: query, apiKey, ip| search[src/search.js handler]',
+        '    search -->|hit key| limiter[src/limiter.js sliding window]',
+        '    limiter -->|allowed / retryAfter| search',
+        '    search -->|terms| index[(index-store)]',
+        '  end',
+        '  search -->|200 results or 429 + Retry-After| client',
+        '  classDef changed fill:#fff3bf,stroke:#f08c00,stroke-width:2px',
+        '  class limiter,search changed',
+        '```',
+        '',
+        '### Key flow',
+        '```mermaid',
+        'sequenceDiagram',
+        '  participant C as Caller',
+        '  participant S as search handler',
+        '  participant L as limiter',
+        '  C->>S: GET /search?q=…',
+        '  S->>L: hit(apiKey or ip)',
+        '  alt under 60 in the last minute',
+        '    L-->>S: allowed',
+        '    S-->>C: 200 results',
+        '  else limit reached',
+        '    L-->>S: retryAfter seconds',
+        '    S-->>C: 429 with Retry-After',
+        '  end',
+        '```',
+        '',
+        '## Consequences',
+        '- Positive: one partner can no longer slow search for everyone.',
+        '- Negative: the limit is per instance, so two instances allow up to 120 a minute.',
+        '- Follow-up: revisit with option 2 if Redis is provisioned.',
+        '',
+        '## How each acceptance criterion is met',
+        '| AC | How the design meets it | Proof |',
+        '|---|---|---|',
+        '| AC-1 | limiter refuses the 61st hit in a rolling minute | test: `node tests/limiter.test.js` |',
+        '| AC-2 | 429 carries Retry-After = ceil(oldest hit + 60 s − now), at least 1 | test: `node tests/search.test.js` |',
+        '| AC-3 | key falls back to the client IP when there is no API key | test: `node tests/search.test.js` |',
+        '',
+        '## Threat mitigations',
+        'No threat model at this risk. Spoofed X-Forwarded-For is not trusted: the key uses the socket IP.',
+        '',
+        '## Rollback and migration',
+        'Revert the merge commit; no data changes.',
+        '',
+        '## Open questions',
+        '- Should partners get a higher limit? Product — would add a per-key override.',
         '',
       ].join('\n'));
       return { kind: 'adr', paths: [p], summary: 'Sliding window per API key (IP for anonymous calls), in process', rejected: [{ option: 'Token bucket in Redis', reason: 'New dependency; not provisioned' }, { option: 'Middleware in server.js', reason: 'Touches every route' }] };
@@ -673,7 +746,60 @@ function sc4() {
     ],
     architect: (d) => {
       const p = path.join(d, 'adr-001-search-result-cache.md');
-      fs.writeFileSync(p, '# ADR 001: Cache search results in process\n\n## Decision\nA bounded LRU (5 000 entries, 30 s TTL) per instance, keyed by the normalised query.\n\n## Open question for infra\nIf a shared cache is provisioned for search this quarter, option 2 (Redis) wins: one warm cache instead of two.\n\n## Rejected\n- Plain TTL map: unbounded memory under a query flood.\n');
+      fs.writeFileSync(p, fm(d, 'adr', 'Cache search results in process', 'proposed') + [
+        '# ADR 001: Cache search results in process',
+        '',
+        '## Context',
+        'Identical searches recompute the same results; the index lookup is the p95 cost (findings · codebase).',
+        '',
+        '## Decision drivers',
+        '- AC-1/AC-2: serve repeats within 30 s, never anything older.',
+        '- Bounded memory under a query flood.',
+        '',
+        '## Considered options',
+        '| # | Option | Pros | Cons | Verdict |',
+        '|---|---|---|---|---|',
+        '| 1 | In-process TTL map | No dependency | Unbounded memory | rejected: unbounded memory |',
+        '| 2 | Shared Redis cache | One warm cache | Needs infra to provision Redis | rejected for now: see open question |',
+        '| 3 | LRU like the session store | Bounded; known pattern | Per instance | chosen |',
+        '',
+        '## Decision',
+        'We will add a bounded LRU (5 000 entries, 30 s TTL) per instance in src/cache.js, keyed by the normalised query, cleared when the index is rebuilt.',
+        '',
+        '## Architecture diagram',
+        '```mermaid',
+        'flowchart LR',
+        '  client([API caller]) -->|GET /search| search',
+        '  subgraph api["search-api — this repository"]',
+        '    search[src/search.js] -->|normalised query| cache[src/cache.js LRU 5000 / 30 s]',
+        '    cache -->|miss| index[(index-store)]',
+        '    reindex[bin/reindex.js] -->|clear| cache',
+        '  end',
+        '  classDef changed fill:#fff3bf,stroke:#f08c00,stroke-width:2px',
+        '  class cache changed',
+        '```',
+        '',
+        '## Consequences',
+        '- Positive: repeated searches skip the index.',
+        '- Negative: each instance warms its own cache.',
+        '',
+        '## How each acceptance criterion is met',
+        '| AC | How the design meets it | Proof |',
+        '|---|---|---|',
+        '| AC-1 | a hit within 30 s returns the cached entry | test |',
+        '| AC-2 | entries older than 30 s are evicted on read | test |',
+        '| AC-3 | reindex clears the cache | test |',
+        '',
+        '## Threat mitigations',
+        'No threat model at this risk.',
+        '',
+        '## Rollback and migration',
+        'Revert the merge commit; the cache is in memory only.',
+        '',
+        '## Open questions',
+        '- If a shared cache is provisioned for search this quarter, option 2 (Redis) wins: one warm cache instead of two. Infra.',
+        '',
+      ].join('\n'));
       return { kind: 'adr', paths: [p], summary: 'In-process LRU with a 30 s TTL, unless infra provides a shared cache', rejected: [{ option: 'In-process TTL map', reason: 'Unbounded memory' }] };
     },
     plans: [J4PLAN(false)],
@@ -787,7 +913,7 @@ function sc7() {
     ],
     architect: (d) => {
       const p = path.join(d, 'recommendation.md');
-      fs.writeFileSync(p, '# Recommendation: in-process cache for search\n\n**Question.** Shared Redis or in-process cache for J-0004?\n\n| Option | Hit rate | p95 on hit | Memory |\n|---|---|---|---|\n| In-process LRU | 61% per instance | 41 ms | 38 MB per instance |\n| Shared Redis | 74% | +3.1 ms per hit | 120 MB in the cluster |\n\n**Recommendation.** In-process LRU behind a small cache interface. Confidence: medium-high.\n\n**What would change it.** A third instance, or infra growing the Redis cluster.\n');
+      fs.writeFileSync(p, fm(d, 'recommendation', 'In-process cache for search', 'proposed') + '# Recommendation: in-process cache for search\n\n## Question\nShared Redis or in-process cache for J-0004?\n\n## Options weighed\n| # | Option | Hit rate | p95 on hit | Memory | Verdict |\n|---|---|---|---|---|---|\n| 1 | In-process LRU | 61% per instance | 41 ms | 38 MB per instance | recommended |\n| 2 | Shared Redis | 74% | +3.1 ms per hit | 120 MB in the cluster | not recommended: cluster near its memory limit |\n\n## Recommendation\nIn-process LRU behind a small cache interface.\n\n## Confidence\nmedium-high — a replay of last week\'s query log.\n\n## What would change it\n- A third instance, or infra growing the Redis cluster → Redis.\n\n## Evidence\n- Replay numbers above — `node bench/replay.js` (both options)\n\n## Diagram\n```mermaid\nflowchart LR\n  search[search handler] -->|get / set| iface[cache interface]\n  iface --> lru[in-process LRU]\n  iface -.->|later| redis[(Redis)]\n```\n');
       return { kind: 'recommendation', paths: [p], summary: 'In-process LRU now; revisit Redis if a third instance is added', rejected: [{ option: 'Shared Redis', reason: 'Cluster near its memory limit; adds a failure mode' }] };
     },
   };
@@ -819,12 +945,12 @@ function sc8() {
       ['Guard in index-store', 'Make lookup tolerate empty terms', ['Fixes the crash'], ['Empty queries would return every document']],
     ],
     threat: {
-      doc: '# Threat model — empty-query hotfix\n\n| Threat | Mitigation | Severity |\n|---|---|---|\n| Crafted q values still crash the handler (DoS) | Validate q before the index; tests for empty and missing | medium |\n| Error body echoes the query (reflected content) | Fixed error text only | low |\n',
+      doc: (d) => fm(d, 'threat-model', 'Empty-query hotfix', 'draft') + '# Threat model: empty-query hotfix\n\n## Scope and assets\n| Asset | Why it matters | Where it lives |\n|---|---|---|\n| Search availability | availability | src/search.js |\n\n## Data-flow diagram\n```mermaid\nflowchart LR\n  subgraph internet["Trust boundary: internet"]\n    client([Anonymous caller])\n  end\n  subgraph api["Trust boundary: search-api"]\n    search[search handler] -->|terms| index[(index-store)]\n  end\n  client -->|untrusted q| search\n  search -->|400 fixed error or results| client\n```\n\n## Entry points and trust boundaries\n| Entry point | Crosses | Who can reach it | Authn / authz |\n|---|---|---|---|\n| GET /search?q= | internet → api | anyone | API key optional |\n\n## Threats (STRIDE)\n| ID | STRIDE | Threat | Entry point / asset | Likelihood | Impact | Mitigation the design must include |\n|---|---|---|---|---|---|---|\n| TH-1 | Denial of service | Crafted q values still crash the handler | GET /search | medium | high | Validate q before the index; tests for empty and missing |\n| TH-2 | Information disclosure | Error body echoes the query (reflected content) | GET /search | low | low | Fixed error text only |\n\n## Out of scope\n- Rate limiting (J-0001).\n',
       threats: [{ threat: 'Crafted q values still crash the handler (DoS)', mitigation: 'Validate q before the index', severity: 'medium' }, { threat: 'Error body echoes the query', mitigation: 'Fixed error text', severity: 'low' }],
     },
     architect: (d) => {
       const p = path.join(d, 'no-adr.md');
-      fs.writeFileSync(p, '# No ADR needed\n\nOne viable fix: guard q in the handler (option 1). Option 2 is a design change for its own job; option 3 changes results. Threats are covered in threat-model.md.\n');
+      fs.writeFileSync(p, fm(d, 'no-adr', 'Guard q in the search handler', 'accepted', ['findings.md', 'threat-model.md']) + '# No ADR: Guard q in the search handler\n\n## Why no decision is needed\nOne viable fix: guard q in the handler (option 1). Option 2 is a design change for its own job; option 3 changes results.\n\n## Approach\nIn src/search.js, trim q and answer 400 {"error":"Empty query"} before the index is touched.\n\n## How each acceptance criterion is met\n| AC | How the approach meets it | Proof |\n|---|---|---|\n| AC-1 | empty q answers 400 | test |\n| AC-2 | missing q answers 400 | test |\n| AC-3 | non-empty q takes the old path | test |\n\n## Threat mitigations\n| Threat | Mitigation | Where |\n|---|---|---|\n| TH-1 | q validated before the index | src/search.js |\n| TH-2 | fixed error text, q never echoed | src/search.js |\n\n## Rollback\nRevert the merge commit.\n');
       return { kind: 'no-adr', paths: [p], summary: 'Guard q in the handler; no real decision to record', rejected: [{ option: 'Validate in server.js', reason: 'Too large for a hotfix' }, { option: 'Guard in index-store', reason: 'Empty query would match everything' }] };
     },
     plans: [J8PLAN],

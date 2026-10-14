@@ -24,7 +24,7 @@ async function clarify(root) {
     if (opts.agentType === 'factory:god-eye') return { verdict: 'approve', items: [] };
     throw new Error(`unexpected ${opts.agentType}: ${instructions(prompt).slice(0, 80)}`);
   });
-  assert.ok(Array.isArray(result.agents) && result.agents.length === 5, 'the envelope carries the roster');
+  assert.ok(Array.isArray(result.agents) && result.agents.length === 6, 'the envelope carries the roster (intent gate + 3 angles, judge, God Eye)');
   return F.record(root, result);
 }
 
@@ -81,7 +81,7 @@ test('console: steps, timeline and the agents per step, read-only', async () => 
   for (const t of ['route', 'human', 'agents', 'result']) assert.ok(types.includes(t), `timeline has ${t}`);
   const a = job.timeline.find((t) => t.type === 'agents');
   assert.equal(a.step, 'clarify', 'agents are placed on the step that ran them');
-  assert.equal(a.agents.filter((x) => x.role === 'intent-analyst').length, 3);
+  assert.equal(a.agents.filter((x) => x.role === 'intent-analyst').length, 4);
   assert.equal(job.timeline.find((t) => t.type === 'human').step, 'H1');
   const park = job.timeline.find((t) => t.type === 'park');
   assert.ok(park && /API owners/.test(park.text), 'a park you asked for is on the timeline, even after a resume clears it from state');
@@ -98,4 +98,95 @@ test('console: never creates a factory key on a machine without one', () => {
   assert.equal(r.status, 0, r.stdout + r.stderr);
   assert.equal(JSON.parse(r.stdout).integrity, 'not_checked');
   assert.ok(!fs.existsSync(key), 'no key file was created');
+});
+
+test('console --serve: streams fresh data when the factory writes, only to this machine', async () => {
+  const root = F.makeRepo();
+  const J = F.cli(root, ['job', 'new', '--title', 'Live one', '--type', 'bug', '--risk', 'low']).job;
+  const http = require('http');
+  const { url, close } = await new Promise((resolve) => require('../cli/core/console').serve(root, { port: 0, interval: 50, onReady: resolve }));
+  try {
+    const get = (p, headers = {}) => new Promise((res, rej) => http.get(url + p, { headers }, (r) => { let b = ''; r.on('data', (c) => { b += c; }); r.on('end', () => res({ status: r.statusCode, body: b })); }).on('error', rej));
+    const page = await get('');
+    assert.equal(page.status, 200);
+    assert.match(page.body, /"live":true/);
+    assert.equal((await get('data.json', { host: 'attacker.example' })).status, 403, 'a rebound foreign host is refused');
+
+    const events = [];
+    let wake = () => {};
+    const req = http.get(`${url}events`, (r) => {
+      let buf = '';
+      r.on('data', (c) => {
+        buf += c;
+        let i;
+        while ((i = buf.indexOf('\n\n')) !== -1) {
+          const block = buf.slice(0, i);
+          buf = buf.slice(i + 2);
+          const line = block.split('\n').find((l) => l.startsWith('data: '));
+          if (line) { events.push(JSON.parse(line.slice(6))); wake(); }
+        }
+      });
+    });
+    const nextEvent = (n) => new Promise((res, rej) => { const t = setTimeout(() => rej(new Error('no event')), 5000); const check = () => { if (events.length >= n) { clearTimeout(t); res(events[n - 1]); } }; wake = check; check(); });
+    assert.equal((await nextEvent(1)).jobs.find((j) => j.id === J).status, 'active', 'connecting sends the current data');
+    F.cli(root, ['park', '--reason', 'Waiting on the API owners']);
+    assert.equal((await nextEvent(2)).jobs.find((j) => j.id === J).status, 'parked', 'a CLI write reaches the open page');
+    req.destroy();
+  } finally {
+    close();
+  }
+});
+
+test('console: each job carries a rev that changes only when that job does, and items name their stage', () => {
+  const root = F.makeRepo();
+  const A = F.cli(root, ['job', 'new', '--title', 'First', '--type', 'bug', '--risk', 'low']).job;
+  F.cli(root, ['next']);
+  const B = F.cli(root, ['job', 'new', '--title', 'Second', '--type', 'bug', '--risk', 'low']).job;
+  const { build } = require('../cli/core/console');
+  const rev = (d, id) => d.jobs.find((j) => j.id === id).rev;
+  const d1 = build(root);
+  const d2 = build(root);
+  assert.match(rev(d1, A), /^[0-9a-f]{12}$/);
+  assert.equal(rev(d1, A), rev(d2, A), 'same files, same rev');
+  F.cli(root, ['park', '--reason', 'later', '--job', B]);
+  const d3 = build(root);
+  assert.notEqual(rev(d3, B), rev(d1, B), 'the parked job has a new rev');
+  assert.equal(rev(d3, A), rev(d1, A), 'the other job keeps its rev');
+  const route = d3.jobs.find((j) => j.id === A).timeline.find((t) => t.type === 'route' && t.step);
+  assert.equal(route.stage, 'contract', 'a routed step carries its stage');
+});
+
+test('console: an agent with no stop event is running only while recent and the job is active', () => {
+  const root = F.makeRepo();
+  const A = F.cli(root, ['job', 'new', '--title', 'Active', '--type', 'bug', '--risk', 'low']).job;
+  const B = F.cli(root, ['job', 'new', '--title', 'Parked', '--type', 'bug', '--risk', 'low']).job;
+  F.cli(root, ['park', '--reason', 'later', '--job', B]);
+  const { build, STALE_AGENT_MS } = require('../cli/core/console');
+  const now = Date.parse('2030-01-01T12:00:00.000Z');
+  const at = (ms) => new Date(now - ms).toISOString();
+  const ev = (job, id, ts, type = 'factory:builder') => JSON.stringify({ ts, event: 'SubagentStart', job, agent_id: id, agent_type: type });
+  fs.appendFileSync(path.join(root, '.factory', 'log', 'events.jsonl'), [
+    ev(A, 'fresh', at(10 * 60000)),
+    ev(A, 'crashed', at(STALE_AGENT_MS + 60000), 'factory:tester'),
+    ev(B, 'parked-job', at(60000)),
+  ].join('\n') + '\n');
+  const data = build(root, { now: new Date(now).toISOString() });
+  const a = data.jobs.find((j) => j.id === A);
+  const b = data.jobs.find((j) => j.id === B);
+  assert.deepEqual(a.running_agents.map((x) => x.agent_type), ['factory:builder'], 'only the recent one is running');
+  assert.deepEqual(a.stale_agents.map((x) => [x.agent_type, x.stale]), [['factory:tester', true]], 'the old one is marked stale');
+  assert.equal(b.running_agents.length, 0, 'a job that is not active has nothing running');
+  assert.equal(b.stale_agents.length, 1);
+});
+
+test('console page: one data slot, self-contained, and a static file says it is a snapshot', () => {
+  const tpl = fs.readFileSync(path.join(F.PLUGIN, 'console', 'console.html'), 'utf8');
+  assert.equal(tpl.split('/*__FACTORY_DATA__*/null').length, 2, 'exactly one data slot');
+  assert.ok(!/<script[^>]+src=/i.test(tpl), 'no external scripts: one self-contained page');
+  assert.ok(tpl.includes("'snapshot'"), 'the page has a snapshot state for a static file');
+  const { render } = require('../cli/core/console');
+  const html = render({ generated_at: '2030-01-01T00:00:00.000Z', project: 'p', integrity: { status: 'not_checked' }, jobs: [{ id: 'J-0001', title: '</script><script>alert(1)</script>', rev: 'x', timeline: [], steps: [] }] });
+  assert.ok(html.includes('"live":false'), 'a written file is not live');
+  assert.ok(!html.includes('</script><script>alert'), 'data cannot close the script tag');
+  assert.ok(!html.includes('/*__FACTORY_DATA__*/'), 'the slot is filled');
 });

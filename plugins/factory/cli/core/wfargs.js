@@ -15,6 +15,13 @@ const lessons = require('./lessons');
 const review = require('./review');
 const budgets = require('./budgets');
 const invalidation = require('./invalidation');
+const questions = require('./questions');
+const docs = require('./doc');
+
+// The self-check an agent runs on a doc it wrote before returning.
+function docCheck(root, state, file) {
+  return `Before returning, run \`${cli(root)} doc check ${file} --job ${state.id}\` and fix every problem it lists (missing or out-of-order sections, front matter, placeholders, tables, uncovered criteria, malformed or missing Mermaid). \`factory record\` runs the same check and rejects the design otherwise.`;
+}
 
 function roleBody(role) {
   const t = readText(pluginPath('agents', `${role}.md`), null);
@@ -94,6 +101,9 @@ function jobContext(root, state, gates = []) {
     `- Job folder: ${jp.dir}`,
     `- Contract: ${jp.contract}`,
     `- Factory CLI: \`${cli(root)}\``,
+    parsed.intent && parsed.intent.present
+      ? `- Intent:\n${contractMod.INTENT_FIELDS.map((f) => `  - ${f.label}: ${parsed.intent[f.key] && !contractMod.isPlaceholder(parsed.intent[f.key]) ? parsed.intent[f.key] : '(not settled yet)'}`).join('\n')}`
+      : '- Intent: (no Intent section yet)',
     `- Goal: ${parsed.goal || '(not written yet)'}`,
     parsed.acs.length ? `- Acceptance criteria:\n${parsed.acs.map((a) => `  - ${a.id}: ${a.text} (evidence: ${a.evidence.join(', ')})`).join('\n')}` : '- Acceptance criteria: (none yet)',
     denialNotes(state, gates),
@@ -130,31 +140,38 @@ function clarify(root, state, ctx, acceptDegraded) {
   const cfg = readJson(pluginPath('config', 'workflows', 'clarify.json'));
   const round = state.counters.clarify_rounds + 1;
   const L = state.policy.limits;
-  const maxQ = round <= cfg.limits.early_rounds ? cfg.limits.early_questions : cfg.limits.later_questions;
-  const noMoreQuestions = round >= L.max_intent_rounds;
-  const asked = state.asked_questions || [];
+  const maxQ = questions.budget(cfg, round, L);
   const answers = readJson(jobPaths(root, state.id).answers, []);
+  const asked = questions.askedList(state, answers);
   const jc = jobContext(root, state, ['H1', 'EH1']);
+  const askedText = asked.map((q) => `  - ${q}`).join('\n') || '  - (none)';
+  const answersText = answers.map((a) => `  - Q: ${a.question}\n    A: ${a.answer}`).join('\n') || '  - (none)';
+  const protocol = [
+    `- Question protocol: categories in priority order ${cfg.priority.join(' > ')}. While any intent question is open, only intent questions are asked; the rest wait.`,
+    '- Every question: one line, answerable in one line (multiple choice with 2-4 options when possible), with why it matters and the default the factory will use if unanswered.',
+  ].join('\n');
   const fanout = cfg.fanout.map((f) => ({
     id: `${f.role}:${f.focus}`,
     ...agentSpec(state, f.role),
+    category: f.category || questions.FOCUS_CATEGORY[f.focus] || 'scope',
+    gate: Boolean(f.gate),
     label: `analyst · ${f.focus}`,
-    prompt: prompt(f.role, `${jc}\n- Your focus: **${f.focus}** — ${f.brief}\n- Round ${round}. Questions already asked (never repeat them):\n${asked.map((q) => `  - ${q}`).join('\n') || '  - (none)'}\n- Answers you gave earlier:\n${answers.map((a) => `  - Q: ${a.question}\n    A: ${a.answer}`).join('\n') || '  - (none)'}`, 'analyst'),
+    prompt: prompt(f.role, `${jc}\n- Your focus: **${f.focus}** (category: ${f.category || 'scope'}) — ${f.brief}${f.gate ? '\n- You are the intent gate: you run first and alone. Mark a question blocking only if the problem, who, outcome or success signal is genuinely unclear; the other angles wait until you have none. Fill restatement with your one-line readings.' : ''}\n${protocol}\n- Round ${round}. Questions already asked (never repeat them):\n${askedText}\n- Answers given earlier:\n${answersText}`, 'analyst'),
     schema: schema('analyst'),
   }));
   const judge = {
     ...agentSpec(state, 'judge'),
     prompt: prompt(
       'judge',
-      `${jc}\n- Mode: clarify, round ${round} of at most ${L.max_intent_rounds}.\n- Ask at most ${noMoreQuestions ? 0 : maxQ} questions this round${noMoreQuestions ? ' (question budget spent: return none, record assumptions instead)' : ''}.\n- Never re-ask any of these:\n${asked.map((q) => `  - ${q}`).join('\n') || '  - (none)'}\n- The analysts' outputs follow under INPUTS.`,
+      `${jc}\n- Mode: clarify, round ${round} of at most ${L.max_intent_rounds}.\n- Ask at most ${maxQ} questions this round${maxQ === 0 ? ' (question budget spent: return none, record assumptions instead)' : ''}.\n${protocol}\n- Never re-ask any of these:\n${askedText}\n- Answers given earlier:\n${answersText}\n- The analysts' outputs follow under INPUTS.`,
       'judge',
     ),
     schema: schema('judge'),
   };
   const critique = {
     ...agentSpec(state, 'god-eye'),
-    prompt: prompt('god-eye', `${jc}\n- Focus: **intent**. Read ${jobPaths(root, state.id).contract} cold, as someone who has never seen this conversation. Approve only if a builder could start from it without asking anything and every criterion is provable by its evidence type.`, 'critique'),
-    schema: schema('critique'),
+    prompt: prompt('god-eye', `${jc}\n- Focus: **intent**. Read ${jobPaths(root, state.id).contract} cold, as someone who has never seen this conversation.\n- First restate, in one line each, the problem, who has it, the outcome and the success signal, from the contract alone. Set intent_confirmed true only if your restatement matches the Intent and Goal sections and they agree with each other.\n- Approve only if intent_confirmed, a builder could start from it without asking anything, and every criterion is provable by its evidence type.`, cfg.critique.schema || 'critique'),
+    schema: schema(cfg.critique.schema || 'critique'),
     max_rounds: 1,
     when: 'no_questions',
   };
@@ -163,6 +180,9 @@ function clarify(root, state, ctx, acceptDegraded) {
     mode: state.epic ? 'epic' : null,
     input_hash: inputHash({ contract: ctx.b.contract, round }),
     accept_degraded: Boolean(acceptDegraded),
+    round,
+    limits: { max_questions: maxQ, priority: cfg.priority },
+    asked,
     fanout,
     judge,
     critique,
@@ -178,8 +198,10 @@ function decide(root, state, ctx, action) {
   const threat = action.threat_model === true || (action.threat_model === undefined && state.risk === 'high');
   const lastCritique = readJson(path.join(jp.critiquesDir, 'design.json'), null);
   const priorDesign = invalidation.designFiles(root, state.id);
+  const docProblems = priorDesign.length ? docs.designProblems(root, state) : [];
   const history = [
     priorDesign.length ? `- This is not the first design round. Current design files (read them with the Read tool): ${priorDesign.join(', ')}` : '',
+    docProblems.length ? `- The current design record breaks the doc templates; \`factory record\` rejects it until these are fixed:\n${docProblems.slice(0, 20).map((p) => `  - ${p}`).join('\n')}` : '',
     lastCritique && Array.isArray(lastCritique.items) && lastCritique.items.length
       ? `- God Eye's last design critique (${lastCritique.verdict}):\n${lastCritique.items.slice(0, 12).map((it) => `  - ${typeof it === 'string' ? it : [it.severity, it.issue || it.summary || JSON.stringify(it)].filter(Boolean).join(': ')}`).join('\n')}`
       : '',
@@ -194,7 +216,7 @@ function decide(root, state, ctx, action) {
     .filter((f) => !(mode === 'recommendation' && f.role === 'threat-modeler'))
     .map((f, i) => {
       if (f.role === 'threat-modeler') {
-        return { id: 'threat-modeler', ...agentSpec(state, 'threat-modeler'), label: 'threat model', prompt: prompt('threat-modeler', `${jc}\n- Write the threat model to ${jp.threatModel}, then return its path and the threats.`, 'threat'), schema: schema('threat') };
+        return { id: 'threat-modeler', ...agentSpec(state, 'threat-modeler'), label: 'threat model', prompt: prompt('threat-modeler', `${jc}\n- Write the threat model to ${jp.threatModel}, following ${docs.templatePath('threat-model')} exactly: its front matter, its sections in order, a Mermaid data-flow diagram with every trust boundary as a subgraph, and a STRIDE table with ids TH-1, TH-2…\n- ${docCheck(root, state, jp.threatModel)}\n- Then return its path and the threats.`, 'threat'), schema: schema('threat') };
       }
       return {
         id: `option-${i + 1}`,
@@ -204,24 +226,30 @@ function decide(root, state, ctx, action) {
         schema: schema('option'),
       };
     });
+  const tpl = (t) => docs.templatePath(t);
   const what =
     mode === 'recommendation'
-      ? `Write the recommendation (question, options weighed, recommendation, confidence, what would change it) to ${jp.recommendation}. kind = "recommendation".`
+      ? `Write the recommendation to ${jp.recommendation} following ${tpl('recommendation')} (question, options weighed, recommendation, confidence, what would change it, evidence). kind = "recommendation".`
       : mode === 'contracts'
-        ? `Write the decision as an ADR (${nextAdr}), the human-readable contracts to ${jp.contractsMd} and the machine-readable interface list to ${jp.contractsJson}. kind = "contracts".`
-        : `If there is a real decision (two or more viable options with different consequences), write an ADR to ${nextAdr} (kind "adr"). Otherwise write ${jp.noAdr} explaining why no decision was needed (kind "no-adr").`;
+        ? `Write the decision as an ADR (${nextAdr}) following ${tpl('adr')}, the human-readable contracts to ${jp.contractsMd} following ${tpl('contracts')}, and the machine-readable interface list to ${jp.contractsJson}. kind = "contracts".`
+        : `If there is a real decision (two or more viable options with different consequences), write an ADR to ${nextAdr} following ${tpl('adr')} (kind "adr"). Otherwise write ${jp.noAdr} following ${tpl('no-adr')} (kind "no-adr").`;
+  const rules = [
+    '- Every design doc keeps its template\'s front matter (doc, template, job, title, status, date, contract, related) and its "##" sections in the template\'s order. Every acceptance criterion gets a row in "How each acceptance criterion is met".',
+    mode === 'recommendation' ? '' : `- An ADR needs a Mermaid architecture diagram (a C4-style flowchart: actors and external systems, the system boundary as a subgraph, the modules inside, every edge labelled) that shows how things will look after the change; add a sequenceDiagram under "### Key flow" when ordering matters.${threat ? ' Map every threat id (TH-n) from the threat model in "Threat mitigations".' : ''}`,
+    `- ${docCheck(root, state, '<file>')}`,
+  ].filter(Boolean).join('\n');
   const judge = {
     ...agentSpec(state, 'architect'),
-    prompt: prompt('architect', `${jc}\n- ${what}\n- The option generators' outputs${threat ? ' and the threat model' : ''} follow under INPUTS. Record the options you rejected and why.`, 'architect'),
+    prompt: prompt('architect', `${jc}\n- ${what}\n${rules}\n- The option generators' outputs${threat ? ' and the threat model' : ''} follow under INPUTS. Record the options you rejected and why.`, 'architect'),
     schema: schema('architect'),
   };
   const maxRounds = state.policy.limits.max_design_critique_rounds;
   const critique = {
     ...agentSpec(state, 'god-eye'),
-    prompt: prompt('god-eye', `${jc}\n- Focus: **design**. Read the design record (paths under INPUTS) cold. Approve only if it follows from the findings, meets every criterion, and a planner could split it into tasks.${threat ? ` Check the threat model at ${jp.threatModel} is addressed.` : ''}`, 'critique'),
+    prompt: prompt('god-eye', `${jc}\n- Focus: **design**. Read the design record (paths under INPUTS) cold. Approve only if it follows from the findings, meets every criterion, and a planner could split it into tasks.${mode === 'recommendation' ? '' : ' The architecture diagram must match the Decision (same modules, same flows) and be specific to this change, not generic boxes.'}${threat ? ` Check the threat model at ${jp.threatModel} is addressed.` : ''}`, 'critique'),
     schema: schema('critique'),
     max_rounds: maxRounds,
-    revise: { ...agentSpec(state, 'architect'), prompt: prompt('architect', `${jc}\n- Revise the design record you wrote to address the critique under INPUTS. Keep the same file paths.`, 'architect'), schema: schema('architect') },
+    revise: { ...agentSpec(state, 'architect'), prompt: prompt('architect', `${jc}\n- Revise the design record you wrote to address the critique under INPUTS. Keep the same file paths and keep following the templates.\n${rules}`, 'architect'), schema: schema('architect') },
   };
   return base(root, state, 'fanout-judge', { config: 'decide', mode, input_hash: inputHash({ contract: ctx.b.contract, findings: ctx.b.findings }), fanout, judge, critique, verifier: null, threat_model: threat });
 }
@@ -335,7 +363,7 @@ function decompose(root, state, ctx, action) {
   const jp = jobPaths(root, state.id);
   const slices = action.mode === 'slices' || state.epic;
   const rounds = Math.max(1, state.policy.limits.max_plan_validate_rounds - state.counters.decompose_rounds);
-  const jc = `${jobContext(root, state, ['H3', 'EH3'])}\n- Findings: ${jp.findings}\n- Design record: ${invalidation.designFiles(root, state.id).join(', ') || '(none)'}`;
+  const jc = `${jobContext(root, state, ['H3', 'EH3'])}\n- Findings: ${jp.findings}\n- Design record: ${invalidation.designFiles(root, state.id).join(', ') || '(none)'} (templated docs: the ADR's "Decision", "Architecture diagram", "How each acceptance criterion is met" and "Rollback and migration" sections are what tasks implement)`;
   const ls = lessons.inScope(root, []);
   const what = slices
     ? `Write ${jp.slices}: {"slices":[{"id":"S00","goal":"…","criteria_ids":["E-AC-1"],"depends_on":[],"work_type":"feature","risk":"${state.risk}","allowed_paths":["…"]}], "epic_verify_commands":["…"]}. S00 freezes the contracts and adds the feature flag; later slices are vertical and safe to stop after. Every E-AC must be owned by a slice.`

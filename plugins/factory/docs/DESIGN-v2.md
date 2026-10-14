@@ -71,7 +71,7 @@ Ten building blocks. Five are workflows (agents, fan-out). Five are deterministi
 |---|---|---|---|---|
 | 1 | **ground** | workflow | Parallel probes (repo, dependencies, prior ADRs + lessons, docs) → merged findings, every claim cited or `UNVERIFIED` | Every claim the next step relies on is cited or marked |
 | 2 | **fanout-judge** | workflow engine | N independent agents → retry once → judge merges → optional cold critique (God Eye) | Config-specific (below) |
-| 2a | ↳ `clarify` config | | Analysts: ambiguity, constraints, testability | Contract draft has no open questions; God Eye approves |
+| 2a | ↳ `clarify` config | | Intent gate first (alone), then analysts: ambiguity, constraints, testability; judge orders intent > scope > constraint > acceptance within a per-round budget | Contract draft has no open questions; God Eye restates and confirms the intent and approves |
 | 2b | ↳ `decide` config | | Option generators (+ threat-modeler at high risk, in parallel) → architect decides | ADR or `no-adr.md` with rejected options; design critique approves |
 | 2c | ↳ `challenge` config | | Review lanes by policy → convergence rules → finding-verifier per blocker/major | No confirmed blocker/major on this fingerprint, or round budget spent with trend verdict |
 | 3 | **decompose** | workflow | Planner (or slicer for epics) → `factory plan validate` → loop ≤ 3 | Valid task graph with waves; coverage of every AC; no shared files in a wave |
