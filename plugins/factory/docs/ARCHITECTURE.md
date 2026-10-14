@@ -41,6 +41,10 @@ The first failing check decides; if none fails, the recipe's first undone step r
 | 5 | `acs_proven` | latest proof on this build failed (not yet scheduled) | realize, scope `verifyFix` | `row5.acs_unproven` |
 | 6 | `no_stale_evidence` | proof exists only for an older build | prove | `row6.stale_evidence` |
 | — | all pass | | recipe's next undone step | `order.next_step` |
+| — | a gate was denied and its document's producer hasn't run since | | that producer (clarify, decide or decompose) with the reason in its brief; then the gate again | `gate.denied_revise` |
+| — | local merge recorded, CI re-verify floor unmet | | `factory ci verify --job J` (step H4) before distill/close | `order.ci_reverify` |
+
+`factory next` is a query: asked again with nothing tried since the last decision (no workflow brief, record or step command; read-only commands don't count) and nothing changed, it returns the same decision (same `decision_id`, `requery: true`) without writing a decision or counting a repeat. A bare `deny` is refused (`needs_reason`); `deny <reason>` and `deny: <reason>` are accepted.
 
 Caps (all park, all explained by `factory why`): `cap.review_rounds`, `cap.verify_fix_rounds`, `cap.clarify_rounds`, `cap.decompose_rounds`, `cap.budget` (agent runs per job and per tree), `cap.repeat_guard` (same step from the same state more than twice). `resume` grants exactly one more round (budget: +50%).
 

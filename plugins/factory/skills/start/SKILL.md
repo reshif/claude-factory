@@ -20,7 +20,7 @@ The CLI is on your PATH as `factory` (from this plugin's `bin/`). If it isn't, u
 ## 2. The loop
 Repeat until you reach a stop point:
 
-1. Run `factory next` and read `action`:
+1. Run `factory next` and read `action`. Running it again from the same state is harmless (it returns the same decision, with `requery: true`), but don't poll it: run it when a step is finished or the user has replied.
 
 | action | what you do |
 |---|---|
