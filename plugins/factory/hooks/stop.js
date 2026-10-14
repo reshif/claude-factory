@@ -1,6 +1,12 @@
 'use strict';
 // Stop gate: no claiming a job is done while its floors fail. Checks every active
 // change job the session is on: the current one, the worktree's, and any J-#### named.
+// A job that is waiting on the human (a pending gate, unanswered clarify/ground questions,
+// a record that asked for the user since the last factory next, a wait decision) is
+// skipped: Claude is right to stop there, whatever words its summary uses.
+
+const fs = require('fs');
+const path = require('path');
 
 const { safe, emit, findRoot } = require('./lib');
 
@@ -27,6 +33,61 @@ function claims(msg) {
       if (!m || QUESTION.test(s) || CONDITIONAL.test(s) || /\b(?:once|when|if|until|after|before|whether)\s+(?:the\s+)?$/i.test(s.slice(0, m.index))) return false;
       return !NEGATION.test(s.slice(Math.max(0, m.index - 25), m.index + m[0].length));
     });
+}
+
+const WAIT_ACTIONS = new Set(['wait', 'gate', 'parked', 'done', 'questions']);
+
+// The last `factory record` and `factory next` for a job, from the tail of the event log.
+function lastCli(root, jobId) {
+  const out = { record: null, next: null };
+  let lines = [];
+  try {
+    const f = path.join(root, '.factory', 'log', 'events.jsonl');
+    const st = fs.statSync(f);
+    const len = Math.min(st.size, 2 * 1024 * 1024);
+    const fd = fs.openSync(f, 'r');
+    const buf = Buffer.alloc(len);
+    fs.readSync(fd, buf, 0, len, st.size - len);
+    fs.closeSync(fd);
+    lines = buf.toString('utf8').split('\n');
+  } catch {
+    return out;
+  }
+  for (let i = lines.length - 1; i >= 0 && !(out.record && out.next); i--) {
+    let e;
+    try {
+      e = JSON.parse(lines[i]);
+    } catch {
+      continue;
+    }
+    if (e.event !== 'cli' || e.job !== jobId) continue;
+    if (e.cmd === 'record' && !out.record) out.record = { ...e, i };
+    if (e.cmd === 'next' && !out.next) out.next = { ...e, i };
+  }
+  return out;
+}
+
+// Why the human is the one to act on this job, or null.
+function waitingOnHuman(root, state) {
+  if (state.status !== 'active') return `job is ${state.status}`;
+  if (state.pending_gate) return `waiting at ${state.pending_gate.id}`;
+  const lastAction = String(state.last_decision || '').split(':')[0];
+  if (WAIT_ACTIONS.has(lastAction)) return `last factory next said ${lastAction}`;
+  const { readJson } = require('../cli/lib/util');
+  const { jobPaths } = require('../cli/lib/paths');
+  const ledger = require('../cli/core/ledger');
+  const answers = readJson(jobPaths(root, state.id).answers, []) || [];
+  const answeredIds = new Set(answers.map((a) => a.id).filter(Boolean));
+  const answeredQs = new Set(answers.map((a) => a.question));
+  const clarify = ledger.lastStep(root, state.id, 'clarify');
+  const openQ = clarify && !clarify.ok && clarify.detail ? (clarify.detail.question_ids || []).filter((id) => !answeredIds.has(id)) : [];
+  if (openQ.length) return `clarify questions unanswered (${openQ.join(', ')})`;
+  const ground = ledger.lastStep(root, state.id, 'ground');
+  const blocking = ground && !ground.ok && ground.detail ? (ground.detail.blocking || []).filter((q) => !answeredQs.has(q)) : [];
+  if (blocking.length) return `${blocking.length} blocking question(s) from ground unanswered`;
+  const cli = lastCli(root, state.id);
+  if (cli.record && ['needs_user', 'degraded', 'park'].includes(cli.record.status) && (!cli.next || cli.next.i < cli.record.i)) return `last factory record asked for the user (${cli.record.status})`;
+  return null;
 }
 
 if (require.main === module) safe((input) => {
@@ -60,6 +121,7 @@ if (require.main === module) safe((input) => {
     // Merging is the human's step: before it, only pre-ship floors can be owed by Claude.
     const r = floors.evaluate(ctx, state.pr && state.pr.merged ? 'full' : 'before_ship');
     if (r.ok) continue;
+    if (waitingOnHuman(root, state)) continue;
     events.append(root, { event: 'stop_block', job: state.id, missing: r.missing, decision_id: state.last_decision_id || null });
     blocked.push(`${state.id} (${r.missing.join(', ')})`);
   }
@@ -70,4 +132,4 @@ if (require.main === module) safe((input) => {
   });
 });
 
-module.exports = { claims };
+module.exports = { claims, waitingOnHuman };
