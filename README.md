@@ -31,7 +31,7 @@ In any git repository with at least one commit:
 
 | You type | What happens |
 |---|---|
-| `/factory:start <what you want>` | Intake: Claude reads the repo, proposes work type, risk and job-vs-epic, asks you **one** question, creates the job, then runs the loop until it needs you. |
+| `/factory:start <what you want>` | Intake: Claude reads the repo, restates your intent in one line, proposes work type, risk and job-vs-epic, asks you **one** question to confirm all of it, creates the job, then runs the loop until it needs you. |
 | `/factory:start` | Continue the current job. |
 | `/factory:why` | Every routing decision for the job, with the rule behind it. |
 | `/factory:console` | A read-only page that replays every job as a flow canvas: stages left to right and time downward, with every step, return trip, retry, park, amendment, cancel, abandon and inspector finding, plus which agents ran on which model (`factory console` writes `.factory/console.html`). |
@@ -57,6 +57,10 @@ The UserPromptSubmit hook applies these before Claude sees them; nothing else co
 From your own terminal you can also run the human-only CLI commands directly (`factory approve`, `factory resume`, `factory reseal` …).
 
 Add a job id to target a specific job: `approve J-0007`.
+
+### Questions you may get
+
+While writing the contract (clarify), questions come intent first: *what problem, for whom, what outcome, how we'd know*. Until that is settled you get only intent questions; scope, constraint and acceptance questions follow, in that order. At most 5 questions in the first round and 3 in later ones, as one numbered list; each has an id (`Q-3`), options where possible and the default the factory uses if you skip it. Nothing is asked twice. If the intent is still unclear after two rounds the job parks rather than guessing; reply `resume` for one more round.
 
 ### Gates you may see
 
@@ -94,6 +98,7 @@ Run `factory console`, or `/factory:console` in Claude Code, then open `.factory
 - **Replay.** Replay drives the job down the canvas one event at a time. You can scrub, step, change speed and follow. Fit and 1:1 switch the zoom. The panel shows the router's six checks at each decision, the agents in each run and every event.
 - **Other tabs.** *Recipe map* is the whole factory for any recipe. *The crew* lists the 19 agents and how often each ran.
 - **Where the data comes from.** Each workflow returns a roster of every agent it started, and `factory record` seals it into the ledger as an `agents` entry tied to the routing decision. Hooks add timings. Parks, amendments and follow-ups come from the event log and the job's own records.
+- **Live.** `factory console --serve` serves the same page at `http://127.0.0.1:4477/` and streams updates to it (server-sent events) as the hooks and CLI write to `.factory/`, so you watch a job move while Claude works. It listens on this machine only, refuses foreign `Host` headers, and stays read-only. `--port 0` picks a free port.
 - **Options.** `--job J-0003` makes the page for one job, `--out file.html` writes it elsewhere, `--label "…"` adds a banner, and `--data file.json` also writes the data as JSON.
 - **Sample.** `node plugins/factory/console/dev/make-sample.js <dir>` builds a realistic sample: nine jobs over about three days on a simulated clock. They run through the real CLI, workflows, hooks and inspector, with scripted agents.
 
@@ -105,7 +110,7 @@ Run `factory console`, or `/factory:console` in Claude Code, then open `.factory
 claude plugin install factory-inspector@software-factory
 ```
 
-It runs when a job closes, and on demand with `/factory-inspector:inspect` (`active` also covers running jobs; `factory-inspect report` ends with a factory health summary). Once a recipe has a long clean streak it suggests sampling, then off. Disable the plugin to turn it off completely; the factory keeps logging either way. See [`plugins/factory-inspector/README.md`](plugins/factory-inspector/README.md).
+It runs whenever a job ends — closed, cancelled or abandoned — however it ended: right after Claude runs the command, at the end of the turn when you ended it with a chat reply, or at the next session start when you ended it from your own terminal. Also on demand with `/factory-inspector:inspect` (`active` also covers running jobs; `factory-inspect report` ends with a factory health summary). Once a recipe has a long clean streak it suggests sampling, then off. Disable the plugin to turn it off completely; the factory keeps logging either way. See [`plugins/factory-inspector/README.md`](plugins/factory-inspector/README.md).
 
 ## CI re-verify (recommended)
 
@@ -133,7 +138,7 @@ Recipes and floors live in the plugin ([`recipes/`](plugins/factory/recipes), [`
 
 ```bash
 cd plugins/factory
-npm test          # 48 tests (plus 13 in plugins/factory-inspector): end-to-end jobs, decision table, caps, guard, seals, hooks, workflows, schemas, console
+npm test          # 54 tests (plus 14 in plugins/factory-inspector): end-to-end jobs, decision table, caps, guard, seals, hooks, workflows, schemas, console
 ./bin/factory help
 ```
 

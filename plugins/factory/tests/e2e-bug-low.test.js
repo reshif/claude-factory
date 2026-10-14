@@ -28,7 +28,9 @@ test('bug@low: request to closed job, with a fix round and a local merge', () =>
 
   // first clarify round asks a question
   let brief = F.cli(root, ['wfargs', 'fanout-judge', '--config', 'clarify'], { allowFail: false });
-  assert.equal(brief.fanout.length, 3);
+  assert.equal(brief.fanout.length, 4);
+  assert.deepEqual(brief.fanout.map((f) => f.category), ['intent', 'scope', 'constraint', 'acceptance'], 'intent gate first');
+  assert.equal(brief.limits.max_questions, 5, 'round 1 budget');
   assert.match(brief.fanout[0].prompt, /read this run's context/);
   assert.equal(brief.fanout[0].agent_type, 'factory:intent-analyst');
   assert.ok(fs.existsSync(brief.fanout[0].prompt.split('\n')[1].trim()), 'instruction file exists');

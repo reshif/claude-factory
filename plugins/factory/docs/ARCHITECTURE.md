@@ -64,7 +64,7 @@ Every brief item names the factory agent that runs it: `agent_type: factory:<rol
 | Workflow | Fan-out | Then | Returns `data` |
 |---|---|---|---|
 | `ground` | researcher × topic (codebase, interfaces, history, external; hotfix: failing path, blast radius) | retry failed once | `topics`, `degraded` |
-| `fanout-judge` · clarify | intent-analyst × {ambiguity, constraints, testability} | judge → God Eye (intent) if no questions (and no missing angle, unless `--accept-degraded`) | `analysts`, `judge`, `critique` |
+| `fanout-judge` · clarify | intent-analyst · intent (the gate, alone) → × {ambiguity, constraints, testability} only once intent has no blocking question | judge (intent > scope > constraint > acceptance, budget, no repeats) → God Eye (intent: restatement + `intent_confirmed`) if no questions (and no missing angle, unless `--accept-degraded`) | `analysts`, `judge`, `critique`, `intent_open`, `held_back` |
 | `fanout-judge` · decide | option-generator × 3 priors ∥ threat-modeler (high risk) | architect decides → God Eye (design) ⇄ architect revises, ≤ `max_design_critique_rounds` | `options`, `judge`, `critiques` |
 | `fanout-judge` · challenge | reviewer × required lane | finding-verifier × blocker/major | `lanes`, `verifications` |
 | `decompose` | — | planner/slicer ⇄ `factory plan validate` ≤ rounds; optional God Eye plan critique | `planner`, `critique` |
@@ -73,7 +73,23 @@ Every brief item names the factory agent that runs it: `agent_type: factory:<rol
 
 Every workflow also returns `agents`: a roster with one entry per `agent()` call. Each entry holds `label`, `agent_type`, `model`, `retry` and `outcome`. `factory record` seals the roster into the job's ledger as `kind: agents`, with the workflow, config, mode, status, the run count and the routing `decision_id`. It does this before any other check, so failed runs are covered too. The repeat guard ignores these entries, so a run that keeps failing is still detected.
 
-`factory record` checks: envelope schema · job matches · job active · input hash still current (else `stale`, nothing recorded) · then per workflow: clarify needs God Eye approve + no contract problems; decide needs the design files inside the job folder, a threat model when required, and critique approval unless a human gate will show it; decompose re-runs plan validation itself; realize re-checks each task's evidence; reconcile checks every task branch is merged; challenge goes through `review.record`, where **the CLI decides lane verdicts** (a lane passes only with no blocker/major left confirmed or unverified) and applies convergence rules.
+`factory record` checks: envelope schema · job matches · job active · input hash still current (else `stale`, nothing recorded) · then per workflow: clarify re-applies the question protocol (below) and needs God Eye approve with the intent confirmed + no contract problems; decide needs the design files inside the job folder, a threat model when required, and critique approval unless a human gate will show it; decompose re-runs plan validation itself; realize re-checks each task's evidence; reconcile checks every task branch is merged; challenge goes through `review.record`, where **the CLI decides lane verdicts** (a lane passes only with no blocker/major left confirmed or unverified) and applies convergence rules.
+
+### Clarify question protocol
+
+The contract opens with an **Intent** section (`- Problem:`, `- Who:`, `- Outcome:`, `- Why now:` optional, `- Success signal:`). `factory contract check` fails while any line is missing or still `<…>`, and on a contract with no Intent section at all (amend and `plan from-contract` accept that, for contracts approved before the section existed). Intake confirms a one-line restatement of it with the user in its single question.
+
+| Rule | Where it's enforced |
+|---|---|
+| The intent analyst runs first and alone; with a blocking intent question the other angles are not run (`held_back`) | `fanout-judge.js` |
+| Order intent > scope > constraint > acceptance; while an intent question is open only intent questions are asked | judge prompt, `fanout-judge.js`, `record` (`cli/core/questions.js`) |
+| Budget: round 1 ≤ `early_questions` (5), later rounds ≤ `later_questions` (3), round `max_intent_rounds` (4) none, so ≤ 11 per job; extra questions are dropped | `config/workflows/clarify.json` limits, judge schema (`maxItems` 5), workflow, `record` |
+| Form: `id` (Q-n, assigned by the CLI), `category`, `why`, `default`, optional `options` | judge schema; `record` fills a missing default (intent: "will not guess") |
+| Never re-ask: anything in `asked_questions` or `answers.json` is dropped; answers are passed to every analyst | workflow + `record`; `factory answer --id Q-n` |
+| Intent never defaults: still open after `intent_rounds` (2) rounds of intent questions, or when no budget is left, the job parks (from `clarify`); `resume` grants one more intent round with a budget | `record`, `human.resume` |
+| God Eye (intent) restates problem/who/outcome/success; approve without `intent_confirmed` is not approval | `intent-critique` schema, workflow, `record` |
+
+Every asked question is kept in `state.question_log` (id, round, category, question, default).
 
 ## 6. Hooks
 
@@ -127,7 +143,7 @@ The factory records what it does, so the separate `factory-inspector` plugin can
 
 ## 7. Files
 
-**Plugin** (`plugins/factory/`): `.claude-plugin/plugin.json` · `bin/factory` · `cli/main.js`, `cli/lib/*`, `cli/core/*` (alignment, amend, budgets, console, contract, decision-table, decisions, epic, floors, human, invalidation, job, ledger, lessons, lifecycle, plan, policy, recipes, reconcile, record, review, setup, ship, steps, tasks, telemetry, verify, wfargs) · `workflows/*.js` (5) · `config/workflows/{clarify,decide,challenge}.json` · `agents/*.md` (19) · `skills/*/SKILL.md` (11) · `console/console.html` (+ `console/dev/make-sample.js`) · `hooks/` · `recipes/` (7 + `_selection.json`) · `policy/{floors,default-policy}.json` · `schemas/` · `templates/{git/commit-msg,github/factory-gate.yml}` · `tests/` · `docs/`.
+**Plugin** (`plugins/factory/`): `.claude-plugin/plugin.json` · `bin/factory` · `cli/main.js`, `cli/lib/*`, `cli/core/*` (alignment, amend, budgets, console, contract, decision-table, decisions, epic, floors, human, invalidation, job, ledger, lessons, lifecycle, plan, policy, questions, recipes, reconcile, record, review, setup, ship, steps, tasks, telemetry, verify, wfargs) · `workflows/*.js` (5) · `config/workflows/{clarify,decide,challenge}.json` · `agents/*.md` (19) · `skills/*/SKILL.md` (11) · `console/console.html` (+ `console/dev/make-sample.js`) · `hooks/` · `recipes/` (7 + `_selection.json`) · `policy/{floors,default-policy}.json` · `schemas/` · `templates/{git/commit-msg,github/factory-gate.yml}` · `tests/` · `docs/`.
 
 **Per repo** (`.factory/`, out of git): `project.json` · `policy.json` (yours) · `current` · `jobs/<J>/` (`state.json`, `contract.md`, `findings.md`, design files, `plan.json`/`slices.json`, `critiques/`, `reviews/round-N/`, `evidence/`, `approved/`, `amendments/`, `ledger.jsonl`, `answers.json`, `recipe.lock.json`, `completion-report.md`) · `log/{events,decisions}.jsonl` · `lessons/lessons.json` · `telemetry/<yyyy-mm>.json` · `worktrees/<J>` (integration) and `worktrees/<J>-<T>` (tasks) · `scratch/` (briefs, envelopes).
 
