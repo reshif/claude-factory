@@ -8,7 +8,7 @@ safe((input) => {
   if (!root) return;
   const main = require('../inspector/main');
   const ran = main.pending(root).length ? main.summary(main.run(root, {})) : null;
-  const r = main.report(root, { status: 'open' });
+  const r = main.report(root, { status: 'open', health: false });
   if (!r.counts.open && !ran) return;
   const parts = [];
   if (ran) parts.push(ran);

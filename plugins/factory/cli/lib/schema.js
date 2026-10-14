@@ -1,7 +1,7 @@
 'use strict';
 // A small JSON Schema validator covering the subset the factory schemas use:
 // type (incl. arrays of types), required, properties, additionalProperties (bool),
-// items, enum, const, minItems, minLength, minimum, maximum, pattern, oneOf, $ref (local #/definitions).
+// items, enum, const, minItems, maxItems, minLength, minimum, maximum, pattern, oneOf, $ref (local #/definitions).
 
 function typeOf(v) {
   if (v === null) return 'null';
@@ -54,6 +54,7 @@ function validate(schema, value, root = schema, at = '$') {
   }
   if (Array.isArray(value)) {
     if (schema.minItems !== undefined && value.length < schema.minItems) errors.push(`${at}: fewer than ${schema.minItems} items`);
+    if (schema.maxItems !== undefined && value.length > schema.maxItems) errors.push(`${at}: more than ${schema.maxItems} items`);
     if (schema.items) value.forEach((item, i) => errors.push(...validate(schema.items, item, root, `${at}[${i}]`)));
   }
   if (value && typeof value === 'object' && !Array.isArray(value)) {

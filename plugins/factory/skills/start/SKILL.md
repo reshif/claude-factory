@@ -42,7 +42,7 @@ Repeat until you reach a stop point:
 3. Write the JSON result the workflow returns, unchanged, to `.factory/scratch/envelope.json` and run `factory record --file .factory/scratch/envelope.json`.
 4. Act on the record result's `status`:
    - `ok` / `fix` / `retry` / `stale` / `error` / `park` → go back to the loop. Nothing for the user here: `factory next` handles retries, fix rounds and parking.
-   - `needs_user` with `questions` → ask the user those questions (numbered, short), then **stop**. When they answer: for clarify, put the answers into the contract (factory:clarify); for ground, record each with `factory answer --question "…" --answer "…"`. Then continue the loop.
+   - `needs_user` with `questions` → ask the user exactly those questions, in that order, as one numbered list (for clarify: id, options and default on each line; intent questions come alone, first), then **stop**. Never add, reword into several, or re-ask questions. When they answer: for clarify, record each with `factory answer --id Q-n --answer "…"` and put the answers into the contract (factory:clarify); for ground, record each with `factory answer --question "…" --answer "…"`. Then continue the loop.
    - `needs_user` with `critique` or `problems` (clarify) → follow factory:clarify.
    - `degraded` → ask the user: re-run, or go on without the missing angle. Stop. If they choose to go on, write the missing angle under Assumptions in the contract and run the clarify workflow again with `--accept-degraded` added to `factory wfargs`.
 
