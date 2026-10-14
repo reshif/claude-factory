@@ -50,7 +50,7 @@ const HELP = `factory — Software Factory CLI (plugin at ${PLUGIN_ROOT})
 Setup      init [--base <branch>] · doctor · ci install
 Jobs       job new --title "…" --type <work type> --risk low|medium|high [--epic] · job show · job list · use <job>
 Routing    next · why [--format md] · finalize [--mode before_ship|full] [--check]
-Contract   contract show · contract check [--plan-fields] · answer --question "…" --answer "…"
+Contract   contract show · contract check [--plan-fields] · answer --id Q-n | --question "…" --answer "…"
 Workflows  wfargs <ground|fanout-judge|decompose|realize|reconcile> [--config clarify|decide|challenge] [--mode m] [--scope s] [--lanes a,b]
            [--threat-model | --no-threat-model] [--plan-critique] [--accept-degraded] [--out file]
            record --file <envelope.json | ->
@@ -141,7 +141,7 @@ function run(argv) {
       return fail('contract show | check', 'bad_input');
     }
     case 'answer':
-      return C('record').answer(R(), { jobId: J, question: opt.question, answer: opt.answer });
+      return C('record').answer(R(), { jobId: J, id: opt.id, question: opt.question, answer: opt.answer });
     case 'wfargs': {
       const brief = C('wfargs').build(R(), {
         jobId: J,

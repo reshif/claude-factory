@@ -4,7 +4,8 @@
 //   2. the `factory` CLI from a real terminal (stdin and stdout are TTYs)
 // The PreToolUse guard also blocks agents from running these subcommands.
 
-const { nowIso, fail, sha256 } = require('../lib/util');
+const { nowIso, fail, sha256, readJson } = require('../lib/util');
+const { pluginPath } = require('../lib/paths');
 const git = require('../lib/git');
 const job = require('./job');
 const steps = require('./steps');
@@ -96,7 +97,15 @@ function resume(root, { jobId, step, channel }) {
   };
   if (from === 'review') oneMore('review_rounds', L.max_review_rounds);
   if (from === 'verify') oneMore('verify_fix_rounds', L.max_verify_fix_rounds);
-  if (from === 'clarify') oneMore('clarify_rounds', L.max_intent_rounds + 2);
+  if (from === 'clarify') {
+    oneMore('clarify_rounds', L.max_intent_rounds + 2);
+    // Parked on unclear intent: one more intent round, with a question budget.
+    const IL = readJson(pluginPath('config', 'workflows', 'clarify.json')).limits.intent_rounds;
+    if ((state.counters.intent_rounds || 0) >= IL) {
+      state.counters.intent_rounds = IL - 1;
+      oneMore('clarify_rounds', L.max_intent_rounds - 1);
+    }
+  }
   if (from === 'decompose') oneMore('decompose_rounds', L.max_plan_validate_rounds);
   if (from === 'budget') state.policy.limits.max_agent_runs_per_job = Math.ceil(state.policy.limits.max_agent_runs_per_job * 1.5);
   state.repeat = { key: null, count: 0 };

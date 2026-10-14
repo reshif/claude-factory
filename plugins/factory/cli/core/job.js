@@ -157,6 +157,7 @@ function create(root, { title, workType, risk, epic = false, parent = null, slic
     waivers: {},
     counters: {
       clarify_rounds: 0,
+      intent_rounds: 0,
       decide_rounds: 0,
       decompose_rounds: 0,
       review_rounds: 0,
@@ -165,6 +166,7 @@ function create(root, { title, workType, risk, epic = false, parent = null, slic
       post_merge_rounds: 0,
     },
     asked_questions: [],
+    question_log: [],
     tasks: {},
     integration: null,
     pr: null,

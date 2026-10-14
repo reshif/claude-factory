@@ -31,7 +31,7 @@ In any git repository with at least one commit:
 
 | You type | What happens |
 |---|---|
-| `/factory:start <what you want>` | Intake: Claude reads the repo, proposes work type, risk and job-vs-epic, asks you **one** question, creates the job, then runs the loop until it needs you. |
+| `/factory:start <what you want>` | Intake: Claude reads the repo, restates your intent in one line, proposes work type, risk and job-vs-epic, asks you **one** question to confirm all of it, creates the job, then runs the loop until it needs you. |
 | `/factory:start` | Continue the current job. |
 | `/factory:why` | Every routing decision for the job, with the rule behind it. |
 | `/factory:console` | A read-only page that replays every job as a flow canvas: stages left to right and time downward, with every step, return trip, retry, park, amendment, cancel, abandon and inspector finding, plus which agents ran on which model (`factory console` writes `.factory/console.html`). |
@@ -57,6 +57,10 @@ The UserPromptSubmit hook applies these before Claude sees them; nothing else co
 From your own terminal you can also run the human-only CLI commands directly (`factory approve`, `factory resume`, `factory reseal` …).
 
 Add a job id to target a specific job: `approve J-0007`.
+
+### Questions you may get
+
+While writing the contract (clarify), questions come intent first: *what problem, for whom, what outcome, how we'd know*. Until that is settled you get only intent questions; scope, constraint and acceptance questions follow, in that order. At most 5 questions in the first round and 3 in later ones, as one numbered list; each has an id (`Q-3`), options where possible and the default the factory uses if you skip it. Nothing is asked twice. If the intent is still unclear after two rounds the job parks rather than guessing; reply `resume` for one more round.
 
 ### Gates you may see
 

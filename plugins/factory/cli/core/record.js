@@ -20,6 +20,7 @@ const review = require('./review');
 const wfargs = require('./wfargs');
 const lifecycle = require('./lifecycle');
 const decisionTable = require('./decision-table');
+const questions = require('./questions');
 
 function findingsMarkdown(state, topics) {
   const L = [`# Findings — ${state.id}: ${state.title}`, '', 'Every claim is cited (file:line, command, or URL) or marked UNVERIFIED.', ''];
@@ -44,22 +45,49 @@ function insideJobDir(root, state, p) {
 
 function recClarify(root, state, env) {
   const d = env.data || {};
-  state.counters.clarify_rounds += 1;
-  const judged = (d.judge && d.judge.questions) || [];
-  state.asked_questions = [...new Set([...(state.asked_questions || []), ...judged.map((q) => q.question)])];
-  job.save(root, state);
+  const cfg = readJson(pluginPath('config', 'workflows', 'clarify.json'));
+  const jp = jobPaths(root, state.id);
+  const round = state.counters.clarify_rounds + 1;
+  const max = questions.budget(cfg, round, state.policy.limits);
+  const log = state.question_log || [];
+  // Re-apply the protocol: intent first and alone, priority order, budget, never re-ask.
+  const n = questions.shape((d.judge && d.judge.questions) || [], { budget: max, asked: questions.askedList(state, readJson(jp.answers, [])), startId: log.length });
+  state.counters.clarify_rounds = round;
+  const intentRounds = (state.counters.intent_rounds || 0) + (n.intent_open ? 1 : 0);
   const b = invalidation.current(root, state);
   const probs = contractMod.problems(contractMod.parse(contractMod.read(root, state.id)));
-  if (d.critique) {
-    writeJson(path.join(jobPaths(root, state.id).critiquesDir, 'intent.json'), seal({ hash: b.contract, verdict: d.critique.verdict, items: d.critique.items, at: nowIso() }));
+  // Intent never falls back to an assumption: still unclear after its rounds (or with no budget left) -> park.
+  if (n.intent_open && (intentRounds > cfg.limits.intent_rounds || max === 0)) {
+    job.save(root, state);
+    const open = [...n.questions, ...n.dropped].map((q) => q.question);
+    ledger.append(root, state.id, { kind: 'step', step: 'clarify', ok: false, bound: { contract: b.contract }, detail: { round, intent_open: true, intent_rounds: intentRounds - 1, questions: 0, contract_problems: probs } });
+    return { status: 'park', park_from: 'clarify', park_reason: `The intent is still unclear after ${intentRounds - 1} round(s) of intent questions; the factory won't guess the why.${open.length ? ` Open: ${open.join(' | ')}` : ''}`, questions: n.questions };
   }
-  const ok = Boolean(d.critique && d.critique.verdict === 'approve' && !probs.length && !judged.length);
-  ledger.append(root, state.id, { kind: 'step', step: 'clarify', ok, bound: { contract: b.contract }, detail: { round: state.counters.clarify_rounds, questions: judged.length, degraded: d.degraded || [], contract_problems: probs } });
-  if (ok) return { status: 'ok', next_gate: state.epic ? 'EH1' : 'H1', message: 'God Eye approved the contract. Next: present it for your approval.' };
-  if (judged.length) return { status: 'needs_user', questions: judged, message: 'Ask these questions, update the contract with the answers, and run clarify again.' };
+  state.counters.intent_rounds = intentRounds;
+  state.question_log = [...log, ...n.questions.map((q) => ({ id: q.id, round, category: q.category, question: q.question, default: q.default }))];
+  state.asked_questions = [...new Set([...(state.asked_questions || []), ...n.questions.map((q) => q.question)])];
+  job.save(root, state);
+  const crit = d.critique || null;
+  if (crit) {
+    writeJson(path.join(jp.critiquesDir, 'intent.json'), seal({ hash: b.contract, verdict: crit.verdict, intent_confirmed: crit.intent_confirmed !== false, restatement: crit.restatement || null, items: crit.items, at: nowIso() }));
+  }
+  const intentConfirmed = Boolean(crit && crit.intent_confirmed !== false); // older critiques carry no flag
+  const ok = Boolean(crit && crit.verdict === 'approve' && intentConfirmed && !probs.length && !n.questions.length);
+  ledger.append(root, state.id, { kind: 'step', step: 'clarify', ok, bound: { contract: b.contract }, detail: { round, questions: n.questions.length, question_ids: n.questions.map((q) => q.id), categories: n.questions.map((q) => q.category), intent_open: n.intent_open, held: n.held.length, dropped: n.dropped.length, degraded: d.degraded || [], contract_problems: probs } });
+  if (ok) return { status: 'ok', next_gate: state.epic ? 'EH1' : 'H1', restatement: crit.restatement || null, message: 'God Eye approved the contract and confirmed the intent. Next: present it for your approval.' };
+  if (n.questions.length) {
+    return {
+      status: 'needs_user',
+      questions: n.questions,
+      intent_first: n.intent_open,
+      held: n.held.length,
+      message: `Ask these ${n.questions.length} question(s) as one numbered list (id, question, options, default).${n.intent_open ? ` Intent comes first: ${n.held.length} other question(s) wait until it is settled.` : ''} Record each answer with factory answer --id <Q-n> --answer "...", and an unanswered one takes its default (write it under Assumptions). Update the contract, then run factory next.`,
+    };
+  }
   if (d.degraded && d.degraded.length) return { status: 'degraded', missing: d.degraded, message: `Analyst(s) failed twice: ${d.degraded.join(', ')}. Ask the user: re-run, or go on without that angle (write it under Assumptions).` };
   if (probs.length) return { status: 'needs_user', problems: probs, message: 'Fix these contract problems, then run clarify again.' };
-  return { status: 'needs_user', critique: d.critique, message: 'God Eye asked for revisions: revise the contract (ask the user where needed) and run clarify again.' };
+  if (crit && crit.verdict === 'approve' && !intentConfirmed) return { status: 'needs_user', critique: crit, message: 'God Eye could not confirm the intent from the contract: compare its restatement with the Intent section, fix the contract (ask the user one intent question if needed) and run clarify again.' };
+  return { status: 'needs_user', critique: crit, message: 'God Eye asked for revisions: revise the contract (ask the user where needed) and run clarify again.' };
 }
 
 function recGround(root, state, env) {
@@ -231,18 +259,21 @@ function apply(root, { jobId, file, envelope }) {
     default:
       fail(`Unknown workflow ${env.workflow}`, 'bad_envelope');
   }
-  if (res.status === 'park') decisionTable.park(root, job.load(root, state.id), res.park_reason, env.workflow);
+  if (res.status === 'park') decisionTable.park(root, job.load(root, state.id), res.park_reason, res.park_from || env.workflow);
   return { job: state.id, workflow: env.workflow, config: env.config || null, ...res };
 }
 
-function answer(root, { jobId, question, answer: a }) {
-  if (!question || !a) fail('Both --question and --answer are needed.', 'bad_input');
+function answer(root, { jobId, id, question, answer: a }) {
   const state = job.resolve(root, jobId);
+  const logged = id ? (state.question_log || []).find((q) => q.id === String(id).toUpperCase()) : null;
+  if (id && !logged) fail(`No question ${id} was asked in ${state.id}.`, 'bad_input');
+  const q = logged ? logged.question : question;
+  if (!q || !a) fail('Need --answer and either --id Q-n or --question "...".', 'bad_input');
   const f = jobPaths(root, state.id).answers;
   const list = readJson(f, []);
-  list.push({ question, answer: a, at: nowIso() });
+  list.push({ ...(logged ? { id: logged.id, category: logged.category } : {}), question: q, answer: a, at: nowIso() });
   writeJson(f, list);
-  return { job: state.id, answers: list.length };
+  return { job: state.id, ...(logged ? { id: logged.id } : {}), answers: list.length };
 }
 
 module.exports = { apply, answer, findingsMarkdown };

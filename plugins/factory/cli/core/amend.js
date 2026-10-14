@@ -59,7 +59,7 @@ function submit(root, { jobId }) {
   const jp = jobPaths(root, state.id);
   const beforeContract = readText(path.join(am.dir, 'before-contract.md'), '');
   const afterContract = readText(jp.contract, '');
-  const probs = contractMod.problems(contractMod.parse(afterContract));
+  const probs = contractMod.problems(contractMod.parse(afterContract), { requireIntent: false }); // legacy contracts may predate Intent
   if (probs.length) fail(`The amended contract has problems:\n- ${probs.join('\n- ')}`, 'contract_invalid', probs);
   const changedAcs = diffAcs(beforeContract, afterContract);
   let affected = [];

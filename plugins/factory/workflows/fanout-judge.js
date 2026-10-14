@@ -75,31 +75,85 @@ function envelope(status, summary, data, extra = {}) {
   }
 }
 
-// ---- 1. fan-out ----
-phase(`${brief.config}: fan-out (${brief.fanout.length})`)
-const outs = await fan(brief.fanout)
-const degraded = brief.fanout.filter((_, i) => !outs[i]).map((f) => f.id)
-const inputs = brief.fanout.map((f, i) => ({ id: f.id, output: outs[i] })).filter((x) => x.output)
-if (degraded.length) log(`No result after retry: ${degraded.join(', ')}`)
+// ---- 1. fan-out (clarify: the intent gate runs first and alone) ----
+const gate = brief.config === 'clarify' ? brief.fanout.filter((f) => f.gate || f.category === 'intent') : []
+const rest = brief.fanout.filter((f) => !gate.includes(f))
+const outs = brief.fanout.map(() => null)
+const put = (list, res) => list.forEach((f, i) => { outs[brief.fanout.indexOf(f)] = res[i] || null })
+if (gate.length) {
+  phase(`clarify: intent gate (${gate.length})`)
+  put(gate, await fan(gate))
+}
+const intentOpen = gate.some((f) => { const o = outs[brief.fanout.indexOf(f)]; return Boolean(o && (o.questions || []).some((q) => q.blocking)) })
+async function fanRest() {
+  if (!rest.length) return
+  phase(`${brief.config}: fan-out (${rest.length})`)
+  put(rest, await fan(rest))
+}
+if (!intentOpen) await fanRest()
+else log(`Intent is not clear yet: holding back ${rest.map((f) => f.id).join(', ')}`)
+const inputsNow = () => brief.fanout.map((f, i) => ({ id: f.id, ...(f.category ? { category: f.category } : {}), output: outs[i] })).filter((x) => x.output)
+const degradedNow = (held) => brief.fanout.filter((f, i) => !outs[i] && !held.includes(f)).map((f) => f.id)
+
+// ---- clarify question protocol (factory record re-applies it): intent first and alone,
+// then scope > constraint > acceptance; never re-ask; at most limits.max_questions.
+const PRI = (brief.limits && brief.limits.priority) || ['intent', 'scope', 'constraint', 'acceptance']
+function shape(list) {
+  const key = (q) => String(q || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()
+  const seen = new Set((brief.asked || []).map(key))
+  const dropped = []
+  const ok = []
+  for (const q of list || []) {
+    if (!q || !q.question) continue
+    if (seen.has(key(q.question))) { dropped.push({ question: q.question, reason: 'already asked' }); continue }
+    seen.add(key(q.question))
+    ok.push({ ...q, category: PRI.includes(q.category) ? q.category : 'scope' })
+  }
+  const open = ok.some((q) => q.category === 'intent')
+  const held = open ? ok.filter((q) => q.category !== 'intent') : []
+  const pick = (open ? ok.filter((q) => q.category === 'intent') : ok).map((q, i) => ({ q, i })).sort((a, b) => PRI.indexOf(a.q.category) - PRI.indexOf(b.q.category) || a.i - b.i).map((x) => x.q)
+  const max = brief.limits && typeof brief.limits.max_questions === 'number' ? brief.limits.max_questions : pick.length
+  pick.slice(max).forEach((q) => dropped.push({ question: q.question, reason: 'over budget' }))
+  return { questions: pick.slice(0, max), held, dropped, intent_open: open }
+}
 
 // ---- 2. config-specific ----
 if (brief.config === 'clarify') {
+  const judgeOnce = (note) => one(`${brief.judge.prompt}${note}\n\nINPUTS:\n${JSON.stringify(inputsNow(), null, 2)}`, brief.judge, 'judge')
   phase('clarify: judge')
-  const judge = await one(`${brief.judge.prompt}\n\nINPUTS:\n${JSON.stringify(inputs, null, 2)}`, brief.judge, 'judge')
+  let judge = await judgeOnce(intentOpen ? '\n\nINTENT GATE: the intent is not clear yet, so the other angles were held back. Ask only intent questions this round.' : '')
+  let held = intentOpen ? rest : []
+  if (judge && intentOpen && !shape(judge.questions).intent_open) {
+    // the judge found the intent clear after all: run the held angles and judge again
+    held = []
+    await fanRest()
+    phase('clarify: judge (all angles)')
+    judge = await judgeOnce('')
+  }
+  const degraded = degradedNow(held)
+  const inputs = inputsNow()
+  if (degraded.length) log(`No result after retry: ${degraded.join(', ')}`)
   if (!judge) return envelope('error', 'The judge returned nothing twice.', { analysts: inputs, degraded })
+  const shaped = shape(judge.questions)
+  judge = { ...judge, questions: shaped.questions, held: [...(judge.held || []), ...shaped.held.map((q) => ({ question: q.question, category: q.category }))], over_budget_or_repeat: shaped.dropped }
   let critique = null
-  if (judge.questions.length === 0 && (degraded.length === 0 || brief.accept_degraded)) {
+  if (shaped.questions.length === 0 && !shaped.intent_open && (degraded.length === 0 || brief.accept_degraded)) {
     phase('clarify: God Eye (intent)')
     critique = await one(brief.critique.prompt, brief.critique, 'god-eye · intent')
   }
-  const status = degraded.length && !brief.accept_degraded ? 'degraded' : judge.questions.length ? 'needs_user' : critique && critique.verdict === 'approve' ? 'ok' : 'needs_user'
+  const approved = critique && critique.verdict === 'approve' && critique.intent_confirmed !== false
+  const status = degraded.length && !brief.accept_degraded ? 'degraded' : shaped.questions.length ? 'needs_user' : approved ? 'ok' : 'needs_user'
   const summary = degraded.length
     ? `Missing angle(s): ${degraded.join(', ')}.`
-    : judge.questions.length
-      ? `${judge.questions.length} question(s) for you.`
-      : critique ? `God Eye: ${critique.verdict}.` : 'No critique.'
-  return envelope(status, summary, { analysts: inputs, degraded, judge, critique }, { questions: judge.questions })
+    : shaped.questions.length
+      ? `${shaped.questions.length} ${shaped.intent_open ? 'intent ' : ''}question(s) for you.${held.length ? ` Held until intent is clear: ${held.map((f) => f.id).join(', ')}.` : ''}`
+      : critique ? `God Eye: ${critique.verdict}${critique.intent_confirmed === false ? ' (intent not confirmed)' : ''}.` : 'No critique.'
+  return envelope(status, summary, { analysts: inputs, degraded, intent_open: shaped.intent_open || (intentOpen && held.length > 0), held_back: held.map((f) => f.id), judge, critique }, { questions: shaped.questions })
 }
+
+const degraded = degradedNow([])
+const inputs = inputsNow()
+if (degraded.length) log(`No result after retry: ${degraded.join(', ')}`)
 
 if (brief.config === 'decide') {
   phase('decide: architect')
