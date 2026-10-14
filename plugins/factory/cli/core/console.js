@@ -25,6 +25,10 @@ const STAGE_OF = {
   distill: 'learn', close: 'learn',
 };
 const HUMAN_GATES = new Set(['H1', 'H2', 'H3', 'HF', 'HS', 'EH1', 'EH2', 'EH3', 'A']);
+// An agent started (SubagentStart) with no SubagentStop is "running" only while it is plausible:
+// a crashed or closed session never sends the stop, so past this age, or once the job is no
+// longer active, it is listed as stale instead of running forever.
+const STALE_AGENT_MS = 2 * 3600 * 1000;
 
 function secretFile() {
   return process.env.FACTORY_SECRET_FILE || path.join(require('os').homedir(), '.config', 'software-factory', 'secret');
@@ -118,7 +122,7 @@ function inspectorFor(root, id, decisions) {
   });
 }
 
-function jobData(root, id, all, checker) {
+function jobData(root, id, all, checker, nowMs = Date.now()) {
   const jp = jobPaths(root, id);
   const state = readJson(jp.state, null);
   if (!state) return null;
@@ -154,11 +158,18 @@ function jobData(root, id, all, checker) {
       delete started[e.agent_id];
     }
   }
-  const runningNow = Object.values(started).map((s) => ({ agent_type: s.agent_type, since: s.ts, decision_id: s.decision_id || null }));
+  const runningNow = [];
+  const staleNow = [];
+  for (const s of Object.values(started)) {
+    const a = { agent_type: s.agent_type, since: s.ts, decision_id: s.decision_id || null };
+    const age = nowMs - Date.parse(s.ts);
+    if (state.status === 'active' && age >= 0 && age < STALE_AGENT_MS) runningNow.push(a);
+    else staleNow.push({ ...a, stale: true });
+  }
 
   const T = [];
   let seq = 0;
-  const push = (o) => { if (o.t) { o.seq = seq++; T.push(o); } };
+  const push = (o) => { if (o.t) { o.seq = seq++; if (o.step && STAGE_OF[o.step]) o.stage = STAGE_OF[o.step]; T.push(o); } };
   push({ t: state.created_at, type: 'created', step: 'request', text: `Request submitted: “${short(state.title, 120)}”`, work_type: state.work_type, risk: state.risk, risk_proposed: state.risk_proposed, recipe: state.recipe && state.recipe.id });
 
   for (const d of decisions) {
@@ -252,7 +263,7 @@ function jobData(root, id, all, checker) {
   });
   const lessons = (readJson(project(root).lessonsFile, { lessons: [] }).lessons || []).filter((l) => l.source_job === id).map((l) => ({ id: l.id, status: l.status, text: short(l.text, 200) }));
 
-  return {
+  const job = {
     id,
     title: state.title,
     work_type: state.work_type,
@@ -278,12 +289,16 @@ function jobData(root, id, all, checker) {
     steps,
     timeline: T,
     running_agents: runningNow,
+    stale_agents: staleNow,
     tasks,
     lessons,
   };
+  // A cheap revision: the page re-renders only the jobs whose rev changed.
+  job.rev = crypto.createHash('sha1').update(JSON.stringify(job)).digest('hex').slice(0, 12);
+  return job;
 }
 
-function build(root, { job: only } = {}) {
+function build(root, { job: only, now } = {}) {
   const p = project(root);
   if (!fs.existsSync(p.dir)) fail('No .factory/ folder here. Run factory init first.', 'no_root');
   const checker = sealChecker();
@@ -291,7 +306,8 @@ function build(root, { job: only } = {}) {
   let ids = [];
   try { ids = fs.readdirSync(p.jobsDir).filter((d) => /^J-\d+$/.test(d)).sort(); } catch { /* no jobs yet */ }
   if (only) ids = ids.filter((i) => i === only);
-  const jobs = ids.map((id) => jobData(root, id, all, checker)).filter(Boolean);
+  const nowMs = now ? Date.parse(now) : Date.now();
+  const jobs = ids.map((id) => jobData(root, id, all, checker, nowMs)).filter(Boolean);
   let current = null;
   try { current = fs.readFileSync(p.currentFile, 'utf8').trim() || null; } catch { /* none */ }
   let version = null;
@@ -361,10 +377,13 @@ function serve(root, { port = 4477, job, label, interval = 400, onReady } = {}) 
   let print = fingerprint(root);
   const same = (a, b) => JSON.stringify({ ...a, generated_at: 0 }) === JSON.stringify({ ...b, generated_at: 0 });
   const send = (res, d) => res.write(`event: data\ndata: ${d}\n\n`);
+  let builtAt = Date.now();
   const tick = () => {
     const now = fingerprint(root);
-    if (now === print) return;
+    // Nothing written: still rebuild once a minute, so an agent whose session died turns stale.
+    if (now === print && Date.now() - builtAt < 60000) return;
     print = now;
+    builtAt = Date.now();
     let next;
     try { next = build(root, { job }); } catch { return; } // a file mid-write: try again next tick
     if (same(next, data)) return;
@@ -416,4 +435,4 @@ function runServe(root, { port, job, label }) {
   return null;
 }
 
-module.exports = { build, render, run, serve, runServe, fingerprint, STAGE_OF };
+module.exports = { build, render, run, serve, runServe, fingerprint, STAGE_OF, STALE_AGENT_MS };
