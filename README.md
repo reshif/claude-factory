@@ -4,7 +4,7 @@ Turns a request into a verified, merged change. Claude does the work through spe
 
 | Plugin | Version | What it is |
 |---|---|---|
-| `factory` | 0.10.1 | The orchestrator: skills, hooks, the `factory` CLI, workflows, 19 agents, recipes, templates and the console |
+| `factory` | 0.10.1 | The orchestrator: skills, hooks, the `factory` CLI, workflows, agents, recipes, templates and the console |
 | `factory-inspector` | 0.2.1 | An independent auditor: checks each job against the rulebook it declared and the factory's health (rules R1–R19, R21, R22) |
 
 ## How it fits together
@@ -38,7 +38,7 @@ flowchart TB
     s1 --> s2 --> s3 --> s4 --> s5 --> s6 --> s7
   end
 
-  agents["<b>Workflows + 19 agents</b><br/>ground · fanout-judge · decompose · realize · reconcile<br/>analysts · architect · planner · builders · testers · reviewers"]
+  agents["<b>Workflows + agents</b><br/>ground · fanout-judge · decompose · realize · reconcile<br/>analysts · architect · planner · builders · testers · reviewers"]
 
   record["<b>factory record</b><br/>validates the result · rejects stale ones · checks docs against templates<br/>seals it into the ledger · then back to factory next"]:::cli
 
@@ -214,7 +214,7 @@ Run `factory console`, or `/factory:console` in Claude Code, then open `.factory
   ![A job's story](plugins/factory/console/dev/screenshots/job-story.png)
 - **Live.** With `--serve`, the page gets each change over server-sent events. Only the rows whose job changed are redrawn, with a short highlight, and a row that changes group slides there. A new gate brings a toast with the reply to copy, and, if you turn on the bell, a desktop notification. On an open job, new steps play in if you are watching the latest moment, and your place is kept if you are scrubbing back. The server listens on this machine only (`http://127.0.0.1:4477/`, `--port 0` for any free port), refuses foreign `Host` headers and is read-only.
 - **Keys.** `j`/`k` move, `Enter` opens, `Esc` goes back, `/` filters, `⌘K` (or ctrl-K) opens a palette to jump to any job or view, `1`–`5` toggle the tiles, `g w` opens the next job waiting for you, `?` lists them all. The view, filters and open job are in the URL, so a link brings you back to the same place.
-- **Recipe map and Crew.** *Recipe map* is the whole factory as a floor plan for any recipe; *Crew* lists the 19 agents and how often each ran.
+- **Recipe map and Crew.** *Recipe map* is the whole factory as a floor plan for any recipe; *Crew* lists every agent and how often each ran.
 - **Where the data comes from.** Each workflow returns a roster of every agent it started, and `factory record` seals it into the ledger as an `agents` entry tied to the routing decision. Hooks add timings. Parks, amendments, follow-ups, hook errors and refused "done" claims come from the event log and the job's own records. An agent that started but never stopped counts as running for two hours at most, and only while its job is active; after that it shows as stale.
 - **Options.** `--job J-0003` makes the page for one job, `--out file.html` writes it elsewhere, `--label "…"` adds a banner, and `--data file.json` also writes the data as JSON. Dark is the default look when your system is dark; the half-moon button switches theme.
 - **Sample.** `node plugins/factory/console/dev/make-sample.js <dir>` builds a realistic sample: nine jobs over about three days on a simulated clock. They run through the real CLI, workflows, hooks and inspector, with scripted agents. More screenshots are in [`plugins/factory/console/dev/screenshots/`](plugins/factory/console/dev/screenshots/).
@@ -224,7 +224,7 @@ Run `factory console`, or `/factory:console` in Claude Code, then open `.factory
 `factory-inspector` audits the factory from the outside. It imports none of the factory's code: it reads `.factory/` directly, with its own seal check, so a bug in the factory can't hide itself. It never blocks or changes a job; its findings are questions for you, kept in `.factory/inspect/register.json`.
 
 - **Per job (R1–R9):** forged records, the wrong recipe, steps out of order, gates approved without being shown, review on an unproven build, loops past caps, Claude not doing what `factory next` said, the same situation routed differently, recurring friction.
-- **Factory health (R10–R19):** hook failures, torn log lines, repeated guard denials / blocked "done" claims / refused replies, CLI failures and crashes, degraded workflows and agent retries, agents that never stopped, repeated parks, idle jobs, slow gate replies, and clarify parking on an unclear intent or overrunning its question budget. **R21/R22:** a confirmed review finding that came back in a later round, and a reconcile that would have dropped merged or fixed lines. Thresholds live in `.factory/inspect/config.json` (`limits`, `rules_off`).
+- **Factory health:** hook failures, torn log lines, repeated guard denials / blocked "done" claims / refused replies, CLI failures and crashes, degraded workflows and agent retries, agents that never stopped, repeated parks, idle jobs, slow gate replies, and clarify parking on an unclear intent or overrunning its question budget. **R21/R22:** a confirmed review finding that came back in a later round, and a reconcile that would have dropped merged or fixed lines. Thresholds live in `.factory/inspect/config.json` (`limits`, `rules_off`).
 - **When it runs:** whenever a job ends — closed, cancelled or abandoned — however it ended: right after Claude runs the command, at the end of the turn if you ended it with a chat reply, or at the next session start if you ended it from your terminal. On demand with `/factory-inspector:inspect` (`active` also covers running jobs). Once a recipe has a long clean streak it suggests sampling, then off.
 
 Rule table and CLI: [`plugins/factory-inspector/README.md`](plugins/factory-inspector/README.md).
@@ -287,7 +287,7 @@ Then `/factory:start <request>` initialises the repo again. Keep `~/.config/soft
 plugins/factory/
   .claude-plugin/plugin.json        plugin manifest (version)
   skills/                           start · intake · clarify · gate · ship · distill · amend · park · why · console · review
-  agents/                           19 agents: intent-analyst, judge, god-eye, researcher, option-generator, threat-modeler,
+  agents/                           intent-analyst, judge, god-eye, researcher, option-generator, threat-modeler,
                                     architect, planner, slicer, builder, tester, integrator, code/test/security/ux-reviewer,
                                     finding-verifier, epic-reviewer, lesson-writer
   hooks/                            hooks.json + the scripts in the table above

@@ -1,6 +1,6 @@
 ---
 name: distill
-description: Factory distill — after a job merges, turn confirmed problems into at most three scoped lessons for the user to accept or reject. Used by factory:start when `factory next` returns skill distill.
+description: Turns a merged factory job's confirmed problems into a few scoped lessons for the user to accept or reject. Used by factory:start when `factory next` returns skill distill.
 user-invocable: false
 ---
 # Distill

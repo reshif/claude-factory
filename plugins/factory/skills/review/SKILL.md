@@ -1,6 +1,6 @@
 ---
 name: review
-description: Monthly factory review (about 30 minutes) — read the telemetry per recipe, decide which steps cost much and change little, and propose recipe or floor changes for the user to make. Use when the user types /factory:review or asks how the factory is doing.
+description: Monthly review of the Software Factory's own telemetry, ending in at most three recipe or floor changes for the user to make. Use when the user types /factory:review or asks how the factory is doing. Not for reviewing code, a diff or a pull request.
 argument-hint: "[days to look back, default 30]"
 ---
 # Monthly factory review
