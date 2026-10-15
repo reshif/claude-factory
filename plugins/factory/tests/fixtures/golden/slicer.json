@@ -1,0 +1,6 @@
+{
+  "valid": true,
+  "errors": [],
+  "path": ".factory/jobs/J-0012/slices.json",
+  "summary": "4 slices: S00 freezes the orders API v1 and adds orders_v2 (off); S01 create, S02 list, S03 cancel, each behind the flag."
+}

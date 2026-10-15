@@ -1,0 +1,13 @@
+{
+  "lane": "code",
+  "findings": [
+    {
+      "id": "code-1",
+      "severity": "major",
+      "file": "src/api/orders.js",
+      "line": 42,
+      "summary": "The handler reads req.body.items without the shared schema check, so an order without items throws a 500.",
+      "rule": "lesson:L3"
+    }
+  ]
+}

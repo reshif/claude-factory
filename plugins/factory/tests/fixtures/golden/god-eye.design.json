@@ -1,0 +1,10 @@
+{
+  "verdict": "approve",
+  "items": [
+    {
+      "issue": "Consequences does not mention that the old behaviour is gone for every caller.",
+      "severity": "minor",
+      "suggestion": "Add one line under Consequences."
+    }
+  ]
+}

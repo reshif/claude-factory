@@ -1,0 +1,13 @@
+{
+  "lane": "ux",
+  "findings": [
+    {
+      "id": "ux-1",
+      "severity": "major",
+      "file": "src/ui/CheckoutButton.tsx",
+      "line": 27,
+      "summary": "The button shows no loading state, so a slow submit looks frozen and users click twice.",
+      "rule": null
+    }
+  ]
+}

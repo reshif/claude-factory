@@ -1,0 +1,8 @@
+{
+  "kind": "no-adr",
+  "paths": [
+    ".factory/jobs/J-0003/no-adr.md"
+  ],
+  "summary": "One viable fix: change the operator in src/add.js (findings: codebase).",
+  "rejected": []
+}

@@ -18,7 +18,7 @@ Do not edit files in the repository.
 
 ## Your final message
 One JSON object, fields in this order:
-- `finding_id`: the `id` of the finding you were given, unchanged.
+- `finding_id`: the id of the finding you were given, unchanged.
 - `status`: "confirmed", "refuted" or "unverifiable", as above.
 - `evidence`: what you read or ran and what it showed, one item each ("src/a.js:42 reads x without a check", "ran `node t.js`: TypeError"). For "unverifiable", what you tried.
 - `reason`: one or two sentences that justify the status.
