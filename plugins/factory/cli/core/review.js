@@ -1,6 +1,7 @@
 'use strict';
 // challenge records. The CLI, not the reviewers, decides each lane's verdict:
-// a lane passes when it has no blocker/major finding that was confirmed or left unverified.
+// a lane passes when it has no blocker/major finding that was confirmed or left unverified
+// (no verifier result, or a verifier that answered "unverifiable").
 // Convergence rules (from round 2): a new major in code no commit touched since the last
 // round becomes a minor follow-up; a broken pack rule is minor; a broken lesson is a finding.
 // A finding confirmed in any earlier round and found again is a regression: it keeps at least
@@ -114,9 +115,13 @@ function record(root, { jobId, payload, step = 'challenge' }) {
       }
       if (['blocker', 'major'].includes(f.severity)) {
         const v = verifications[f.id];
+        // confirmed and refuted are verdicts; "unverifiable" (the verifier could not settle it)
+        // counts like no result at all: the finding stays unverified and keeps blocking.
         f.status = v && ['confirmed', 'refuted'].includes(v.status) ? v.status : was ? 'confirmed' : 'unverified';
+        if (v && v.status === 'unverifiable') f.verifier = 'unverifiable';
         if (v && v.reason) f.verification = v.reason;
         else if (was && !v) f.verification = `confirmed in round ${was.round}; found again`;
+        if (v && Array.isArray(v.evidence) && v.evidence.length) f.evidence = v.evidence.slice(0, 10).map((e) => String(e).slice(0, 500));
       } else {
         f.status = 'minor';
       }

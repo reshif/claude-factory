@@ -62,7 +62,7 @@ Change     amend start --reason "…" [--by who] · amend submit · park --reaso
 Epic       epic spawn · epic gate
 Docs       doc list · doc template <type> · doc check [<file>] [--type t] [--job J] · doc index
            (templates/docs: adr, no-adr, recommendation, threat-model, contracts, findings, ship-report, lessons, index)
-Learning   distill context · distill done · lessons list · lessons add --text "…" --scope "glob,…" [--why "…"]
+Learning   distill context · distill done [--result <reply.json | - | json>] · lessons list · lessons add --text "…" --scope "glob,…" [--why "…"]
            telemetry report [--since 30] [--format md] · recipe list|show <id>|check|select --type t --risk r [--epic]
 Console    console [--out file.html] [--job J] [--label "…"] [--data data.json]   (read-only page of every job)
            console --serve [--port 4477] [--job J]   (the same page, live: updates as Claude works)
@@ -260,7 +260,11 @@ function run(argv) {
     }
     case 'distill':
       if (sub === 'context') return C('lifecycle').distillContext(R(), { jobId: J });
-      if (sub === 'done') return C('lifecycle').distillDone(R(), { jobId: J });
+      if (sub === 'done') {
+        // --result: the lesson writer's final message (a file, - for stdin, or inline JSON).
+        const res = opt.result === undefined ? undefined : opt.result === '-' ? readStdin() : fs.existsSync(String(opt.result)) ? fs.readFileSync(String(opt.result), 'utf8') : String(opt.result);
+        return C('lifecycle').distillDone(R(), { jobId: J, result: res });
+      }
       return fail('distill context | done', 'bad_input');
     case 'lessons': {
       const l = C('lessons');

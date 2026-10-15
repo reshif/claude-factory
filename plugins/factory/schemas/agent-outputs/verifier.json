@@ -1,2 +1,5 @@
-{ "type": "object", "required": ["finding_id", "status", "reason"], "properties": {
-  "finding_id": { "type": "string" }, "status": { "enum": ["confirmed", "refuted"] }, "reason": { "type": "string" } } }
+{ "type": "object", "required": ["finding_id", "status", "evidence", "reason"], "properties": {
+  "finding_id": { "type": "string" },
+  "status": { "enum": ["confirmed", "refuted", "unverifiable"] },
+  "evidence": { "type": "array", "items": { "type": "string" } },
+  "reason": { "type": "string" } } }
