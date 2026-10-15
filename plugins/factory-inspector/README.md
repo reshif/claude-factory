@@ -27,8 +27,8 @@ The inspector has its own implementations of three things: seal verification, re
 | R3 conformance | deviation / ambiguity | Steps outside the recipe; steps reached before earlier ones completed; closed without a step; moving backwards with no recorded cause |
 | R4 gates | deviation | Approvals that were never presented, or presented for a different document hash; automatic approvals the recipe doesn't allow |
 | R5 evidence chain | deviation | Review on a build with no passing proof; proof on a build never integrated; shipping without both on the same build |
-| R6 loops | deviation | Fix or clarify rounds beyond their caps plus your resumes |
-| R7 driver fidelity | deviation | Claude didn't run what `factory next` asked for, ran something else, or changed things while waiting at a gate |
+| R6 loops | deviation | Fix rounds beyond their caps plus your resumes; clarify rounds beyond their cap (clarify v2: counted rounds — degraded ones excluded — beyond the ceiling each round recorded) |
+| R7 driver fidelity | deviation | Claude didn't run what `factory next` asked for, ran something else, or changed things while waiting at a gate (`factory clarify status` is a look; `factory clarify note` belongs to the clarify step; your own `clarify split` is yours, not the driver's) |
 | R8 consistency | ambiguity / deviation | The same failing check routed by different rules under the same rulebook; identical inputs picking different recipes |
 | R9 friction | ambiguity | Repeated patterns across jobs (3+ by default): the same guard denial, refused replies, refused workflow results, caps you nearly always resume past, the same floor waived, denials clustering at one gate, a step repeating with no progress |
 | R10 hook errors | gap | A factory hook failed (`hook_error`; high for the guard, Stop and prompt hooks, which enforce nothing while failing); the inspector's own hooks failed (`.factory/inspect/hook-errors.jsonl`) |
@@ -40,7 +40,7 @@ The inspector has its own implementations of three things: seal verification, re
 | R16 parks and resumes | ambiguity | A job parked, or resumed past its caps, more than a limit |
 | R17 idle job | gap | Active, not waiting for you, and nothing has happened for a long time |
 | R18 slow reply | ambiguity | A gate that waited longer than a limit for your reply |
-| R19 clarify | ambiguity | A job parked because its intent was still unclear after the intent rounds; clarify proposing questions over the round budget or already asked (dropped by the CLI) beyond a limit |
+| R19 clarify | ambiguity | A job parked because its intent was still unclear after the intent rounds; clarify proposing questions over the round budget or already asked (dropped by the CLI) beyond a limit; clarify v2 rounds in a row that settled, deferred and asked nothing (`R19.clarify_stalled`); settled issues the agents kept raising again, folded as notes by the ledger (`R19.issues_reraised`, low) |
 | R21 review regression | deviation / ambiguity | A finding confirmed serious in one review round found again in a later round (same file and lane + rule, or a line within ±10, or the same summary): the fix was lost. High when the later round let it through (downgraded, minor, unconfirmed — what older factory versions did); medium when it blocked again. From the job's `challenge` ledger records |
 | R22 reconcile drop | deviation | Reconcile's regression guard caught a merge or conflict resolution that dropped lines already-merged tasks or fix rounds had added (high). From the job's failed `reconcile` ledger records |
 

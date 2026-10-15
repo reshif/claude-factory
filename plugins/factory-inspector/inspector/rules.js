@@ -179,19 +179,29 @@ function loops(job) {
     const n = count(rule);
     if (n > allowed) out.push(f({ rule: 'R6.rounds_over_cap', class: 'deviation', severity: 'medium', subject: `${job.id}:${rule}`, job: job.id, summary: `${n} ${name} rounds, but the cap allows ${allowed} (${max} + ${allowed - max} resume(s)).`, question: `How did ${name} rounds exceed the cap?` }));
   }
-  const clarifies = job.ledger.filter((e) => e.kind === 'step' && e.step === 'clarify').length;
-  if (L.max_intent_rounds !== undefined && clarifies > L.max_intent_rounds + 2 + resumes.filter((r) => r.from === 'clarify').length) {
-    out.push(f({ rule: 'R6.clarify_over_cap', class: 'deviation', severity: 'medium', subject: `${job.id}:clarify`, job: job.id, summary: `${clarifies} clarify rounds recorded; the cap is ${L.max_intent_rounds + 2}.`, question: 'How did clarify keep running past its cap?' }));
+  const clarifySteps = job.ledger.filter((e) => e.kind === 'step' && e.step === 'clarify');
+  const v2 = clarifySteps.filter((e) => e.detail && e.detail.ledger && Number.isInteger(e.detail.ledger.ceiling));
+  if (v2.length) {
+    // clarify v2: the hard ceiling counts rounds that were not degraded; each round records the
+    // ceiling it ran under (max_intent_rounds, plus what resumes allowed)
+    const over = v2.filter((e) => e.detail.ledger.counted > e.detail.ledger.ceiling);
+    if (over.length) out.push(f({ rule: 'R6.clarify_over_cap', class: 'deviation', severity: 'medium', subject: `${job.id}:clarify`, job: job.id, summary: `Clarify ran ${over[over.length - 1].detail.ledger.counted} counted rounds; the ceiling it recorded was ${over[over.length - 1].detail.ledger.ceiling}.`, question: 'How did clarify keep running past its ceiling?' }));
+  } else if (L.max_intent_rounds !== undefined && clarifySteps.length > L.max_intent_rounds + 2 + resumes.filter((r) => r.from === 'clarify').length) {
+    out.push(f({ rule: 'R6.clarify_over_cap', class: 'deviation', severity: 'medium', subject: `${job.id}:clarify`, job: job.id, summary: `${clarifySteps.length} clarify rounds recorded; the cap is ${L.max_intent_rounds + 2}.`, question: 'How did clarify keep running past its cap?' }));
   }
   return out;
 }
 
 // ---------------------------------------------------------------- R7 driver fidelity
-const READ_ONLY = new Set(['next', 'doc', 'why', 'job', 'contract', 'help', 'doctor', 'finalize', 'recipe', 'telemetry', 'use', 'lessons:list', 'task:show', 'distill:context', 'plan:validate', 'report', 'init']);
+// clarify status only prints the clarify ledger.
+const READ_ONLY = new Set(['next', 'doc', 'why', 'job', 'contract', 'help', 'doctor', 'finalize', 'recipe', 'telemetry', 'use', 'lessons:list', 'task:show', 'distill:context', 'plan:validate', 'report', 'init', 'clarify:status']);
+// Human-only commands that went through (the CLI accepted your terminal): you acting, judged by
+// their human.* decision, not a driver deviation. A refused attempt is still judged.
+const HUMAN_CMDS = new Set(['clarify:split']);
 const MUTATING_IN_WAIT = new Set(['record', 'ship', 'task:start', 'task:verify', 'task:state', 'reconcile', 'verify', 'evidence', 'plan:from-contract', 'close', 'epic', 'amend', 'followup', 'distill:done', 'wfargs']);
 
 function cmdKey(e) {
-  if (e.cmd === 'task' || e.cmd === 'plan' || e.cmd === 'distill' || e.cmd === 'lessons') return `${e.cmd}:${e.sub}`;
+  if (e.cmd === 'task' || e.cmd === 'plan' || e.cmd === 'distill' || e.cmd === 'lessons' || e.cmd === 'clarify') return `${e.cmd}:${e.sub}`;
   return e.cmd;
 }
 
@@ -199,7 +209,7 @@ function expectationsFor(d) {
   const wf = (workflow, config) => ({
     required: [(e) => e.cmd === 'wfargs' && e.workflow === workflow && (!config || e.config === config), (e) => e.cmd === 'record' && (e.workflow === workflow || !e.workflow) && (!config || !e.config || e.config === config)],
     requiredLabel: `factory wfargs ${workflow}${config ? ` --config ${config}` : ''} and factory record`,
-    allowed: new Set(['answer', 'park', 'task:start', 'task:verify', 'task:state', 'reconcile', 'evidence', 'plan:validate', 'contract', 'wfargs', 'record']),
+    allowed: new Set(['answer', 'clarify:note', 'park', 'task:start', 'task:verify', 'task:state', 'reconcile', 'evidence', 'plan:validate', 'contract', 'wfargs', 'record']),
   });
   if (d.action === 'workflow') return wf(d.workflow, d.config);
   if (d.action === 'skill') {
@@ -243,6 +253,7 @@ function driverFidelity(job) {
     for (const e of evs) {
       const k = cmdKey(e);
       if (READ_ONLY.has(k) || READ_ONLY.has(e.cmd)) continue;
+      if (HUMAN_CMDS.has(k) && e.ok !== false) continue;
       if (exp.allowed.has(k) || exp.allowed.has(e.cmd)) continue;
       const mutating = MUTATING_IN_WAIT.has(k) || MUTATING_IN_WAIT.has(e.cmd);
       out.push(f({ rule: exp.quiet ? 'R7.acted_while_waiting' : 'R7.unexpected_command', class: 'deviation', severity: exp.quiet && mutating ? 'high' : 'medium', subject: `${job.id}:${d.id}:${k}`, job: job.id, summary: exp.quiet ? `Ran "factory ${e.cmd}${e.sub ? ` ${e.sub}` : ''}" while the job was at ${d.action} "${d.step || ''}" — nothing should change there.` : `Ran "factory ${e.cmd}${e.sub ? ` ${e.sub}` : ''}" while factory next had asked for ${d.action} "${d.step || d.skill || d.command}".`, evidence: [d.id, e.ts], question: 'Was this an improvisation the skills should describe, or a mistake?' }));
@@ -466,6 +477,21 @@ function jobHealth(job, L, now) {
   // ids); the ordinary needs_user round that asks an intent question is not a park.
   const intentParks = clarify.filter((e) => e.ok === false && e.detail.intent_open && (e.detail.parked === true || (!Array.isArray(e.detail.question_ids) && !e.detail.questions)));
   if (intentParks.length) out.push(f({ rule: 'R19.intent_parked', class: 'ambiguity', severity: 'medium', subject: id, job: id, latest: latest(intentParks, 'at'), summary: `${id} parked ${intentParks.length} time(s) because the intent was still unclear after ${Math.max(...intentParks.map((e) => e.detail.intent_rounds || 0))} intent round(s).`, question: 'Was the request too vague to start, or were the intent questions badly put?' }));
+  // clarify v2: rounds in a row that settled and asked nothing (the CLI parks after its own limit;
+  // this flags the pattern even when a resume let it go on), and settled issues the agents kept
+  // raising again (the ledger folded them as notes)
+  let streak = 0;
+  let worst = 0;
+  let worstAt = null;
+  for (const e of clarify) {
+    const lg = e.detail.ledger;
+    if (!lg || lg.degraded) continue;
+    streak = lg.progress ? 0 : streak + 1;
+    if (streak > worst) { worst = streak; worstAt = e.at; }
+  }
+  if (worst >= L.clarify_stalled_rounds) out.push(f({ rule: 'R19.clarify_stalled', class: 'ambiguity', severity: 'medium', subject: id, job: id, latest: worstAt, summary: `Clarify in ${id} went ${worst} round(s) in a row without settling, deferring or asking anything (limit ${L.clarify_stalled_rounds}).`, question: 'What kept it from settling: a question nobody answers, God Eye items with nothing to ask, or a contract problem the editor cannot fix?' }));
+  const reraised = clarify.reduce((n, e) => n + (Number((e.detail.ledger || {}).reraised) || 0), 0);
+  if (reraised >= L.reraised_per_job) out.push(f({ rule: 'R19.issues_reraised', class: 'ambiguity', severity: 'low', subject: id, job: id, latest: latest(clarify.filter((e) => (e.detail.ledger || {}).reraised), 'at'), summary: `Agents raised settled clarify issues again ${reraised} time(s) in ${id} (the ledger folded them as notes; limit ${L.reraised_per_job}).`, question: 'Do the analysts, the judge or God Eye ignore the settled list in their brief, or is a settled answer unclear?' }));
   const dropped = clarify.reduce((n, e) => n + (Number(e.detail.dropped) || 0), 0);
   if (dropped >= L.questions_dropped_per_job) out.push(f({ rule: 'R19.question_overrun', class: 'ambiguity', severity: 'low', subject: id, job: id, latest: latest(clarify.filter((e) => e.detail.dropped), 'at'), summary: `Clarify in ${id} proposed ${dropped} question(s) beyond the round budget or already asked; the CLI dropped them (limit ${L.questions_dropped_per_job}).`, question: 'Does the judge ignore the question budget or the never-re-ask list in its brief?' }));
   out.push(...reviewRegressions(job), ...reconcileDrops(job));
