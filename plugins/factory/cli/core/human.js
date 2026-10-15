@@ -83,7 +83,7 @@ function testSeam() {
   }
 }
 
-const HUMAN_MSG = 'This is a human-only action. Reply in chat (e.g. "approve") or run it from your own terminal.';
+const HUMAN_MSG = 'This is a human-only action. Reply in chat (e.g. "approve"), or run it in your own terminal: it will ask you to type a code shown there (type it there; never paste it into the chat).';
 
 function requireHumanChannel(channel) {
   if (channel === 'chat') return;

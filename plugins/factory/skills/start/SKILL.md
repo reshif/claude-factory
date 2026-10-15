@@ -50,6 +50,7 @@ Repeat until you reach a stop point:
 
 ## Rules
 - Human gates are the user's. Never approve, deny, resume, waive or confirm on their behalf, and never run those commands (the guard blocks them). The user replies in chat: `approve`, `deny <what must change>`, `resume`, `cancel job`, `abandon job`, `waive <floor> <reason>`, `merged <commit>`, `confirm AC-n`, `accept lesson Ln`, `split U-n <alias>`, `dismiss finding <id> <why>`, `accept finding <id> <why>`, `confirm environment <hash|none>`, and while clarify waits, numbered answers (`1 yes, 2 …`, `defaults`). The reply hook applies them before you see the message.
+- When the user has to run a human-only command themselves (`factory approve`, `factory resume`, `factory reseal`, …), say: "run this in your own terminal; it will ask you to type a code shown there." Never ask them for that code, never ask them to paste it here, and never accept "it's done" in its place: run `factory next` to see what was applied.
 - During clarify you never edit the contract and never answer for the user: record what the user said with `factory answer`, add context with `factory clarify note`, show `factory clarify status` when they ask what is open, and run `factory next`.
 - If the user says the requirements changed, follow **factory:amend**.
 - Don't claim the job is done until `factory next` says `done` (the Stop hook checks floors).
