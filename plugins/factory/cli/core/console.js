@@ -99,8 +99,10 @@ function resultText(step, ok, d) {
     case 'post_merge_challenge': {
       const f = d.findings || [];
       const c = f.filter((x) => x.status === 'confirmed').length;
+      // Unverified serious findings (no verifier result, or a verifier that answered "unverifiable") keep blocking.
+      const u = f.filter((x) => x.status === 'unverified' && ['blocker', 'major'].includes(x.severity)).length;
       const lanes = Object.entries(d.lanes || {}).map(([k, v]) => `${k} ${v === 'pass' ? '✓' : '✗'}`).join(' · ');
-      return `Round ${d.round || 1}: ${lanes || 'no lanes'}${c ? ` — ${c} confirmed finding(s)` : ''}${(d.missing || []).length ? ` — missing ${d.missing.join(', ')}` : ''}`;
+      return `Round ${d.round || 1}: ${lanes || 'no lanes'}${c ? ` — ${c} confirmed finding(s)` : ''}${u ? ` — ${u} unverified, blocking` : ''}${(d.missing || []).length ? ` — missing ${d.missing.join(', ')}` : ''}`;
     }
     case 'ship': return d.mode === 'github' ? `Pull request opened${d.url ? ` (${d.url})` : ''}` : 'Branch prepared for a local merge, with the completion report';
     case 'epic_gate': return ok ? 'All slices merged; the epic branch passes its checks' : 'Epic gate not passed yet';
@@ -207,7 +209,18 @@ function jobData(root, id, all, checker, nowMs = Date.now()) {
       const d = e.detail || {};
       const outcome = e.ok ? 'ok' : step === 'clarify' && num(d.questions) ? 'ask' : 'fail';
       const item = { t: e.at, type: 'result', step: ids.has(step) ? step : null, raw_step: e.step, ok: Boolean(e.ok), outcome, text: resultText(e.step, e.ok, d) };
-      if (/challenge/.test(e.step) && d.findings) item.findings = d.findings.map((f) => ({ id: String(f.id || ''), lane: String(f.lane || ''), severity: String(f.severity || ''), status: String(f.status || ''), file: f.file ? String(f.file) : null, line: Number.isInteger(f.line) ? f.line : null, summary: short(String(f.summary || ''), 200) }));
+      if (/challenge/.test(e.step) && d.findings) {
+        // the verifier's own word (review.js): `verifier: 'unverifiable'` when it could not settle a
+        // finding, which then stays unverified and blocking; its reason and evidence when it gave them
+        item.findings = d.findings.map((f) => ({
+          id: String(f.id || ''), lane: String(f.lane || ''), severity: String(f.severity || ''), status: String(f.status || ''), file: f.file ? String(f.file) : null, line: Number.isInteger(f.line) ? f.line : null, summary: short(String(f.summary || ''), 200),
+          ...(f.verifier ? { verifier: String(f.verifier) } : {}),
+          ...(f.verification ? { verification: short(String(f.verification), 300) } : {}),
+          ...(Array.isArray(f.evidence) && f.evidence.length ? { evidence: f.evidence.slice(0, 5).map((x) => short(String(x), 300)) } : {}),
+        }));
+        // the CLI's lane verdicts, as recorded: the page never parses them back out of the text
+        Object.assign(item, { round: d.round || 1, lanes: d.lanes || {}, required: d.required || [], missing: d.missing || [] });
+      }
       if (e.step === 'prove') item.acs = d.acs || {};
       if (e.step === 'clarify' && (d.categories || d.held)) Object.assign(item, { categories: d.categories || [], held: num(d.held), question_ids: d.question_ids || [] });
       push(item);
@@ -271,7 +284,13 @@ function jobData(root, id, all, checker, nowMs = Date.now()) {
     const s = (state.tasks || {})[t.id] || {};
     return { id: t.id, objective: short(t.objective, 140), depends_on: t.depends_on || [], attempts: s.attempts || 0, outcome: s.outcome || null, pass: s.evidence ? Boolean(s.evidence.pass) : null };
   });
-  const lessons = (readJson(project(root).lessonsFile, { lessons: [] }).lessons || []).filter((l) => l.source_job === id).map((l) => ({ id: l.id, status: l.status, text: short(l.text, 200) }));
+  const lessons = (readJson(project(root).lessonsFile, { lessons: [] }).lessons || []).filter((l) => l.source_job === id).map((l) => ({ id: l.id, status: l.status, text: short(l.text, 200), scope: Array.isArray(l.scope) ? l.scope.map(String) : [], created_at: l.created_at || null, decided_at: l.decided_at || null, ...(l.reason ? { reason: short(String(l.reason), 200) } : {}) }));
+  // the review lanes this job must pass: as the last review recorded them, else as review.js would require them
+  const lastReview = ledger.filter((e) => e.kind === 'step' && e.step === 'challenge' && e.detail && Array.isArray(e.detail.required)).pop();
+  const policy = state.policy || {};
+  const chStep = steps.find((s) => s.id === 'challenge');
+  const stepLanes = ((chStep || {}).lanes || []).filter((l) => l !== 'all');
+  const reviewLanes = lastReview ? lastReview.detail.required : chStep ? [...new Set([...((policy.required_lanes || {})[state.risk] || []), ...stepLanes])] : [];
 
   const job = {
     id,
@@ -294,6 +313,10 @@ function jobData(root, id, all, checker, nowMs = Date.now()) {
     park: state.park ? { reason: short(state.park.reason, 200), at: state.park.at, from: state.park.from } : null,
     counters: state.counters || {},
     pr: state.pr ? { mode: state.pr.mode, url: state.pr.url || null, merged: Boolean(state.pr.merged), merged_at: state.pr.merged_at || null } : null,
+    review_lanes: reviewLanes.map(String),
+    // the caps the job runs under (policy.limits), so the page never assumes them
+    limits: Object.fromEntries(['max_review_rounds', 'max_verify_fix_rounds', 'max_intent_rounds', 'max_design_critique_rounds', 'max_plan_validate_rounds', 'retry_limit'].filter((k) => Number.isInteger((policy.limits || {})[k])).map((k) => [k, policy.limits[k]])),
+    lessons_max: Number.isInteger(policy.lessons_max_per_job) ? policy.lessons_max_per_job : null,
     models: ((state.policy || {}).agents || {}).models || {},
     escalation: ((state.policy || {}).agents || {}).builder_escalation || [],
     steps,
@@ -306,6 +329,12 @@ function jobData(root, id, all, checker, nowMs = Date.now()) {
   // A cheap revision: the page re-renders only the jobs whose rev changed.
   job.rev = crypto.createHash('sha1').update(JSON.stringify(job)).digest('hex').slice(0, 12);
   return job;
+}
+
+function projectChecks(root) {
+  let pol = {};
+  try { pol = require('./policy').load(root) || {}; } catch { return []; }
+  return (pol.checks || []).map((c) => (typeof c === 'string' ? { cmd: c } : c)).filter((c) => c && c.cmd).map((c) => ({ cmd: short(String(c.cmd), 200), from_lesson: c.from_lesson ? String(c.from_lesson) : null }));
 }
 
 function build(root, { job: only, now } = {}) {
@@ -337,6 +366,8 @@ function build(root, { job: only, now } = {}) {
     })(),
     // log lines that belong to no job: hooks failing outside a job, unparsed replies
     factory_events: all.events.filter((e) => !e.job && ['hook_error', 'reply_unparsed', 'stop_block'].includes(e.event)).slice(-100).map((e) => ({ t: e.ts, type: e.event === 'reply_unparsed' ? 'unparsed' : e.event, text: short(e.event === 'hook_error' ? `The ${e.hook || 'factory'} hook failed${e.tool ? ` on ${e.tool}` : ''}: ${e.message || ''}` : e.event === 'reply_unparsed' ? `A message looked like "${e.verb || 'a reply'}" but was not applied ("${e.word || ''}")` : `The Stop hook refused a "done" claim`, 200) })),
+    // the project's own checks (policy.json `checks`, e.g. a promoted lesson's): prove runs each on every build
+    checks: projectChecks(root),
     integrity: checker.hasKey ? { ...checker.tally, status: checker.tally.invalid ? 'tampered' : 'verified' } : { status: 'not_checked' },
     jobs,
   };
@@ -370,7 +401,7 @@ function run(root, { out, job, label, data: dataFile } = {}) {
 // server can poll every few hundred ms without re-reading the logs.
 function watchedFiles(root) {
   const p = project(root);
-  const files = [p.eventsFile, p.decisionsFile, p.currentFile, p.lessonsFile, path.join(p.dir, 'inspect', 'register.json')];
+  const files = [p.eventsFile, p.decisionsFile, p.currentFile, p.lessonsFile, p.policyFile, path.join(p.dir, 'inspect', 'register.json')];
   let ids = [];
   try { ids = fs.readdirSync(p.jobsDir).filter((d) => /^J-\d+$/.test(d)); } catch { /* no jobs yet */ }
   for (const id of ids) {
