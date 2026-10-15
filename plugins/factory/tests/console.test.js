@@ -293,3 +293,153 @@ test('console page: agent outcomes get bad, warn, good or neutral, never good by
   for (const o of ['approve', 'pass', 'done', 'merged']) assert.equal(ctx.outcomeClass(o), 'good', o);
   for (const o of ['ok', 'confirmed', 'refuted', 'something-new', null]) assert.equal(ctx.outcomeClass(o), '', String(o));
 });
+
+test('console page: the one script parses, and the Blueprint view is in it', () => {
+  const vm = require('vm');
+  const html = fs.readFileSync(path.join(F.PLUGIN, 'console', 'console.html'), 'utf8');
+  const js = html.slice(html.indexOf('<script>') + 8, html.lastIndexOf('</script>'));
+  assert.doesNotThrow(() => new vm.Script(js), 'console.html has a syntax error');
+  assert.match(html, /id="nav-blueprint" data-view="blueprint"/);
+  assert.match(html, /<section id="view-blueprint"/);
+  assert.match(html, /APP\.displays\.register\(\{\s*id: "blueprint"/);
+});
+
+// the Blueprint reads a walk through states; toDisplay folds the factory's timeline into one
+const blueprintAdapter = () => {
+  const vm = require('vm');
+  const src = fs.readFileSync(path.join(F.PLUGIN, 'console', 'src', 'js', 'blueprint', 'adapter.js'), 'utf8');
+  const ctx = {};
+  vm.runInNewContext(`${src}\nthis.toDisplay = toDisplay;`, ctx);
+  return (data) => JSON.parse(JSON.stringify(ctx.toDisplay(data))); // plain objects of this realm, for deepEqual
+};
+const at = (m) => new Date(Date.UTC(2030, 0, 1, 9, m)).toISOString();
+const route = (m, step) => ({ t: at(m), type: 'route', step, raw_step: step, rule: 'r' });
+const bpJob = (id, extra) => ({ id, title: `job ${id}`, work_type: 'feature', risk: 'low', status: 'active', created_at: at(0), updated_at: at(50), tasks: [], lessons: [], steps: [], timeline: [], ...extra });
+
+test('console blueprint: gates wait on you with the reply the prompt hook applies and the terminal command', () => {
+  const toDisplay = blueprintAdapter();
+  const human = require('../cli/core/human');
+  const d = toDisplay({ generated_at: at(60), project: 'p', jobs: [
+    bpJob('J-0001', { pending_gate: { id: 'H1', at: at(5) }, timeline: [route(1, 'clarify'), route(5, 'H1')] }),
+    bpJob('J-0002', { pending_gate: { id: 'HS', at: at(9) }, timeline: [route(1, 'clarify'), route(3, 'realize'), route(5, 'prove'), route(7, 'challenge'), route(8, 'ship'), route(9, 'HS')] }),
+    bpJob('J-0003', { status: 'parked', park: { reason: 'cap', at: at(4) }, timeline: [route(1, 'clarify'), { t: at(4), type: 'park', text: 'cap', from: 'clarify' }] }),
+    bpJob('J-0004', { pending_gate: { id: 'H4', at: at(9) }, timeline: [route(1, 'ship'), route(9, 'H4')] }),
+    bpJob('J-0009', { epic: true, pending_gate: { id: 'EH1', at: at(7) } }),
+  ] });
+  // an epic is not drawn, but one waiting at a gate is your turn, as on the Board
+  assert.deepEqual(d.epic_jobs.map((e) => [e.id, e.gate, e.reply.split(' · ')[0]]), [['J-0009', 'EH1', 'approve J-0009 EH1']]);
+  const [a, b, p, m] = d.jobs;
+  assert.equal(a.state, 'awaiting_intent_approval');
+  assert.deepEqual(a.history.map((h) => h.to), ['intent', 'awaiting_intent_approval']);
+  assert.equal(a.waiting_on.who, 'you');
+  assert.equal(a.waiting_on.reply.split(' · ')[0], 'approve J-0001 H1');
+  assert.equal(a.waiting_on.command, 'factory approve H1 --job J-0001');
+  assert.equal(b.state, 'awaiting_ship_approval');
+  assert.equal(b.waiting_on.gate, 'HS');
+  assert.equal(p.waiting_on.gate, 'P');
+  assert.equal(p.waiting_on.command, 'factory resume --job J-0003');
+  assert.equal(m.waiting_on.gate, 'H4');
+  assert.equal(m.waiting_on.command, 'factory merged <commit> --job J-0004');
+  // every chat reply the drawing offers is one the prompt hook applies (placeholders filled in)
+  for (const j of d.jobs.map((x) => x.waiting_on).concat(d.epic_jobs)) {
+    for (const r of j.reply.split(' · ')) {
+      const filled = r.replace('<commit>', 'abc1234').replace('<what must change>', 'cover zero');
+      assert.ok(human.parseReply(filled), `"${r}" is a reply the hook applies`);
+    }
+  }
+  for (const s of d.stages.concat(d.side_lanes)) for (const x of s.states) assert.ok(d.meaning[x], `${x} has a meaning`);
+});
+
+test('console blueprint: park and resume, a failed proof sent back to Build, stops and closes', () => {
+  const toDisplay = blueprintAdapter();
+  const d = toDisplay({ generated_at: at(60), project: 'p', jobs: [
+    bpJob('J-0001', { timeline: [route(1, 'decide'), { t: at(2), type: 'park', text: 'waiting on infra', from: 'manual' }, { t: at(9), type: 'human', action: 'resume' }, route(10, 'H2')], pending_gate: { id: 'H2', at: at(10) } }),
+    bpJob('J-0002', { timeline: [route(1, 'realize'), route(2, 'prove'), { t: at(3), type: 'result', raw_step: 'prove', ok: false, acs: { 'AC-1': 'failed' } }, route(4, 'realize'), route(5, 'prove')] }),
+    bpJob('J-0003', { status: 'cancelled', timeline: [route(1, 'clarify'), { t: at(4), type: 'stopped', text: 'not needed' }] }),
+    bpJob('J-0004', { status: 'closed', closed_at: at(30), timeline: [route(1, 'clarify'), route(20, 'distill')], tasks: [{ id: 'T1', objective: 'o', depends_on: [], attempts: 1, outcome: 'done', pass: true }] }),
+    bpJob('J-0005', { epic: true, timeline: [route(1, 'clarify')] }),
+    bpJob('J-0006', { status: 'abandoned', timeline: [route(1, 'realize'), { t: at(6), type: 'stopped', text: 'superseded' }] }),
+  ] });
+  const by = Object.fromEntries(d.jobs.map((j) => [j.id, j]));
+  assert.deepEqual(by['J-0001'].history.map((h) => h.to), ['designing', 'parked', 'designing', 'awaiting_design_approval'], 'resume goes back where it parked');
+  assert.equal(by['J-0002'].rework_loops, 1, 'verifying → building is one trip back');
+  assert.deepEqual(by['J-0002'].criteria, [{ id: 'AC-1', text: '', status: 'failed', tasks: [] }]);
+  assert.equal(by['J-0003'].state, 'cancelled');
+  assert.equal(by['J-0003'].waiting_on.who, 'nobody');
+  assert.equal(by['J-0006'].state, 'abandoned');
+  assert.ok(d.side_lanes.find((s) => s.key === 'stopped').states.includes('abandoned'), 'cancelled and abandoned sit on the Stopped side track');
+  assert.equal(by['J-0004'].state, 'closed');
+  assert.equal(by['J-0004'].tasks[0].status, 'passing');
+  assert.ok(!by['J-0005'], 'an epic is not a job on the line');
+});
+
+test('console blueprint: lane verdicts from the data, unverified findings block, rounds from policy, learn is not merged', () => {
+  const toDisplay = blueprintAdapter();
+  const ch = (m, round, lanes, findings, text) => ({ t: at(m), type: 'result', step: 'challenge', raw_step: 'challenge', ok: false, round, lanes, required: Object.keys(lanes), missing: [], findings, text });
+  const d = toDisplay({ generated_at: at(60), project: 'p', checks: [{ cmd: 'npm run lint:ids', from_lesson: 'L2' }], jobs: [
+    bpJob('J-0001', { review_lanes: ['code', 'tests'], limits: { max_review_rounds: 5 }, timeline: [route(1, 'challenge'),
+      { t: at(2), type: 'agents', agents: [{ role: 'code-reviewer', model: 'sonnet' }, { role: 'finding-verifier', model: 'sonnet', outcome: 'unverifiable' }] },
+      // the text says nothing parseable: the verdicts come from `lanes`; the finding is review.js's unverifiable shape
+      ch(3, 2, { code: 'changes', tests: 'pass' }, [{ id: 'code-1', lane: 'code', severity: 'major', status: 'unverified', verifier: 'unverifiable', verification: 'no fixture', evidence: ['ran it', 'read a.js'], summary: 's' }], 'Round two')] }),
+    bpJob('J-0002', { status: 'closed', closed_at: at(30), timeline: [route(1, 'clarify'), route(5, 'H1'), { t: at(6), type: 'human', action: 'approve', gate: 'H1', step: 'H1', via: 'chat' }, route(7, 'ground'), route(20, 'distill'), route(25, 'close')],
+      lessons: [{ id: 'L2', status: 'promoted', text: 'Check ids', scope: ['src/**'], created_at: at(21), decided_at: at(22), reason: 'yes' }] }),
+    bpJob('J-0003', { work_type: 'spike', status: 'active', timeline: [route(1, 'decide'), route(5, 'close')] }),
+    bpJob('J-0004', { epic: true, title: 'Big epic', children: ['J-0005'] }),
+    bpJob('J-0005', { parent: 'J-0004', steps: [{ id: 'post_merge_challenge', lanes: ['code', 'security'] }], timeline: [route(1, 'clarify')] }),
+  ] });
+  const [a, b, c, s] = d.jobs;
+  const code = a.reviews.find((r) => r.lane === 'code');
+  assert.equal(code.verdict, 'changes');
+  assert.equal(code.unverified, 1, 'an unverified serious finding blocks its lane');
+  assert.equal(code.findings[0].status, 'unverified');
+  assert.equal(code.findings[0].verifier, 'unverifiable');
+  assert.equal(code.findings[0].verification, 'no fixture');
+  assert.equal(code.findings[0].evidence, 'ran it; read a.js');
+  assert.equal(code.model, 'sonnet', 'the reviewer\'s model comes from the roster');
+  assert.equal(a.reviews.find((r) => r.lane === 'tests').verdict, 'pass');
+  assert.deepEqual(a.required_lanes, ['code', 'tests']);
+  assert.equal(a.review_round, 2);
+  assert.equal(a.max_review_rounds, 5, 'rounds are capped by the job\'s policy, not a fixed number');
+  assert.ok(!b.history.some((h) => h.to === 'merged'), 'a job that distils without a merge never passes through Merged');
+  assert.ok(b.history.some((h) => h.to === 'learning'), 'distill is the Learn station');
+  const appr = b.history.find((h) => h.from === 'awaiting_intent_approval');
+  assert.equal(appr.by, 'you', 'your approval moves the job off H1, not the router');
+  assert.match(appr.reason, /you approved H1/);
+  assert.equal(c.state, 'learning', 'a spike closing sits at Learn, not Merged');
+  assert.deepEqual(s.post_merge_lanes, ['code', 'security'], 'the post-merge challenge lanes come from the job\'s recipe steps');
+  assert.equal(s.epic, 'J-0004', 'a slice knows its epic');
+  assert.ok(!d.jobs.some((j) => j.id === 'J-0004'), 'an epic is not a job on the line');
+  assert.deepEqual(d.epic_jobs.map((e) => e.id), ['J-0004'], 'but it is listed, so the drawing can say so');
+  assert.deepEqual(d.lessons.map((l) => [l.id, l.status, l.decided.status]), [['L2', 'promoted', 'promoted']]);
+  assert.deepEqual(d.standards.checks.map((x) => [x.name, x.cmd]), [['from lesson L2', 'npm run lint:ids']], 'the project\'s checks are the checks in force');
+  assert.equal(d.autopilot, undefined, 'no Copilot Autopilot here');
+  assert.ok(d.stages.find((st) => st.key === 'done').states.includes('learning'));
+  assert.ok(d.meaning.learning);
+});
+
+test('console blueprint: agent banks are this factory\'s agents and workflows', () => {
+  const src = fs.readFileSync(path.join(F.PLUGIN, 'console', 'src', 'js', 'blueprint', 'blueprint.js'), 'utf8');
+  const banks = src.slice(src.indexOf('var BANKS = {'), src.indexOf('var STEPS = {'));
+  const agents = new Set(fs.readdirSync(path.join(F.PLUGIN, 'agents')).map((f) => f.replace(/\.md$/, '')));
+  const roles = [...banks.matchAll(/\["([a-z-]+)", "/g)].map((m) => m[1]);
+  assert.ok(roles.length > 5);
+  for (const r of roles) assert.ok(agents.has(r), `bank member ${r} is an agent in agents/`);
+  // clarify's bank is its fan-out: the intent analysts (×N as config/workflows/clarify.json runs them), the judge, God Eye
+  const clarify = require('../config/workflows/clarify.json');
+  const n = clarify.fanout.filter((f) => f.role === 'intent-analyst').length;
+  assert.match(banks, new RegExp(`intent: \\{ name: "Clarify agents", members: \\[\\["intent-analyst", "analysts ×${n}"\\], \\["${clarify.judge.role}", "judge"\\], \\["${clarify.critique.role}", "God Eye"\\]\\] \\}`));
+  assert.ok(!/scout/i.test(banks), 'clarify has no scouts in this factory');
+  // the page: no Copilot Autopilot, no claude-software-factory replies, the 0.4.1 fixes in their form here
+  const html = fs.readFileSync(path.join(F.PLUGIN, 'console', 'console.html'), 'utf8');
+  assert.ok(!/autopilot/i.test(html), 'nothing about an Autopilot this factory does not have');
+  assert.ok(!/Reply in chat|paste it in chat/.test(html), 'replies go in Claude Code');
+  assert.match(html, /html:not\(\[data-theme\]\) \.dx-blueprint\{/, 'auto theme follows a light system (theme.js removes data-theme)');
+  assert.ok(!/data-theme="system"/.test(html));
+  assert.match(html, /var STOPPED_STATES = \{ cancelled: 1, abandoned: 1 \}/);
+  assert.match(html, /findList\.hidden = true; findIn\.blur\(\);/, 'Esc in the find box lets go of the keyboard');
+  assert.match(html, /R\.yourTurn = R\.jobs\.filter\(function \(r\) \{ return !r\.done && r\.g && r\.g !== "P"; \}\)/, 'Your turn counts as the Board does: no parked jobs, no lessons');
+  assert.match(html, /H1: \{ title: "Approve the contract", short: "contract", tip: "[^"]*\(H1 · contract\)/);
+  assert.match(html, /H4: \['H4 · merge', 'Only you merge: on GitHub, or locally and reply merged <commit>/);
+  assert.match(html, /function laneState\(j, ln, t, ag\)/, 'detail B and the section view read a lane the same way');
+  assert.match(html, /shown on the Board, not on these sheets/, 'epics are named, not silently left out');
+});

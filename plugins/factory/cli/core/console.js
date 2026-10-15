@@ -331,6 +331,12 @@ function jobData(root, id, all, checker, nowMs = Date.now()) {
   return job;
 }
 
+function projectChecks(root) {
+  let pol = {};
+  try { pol = require('./policy').load(root) || {}; } catch { return []; }
+  return (pol.checks || []).map((c) => (typeof c === 'string' ? { cmd: c } : c)).filter((c) => c && c.cmd).map((c) => ({ cmd: short(String(c.cmd), 200), from_lesson: c.from_lesson ? String(c.from_lesson) : null }));
+}
+
 function build(root, { job: only, now } = {}) {
   const p = project(root);
   if (!fs.existsSync(p.dir)) fail('No .factory/ folder here. Run factory init first.', 'no_root');
@@ -360,6 +366,8 @@ function build(root, { job: only, now } = {}) {
     })(),
     // log lines that belong to no job: hooks failing outside a job, unparsed replies
     factory_events: all.events.filter((e) => !e.job && ['hook_error', 'reply_unparsed', 'stop_block'].includes(e.event)).slice(-100).map((e) => ({ t: e.ts, type: e.event === 'reply_unparsed' ? 'unparsed' : e.event, text: short(e.event === 'hook_error' ? `The ${e.hook || 'factory'} hook failed${e.tool ? ` on ${e.tool}` : ''}: ${e.message || ''}` : e.event === 'reply_unparsed' ? `A message looked like "${e.verb || 'a reply'}" but was not applied ("${e.word || ''}")` : `The Stop hook refused a "done" claim`, 200) })),
+    // the project's own checks (policy.json `checks`, e.g. a promoted lesson's): prove runs each on every build
+    checks: projectChecks(root),
     integrity: checker.hasKey ? { ...checker.tally, status: checker.tally.invalid ? 'tampered' : 'verified' } : { status: 'not_checked' },
     jobs,
   };
@@ -393,7 +401,7 @@ function run(root, { out, job, label, data: dataFile } = {}) {
 // server can poll every few hundred ms without re-reading the logs.
 function watchedFiles(root) {
   const p = project(root);
-  const files = [p.eventsFile, p.decisionsFile, p.currentFile, p.lessonsFile, path.join(p.dir, 'inspect', 'register.json')];
+  const files = [p.eventsFile, p.decisionsFile, p.currentFile, p.lessonsFile, p.policyFile, path.join(p.dir, 'inspect', 'register.json')];
   let ids = [];
   try { ids = fs.readdirSync(p.jobsDir).filter((d) => /^J-\d+$/.test(d)); } catch { /* no jobs yet */ }
   for (const id of ids) {
