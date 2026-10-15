@@ -242,14 +242,14 @@ function loops(job) {
 
 // ---------------------------------------------------------------- R7 driver fidelity
 // clarify status only prints the clarify ledger.
-const READ_ONLY = new Set(['next', 'doc', 'why', 'job', 'contract', 'help', 'doctor', 'finalize', 'recipe', 'telemetry', 'use', 'lessons:list', 'task:show', 'distill:context', 'plan:validate', 'report', 'init', 'clarify:status']);
+const READ_ONLY = new Set(['next', 'doc', 'why', 'job', 'contract', 'help', 'doctor', 'finalize', 'recipe', 'telemetry', 'use', 'lessons:list', 'task:show', 'distill:context', 'plan:validate', 'report', 'init', 'clarify:status', 'env:show', 'env:check', 'env:propose']);
 // Human-only commands that went through (the CLI accepted your terminal): you acting, judged by
 // their human.* decision, not a driver deviation. A refused attempt is still judged.
-const HUMAN_CMDS = new Set(['clarify:split', 'finding']);
+const HUMAN_CMDS = new Set(['clarify:split', 'finding', 'env:set']);
 const MUTATING_IN_WAIT = new Set(['record', 'ship', 'task:start', 'task:verify', 'task:state', 'reconcile', 'verify', 'evidence', 'plan:from-contract', 'close', 'epic', 'amend', 'followup', 'distill:done', 'wfargs']);
 
 function cmdKey(e) {
-  if (e.cmd === 'task' || e.cmd === 'plan' || e.cmd === 'distill' || e.cmd === 'lessons' || e.cmd === 'clarify') return `${e.cmd}:${e.sub}`;
+  if (['task', 'plan', 'distill', 'lessons', 'clarify', 'env', 'reconcile'].includes(e.cmd)) return `${e.cmd}:${e.sub}`;
   return e.cmd;
 }
 

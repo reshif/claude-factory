@@ -19,6 +19,8 @@ user-invocable: false
 
 Read the files in `docs` yourself and summarise faithfully — don't hide open critique items.
 
+**Build environment.** When `factory next` carries `environment` (no environment is confirmed for this repository yet), show it after the gate's documents, at H1 and every later gate until the user decides: its name, setup commands, env, services and the files it was detected from (`evidence`), and its `hash`. The user replies `confirm environment <hash>` to use it, or `confirm environment none` for bare worktrees; to change it, write a copy under `.factory/scratch/`, run `factory env propose --file <copy>` and show the new hash (`factory env show` prints both). Never confirm it for them: its setup commands run on their machine.
+
 ## Then
 End with exactly this, and **stop**:
 

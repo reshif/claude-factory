@@ -511,6 +511,13 @@ function realize(root, state, ctx, action) {
   // A builder's time budget: guidance only (Claude Code's Workflow tool sets no agent time cap),
   // so it commits increments and leaves a `wip:` commit when it stops early.
   const minutes = Math.max(1, Number((state.policy.limits || {}).builder_minutes) || 30);
+  // The build environment, as the builder should know it: task start sets it up in the worktree
+  // (cached by its lockfiles) and prints the shell prefix that puts a command inside it; task
+  // verify runs every verify command inside it.
+  const E = require('./environment').loadSafe(root).env;
+  const envNote = E && ((E.setup || []).length || Object.keys(E.env || {}).length || E.prefix || E.services)
+    ? `\n- Build environment "${E.name || 'configured'}": task start sets it up in your worktree (${(E.setup || []).join(' && ') || 'no setup'}${E.services ? '; the job\'s services too' : ''}) and prints \`environment.shell_prefix\`. Every Bash call is a fresh shell: start each command that builds or tests with that prefix, from your worktree, so it runs against your worktree's environment and code (task verify runs every verify command the same way${E.prefix ? `, as \`${E.prefix} <command>\`` : ''}). Don't reinstall or change the environment yourself. If task start refuses with environment_broken, stop: run task built with \`--status blocked --reason environment_broken\` and reply blocked with that reason and its message as the summary.`
+    : '';
   const tasks = {};
   for (const t of pending) {
     const wt = taskWorktree(root, state.id, t.id);
@@ -538,7 +545,7 @@ function realize(root, state, ctx, action) {
       tester: agentSpec(state, 'tester'),
       builder_prompt: prompt(
         'builder',
-        `${jc}\n- Task: **${t.id}** — ${t.objective}\n- Start: \`${cli(root)} task start ${t.id} --job ${state.id}\`\n- Show: \`${cli(root)} task show ${t.id} --job ${state.id}\`\n- Built (your last step): \`${cli(root)} task built ${t.id} --job ${state.id} --status done\` (or \`--status blocked --reason needs_paths|dependency_conflict|environment_broken\`)\n- Worktree: ${wt}\n- Allowed paths: ${t.allowed_paths.join(', ')}\n- Time: about ${minutes} minutes for this attempt. Commit each working increment as you go; if you stop before you are done, commit what you have as \`wip: …\` first (the next attempt continues from your branch).${fixNote ? `\n${fixNote}` : ''}`,
+        `${jc}\n- Task: **${t.id}** — ${t.objective}\n- Start: \`${cli(root)} task start ${t.id} --job ${state.id}\`\n- Show: \`${cli(root)} task show ${t.id} --job ${state.id}\`\n- Built (your last step): \`${cli(root)} task built ${t.id} --job ${state.id} --status done\` (or \`--status blocked --reason needs_paths|dependency_conflict|environment_broken\`)\n- Worktree: ${wt}\n- Allowed paths: ${t.allowed_paths.join(', ')}\n- Time: about ${minutes} minutes for this attempt. Commit each working increment as you go; if you stop before you are done, commit what you have as \`wip: …\` first (the next attempt continues from your branch).${envNote}${fixNote ? `\n${fixNote}` : ''}`,
         'builder',
         'Attempt {{attempt}}. What the previous attempts left (task verify\'s failing commands, or the builder\'s reply; `task show` has the raw output under history and the last attempt\'s diff under previous_attempt), if any:\n{{failures}}',
       ),

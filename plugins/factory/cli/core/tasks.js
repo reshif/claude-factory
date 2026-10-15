@@ -198,6 +198,13 @@ function start(root, jobId, taskId) {
   for (const d of deps) bring(steps.taskBranch(state, d), d);
   const inFix = Boolean(state.fix && (state.fix.tasks || []).includes(taskId));
   fixMarker(wt, inFix ? state.fix.kind : null);
+  // The build environment (.factory/environment.json), set up in this worktree (cached by its
+  // lockfiles) with the job's services, before the attempt counts: a broken environment is not
+  // the builder's failure, so it refuses with environment_broken and spends no attempt.
+  const envMod = require('./environment');
+  const E = envMod.ensure(root, state, { taskId, wt });
+  if (!E.ok) fail(`${E.broken.reason}\nThe environment, not this task's code, is broken: stop and reply blocked with blocked_reason "environment_broken" and this message as the summary. No attempt was spent.`, 'environment_broken', E.broken);
+  const environment = E.env && !E.none ? { name: E.env.name || null, cached: Boolean(E.cached), ran: (E.ran || []).map((r) => ({ cmd: r.cmd, code: r.code })), shell_prefix: `cd "${wt}" && ${envMod.wrap(E.env, E.vars, '')}`.replace(/\s+$/, ' ') } : null;
   const fresh = job.load(root, state.id);
   const t = fresh.tasks[taskId] || {};
   const head = git.revParse(wt, 'HEAD');
@@ -218,7 +225,7 @@ function start(root, jobId, taskId) {
   if (wip && (t.attempts || 0) > 0) hist = noteAttempt(hist, t.attempts, { wip_commit: wip });
   fresh.tasks[taskId].history = noteAttempt(hist, (t.attempts || 0) + 1, { start_head: head, started_at: nowIso(), ...(restart ? { restarted: restart.reason } : {}) });
   job.save(root, fresh);
-  return { job: state.id, task: taskId, worktree: wt, branch, attempt: fresh.tasks[taskId].attempts, allowed_paths: task.allowed_paths, ...(restart ? { restarted: { reason: restart.reason, backup } } : {}) };
+  return { job: state.id, task: taskId, worktree: wt, branch, attempt: fresh.tasks[taskId].attempts, allowed_paths: task.allowed_paths, ...(environment ? { environment } : {}), ...(restart ? { restarted: { reason: restart.reason, backup } } : {}), ...(wip ? { wip_commit: wip } : {}) };
 }
 
 // `factory task built`, a task builder's last step, calls this (tests that play the builder too):
@@ -367,8 +374,14 @@ function verify(root, jobId, taskId) {
   const head = git.revParse(wt, 'HEAD');
   const changed = t.start_commit ? ownChangedFiles(wt, t.start_commit, head) : [];
   const scopeViolations = changed.filter((f) => !matchesAny(f, task.allowed_paths) || matchesAny(f, state.policy.protected_paths));
+  // The build environment (.factory/environment.json): set up in this worktree (cached by its
+  // lockfiles), and every command runs inside it, against this worktree's code. A broken
+  // environment is not the build's failure: it refuses with environment_broken.
+  const envMod = require('./environment');
+  const E = envMod.ensure(root, state, { taskId, wt });
+  if (!E.ok) fail(`${E.broken.reason}\nThe environment, not this task's code, is broken: fix it (factory env check, factory env set) and resume.`, 'environment_broken', E.broken);
   const L = state.policy.limits;
-  const commands = task.verify_commands.map((c) => runCommand(planMod.cmdOf(c), wt, { timeoutSec: L.command_timeout_seconds, reruns: L.flaky_reruns }));
+  const commands = task.verify_commands.map((c) => ({ ...runCommand(envMod.wrap(E.env, E.vars, planMod.cmdOf(c)), wt, { timeoutSec: L.command_timeout_seconds, reruns: L.flaky_reruns }), cmd: planMod.cmdOf(c) }));
   const pass = scopeViolations.length === 0 && commands.every((c) => c.pass) && changed.length > 0;
   const id = `${taskId}-${(t.attempts || 1)}-${Date.now()}`;
   const file = path.join(jobPaths(root, state.id).evidenceDir, `${id}.json`);
@@ -385,6 +398,7 @@ function verify(root, jobId, taskId) {
     pass,
     builder_at: b.at,
     ...(legacy ? { legacy: true } : {}),
+    ...(E.env && !E.none ? { environment: { name: E.env.name || null, key: E.key, cached: E.cached } } : {}),
   };
   writeJson(file, ev);
   const fresh = job.load(root, state.id);

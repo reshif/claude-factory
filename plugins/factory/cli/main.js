@@ -8,7 +8,7 @@ const path = require('path');
 const { FactoryError, fail, readText, writeJson } = require('./lib/util');
 const { requireRoot, findRoot, PLUGIN_ROOT } = require('./lib/paths');
 
-const BOOL = new Set(['epic', 'local', 'check', 'json', 'plan-fields', 'help', 'threat-model', 'plan-critique', 'no-threat-model', 'accept-degraded', 'serve', 'default']);
+const BOOL = new Set(['epic', 'local', 'check', 'json', 'plan-fields', 'help', 'threat-model', 'plan-critique', 'no-threat-model', 'accept-degraded', 'serve', 'default', 'none', 'proposed']);
 
 function parseArgs(argv) {
   const pos = [];
@@ -57,6 +57,8 @@ Clarify    clarify status [--json]   (the issue ledger: id, subject, status, own
 Workflows  wfargs <ground|fanout-judge|decompose|realize|reconcile> [--config clarify|decide|challenge] [--mode m] [--scope s] [--lanes a,b]
            [--threat-model | --no-threat-model] [--plan-critique] [--accept-degraded] [--out file]
            record --file <envelope.json | ->
+Env        env show · env check [--proposed]   (the build environment each worktree runs in; read-only)
+           env propose --file f   (the main session's proposal) · env prepare <T|job>   (set it up in one worktree; task start does it)
 Plan       plan validate · plan from-contract
 Tasks      task start <T> · task show <T> · task verify <T> · task built <T> --status done|blocked [--reason r]   (the builder's last step)
            task state <T> blocked|exhausted [--reason]
@@ -73,6 +75,7 @@ Console    console [--out file.html] [--job J] [--label "…"] [--data data.json
 Human only (your terminal, or reply in chat):
            approve [gate] · deny --reason "…" · resume [step] · cancel · abandon · waive <floor> --reason "…"
            merged <commit> · confirm <AC> · lessons accept|reject <L> · lessons promote <L> --check "cmd" · reseal
+           env set [--file f | --none] [hash]   (confirm the build environment; chat: confirm environment <hash|none>)
            clarify split <U-n> <alias U-n>   (undo a wrong fold: the alias becomes its own clarify issue again)
            finding accept|dismiss <id> --reason "…"   (a serious finding no verifier settled; chat: dismiss finding code-1 <reason>)
 Global     --root <repo> · --job <J-0001>`;
@@ -362,6 +365,31 @@ function run(argv) {
       return C('human').merged(R(), { jobId: J, commit: sub, channel: tty });
     case 'confirm':
       return C('human').confirmAc(R(), { jobId: J, ac: sub, channel: tty });
+    case 'env': {
+      const E = C('environment');
+      if (sub === 'show') return E.show(R());
+      if (sub === 'check') {
+        const r = E.check(R(), { proposed: Boolean(opt.proposed) });
+        if (!r.ok) process.exitCode = 1;
+        return r;
+      }
+      if (sub === 'propose') return E.propose(R(), { file: opt.file });
+      if (sub === 'set') return C('human').setEnvironment(R(), { file: opt.file, none: Boolean(opt.none), expectHash: pos[2] || null, channel: tty });
+      if (sub === 'prepare') {
+        // the environment set up in one worktree (task start does this for its builder)
+        const root = R();
+        const state = C('job').resolve(root, J);
+        const id = pos[2];
+        if (!id) fail('env prepare <T1|job>', 'bad_input');
+        const conf = E.load(root);
+        if (!conf || conf.name === 'none' || (!(conf.setup || []).length && !conf.services && !Object.keys(conf.env || {}).length && !conf.prefix)) return { job: state.id, task: id, ok: true, none: true };
+        const wt = id === 'job' ? C('tasks').ensureJobWorktree(root, state) : C('tasks').prepareWorktree(root, state, id);
+        const r = E.ensure(root, state, { taskId: id === 'job' ? null : id, wt });
+        if (!r.ok) process.exitCode = 1;
+        return { job: state.id, task: id, ok: r.ok, ...(r.ok ? { cached: r.cached, ran: r.ran, name: r.env ? r.env.name || null : null, env: E.processEnv(r.env, r.vars) } : { broken: r.broken, message: r.broken.reason }) };
+      }
+      return fail('env show | check [--proposed] | propose --file f | set [--file f | --none] [hash]', 'bad_input');
+    }
     case 'finding':
       if (!['accept', 'dismiss'].includes(sub) || !pos[2]) fail('finding accept|dismiss <id> --reason "…"', 'bad_input');
       return C('human').settleFinding(R(), { jobId: J, id: pos[2], decision: sub, reason: opt.reason || pos.slice(3).join(' '), channel: tty });

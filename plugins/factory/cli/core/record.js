@@ -447,7 +447,7 @@ function recRealize(root, state, env) {
     }
     job.save(root, state);
     const reason = String(eb.reason || 'environment broken').slice(0, 1500);
-    require('./events').append(root, { event: 'environment_broken', job: state.id, task: eb.task || null, reason: reason.slice(0, 500) });
+    require('./events').append(root, { event: 'environment_broken', job: state.id, task: eb.task || null, cmd: eb.cmd || null, code: eb.code === undefined ? null : eb.code, reason: reason.slice(0, 500) });
     return { status: 'park', park_from: 'environment', park_reason: `${reason} — no builder attempt was spent. Fix the environment (factory env check shows it; factory env set changes it), then reply "resume".`, tasks: reported.map((r) => ({ id: r.id, outcome: r.outcome, attempts: r.attempts, summary: r.summary })), environment_broken: eb, message: 'Parked: the build environment is broken.' };
   }
   // The tester relays task verify (a workflow cannot run it): what it relayed is compared with
