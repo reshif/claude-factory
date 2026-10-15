@@ -292,8 +292,18 @@ function say(root, text) {
   return { status, code, text: ctx };
 }
 
+// What the integrator relays for a wave integration (agents/integrator.md): the brief's
+// `reconcile wave` command run once, its JSON mapped onto the integrate-wave schema.
+function relayWave(root, text) {
+  const m = /reconcile wave --tasks ([\w,-]+) --wave (\d+)/.exec(text);
+  if (!m) throw new Error('no reconcile wave command in the integrator brief');
+  const r = cli(root, ['reconcile', 'wave', '--tasks', m[1], '--wave', m[2]]);
+  if (r.error) return { ok: false, kind: 'error', route: [], reconciled: false, failures: [], message: r.message };
+  return { ok: Boolean(r.ok), kind: r.ok ? 'integrated' : r.kind, route: Object.keys(r.route || {}), reconciled: Boolean(r.reconciled), failures: (r.failures || []).map((f) => `\`${f.cmd}\` exited ${f.code}`), message: r.ok ? `Wave ${m[2]} integrated.` : r.message || `${r.kind}` };
+}
+
 function jobDir(root, id) {
   return path.join(root, '.factory', 'jobs', id);
 }
 
-module.exports = { PLUGIN, BIN, sh, write, makeRepo, cli, reply, say, built, contractText, envelope, record, jobDir, adrText, noAdrText, threatModelText, recommendationText, contractsDocText, DIAGRAM };
+module.exports = { PLUGIN, BIN, sh, write, makeRepo, cli, reply, say, built, relayWave, contractText, envelope, record, jobDir, adrText, noAdrText, threatModelText, recommendationText, contractsDocText, DIAGRAM };

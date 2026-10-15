@@ -38,7 +38,7 @@ const ROLE_OUTPUTS = {
   slicer: ['planner'],
   builder: ['builder'],
   tester: ['tester'],
-  integrator: ['integrator'],
+  integrator: ['integrator', 'integrate-wave'],
   'code-reviewer': ['reviewer'],
   'test-reviewer': ['reviewer'],
   'security-reviewer': ['reviewer'],
@@ -490,7 +490,7 @@ function decompose(root, state, ctx, action) {
   const ls = lessons.inScope(root, []);
   const what = slices
     ? `Write ${jp.slices}: {"slices":[{"id":"S00","goal":"…","criteria_ids":["E-AC-1"],"depends_on":[],"work_type":"feature","risk":"${state.risk}","allowed_paths":["…"]}], "epic_verify_commands":["…"]}. S00 freezes the contracts and adds the feature flag; later slices are vertical and safe to stop after. Every E-AC must be owned by a slice.`
-    : `Write ${jp.plan}: {"tasks":[{"id":"T1","objective":"…","allowed_paths":["src/x/**"],"depends_on":[],"criteria_ids":["AC-1"],"verify_commands":[{"cmd":"…","covers":["AC-1"]}],"retry_limit":3,"rollback":"…"}]}. Tasks that can run in parallel must not share allowed paths.`;
+    : `Write ${jp.plan}: {"interfaces":[{"name":"parse(text) -> Config","kind":"function","file":"src/x/parse.js","owner":"T1"}],"tasks":[{"id":"T1","objective":"…","allowed_paths":["src/x/**"],"depends_on":[],"criteria_ids":["AC-1"],"verify_commands":[{"cmd":"…","covers":["AC-1"]}],"retry_limit":3,"rollback":"…"},{"id":"T2","objective":"…","allowed_paths":["src/y/**"],"consumes":["parse(text) -> Config"],"criteria_ids":["AC-2"],"verify_commands":[{"cmd":"…","covers":["AC-2"]}]}]}. Tasks that can run in parallel must not share allowed paths. Declare every interface one task builds and another uses, and list it in the user's \`consumes\`.`;
   const planner = {
     ...agentSpec(state, slices ? 'slicer' : 'planner'),
     prompt: prompt(
@@ -534,7 +534,9 @@ function realize(root, state, ctx, action) {
         : '- This is a verify-fix round: commands failed on the integrated build (`task show` lists them under verify_failures).'
       : t.id && state.tasks[t.id] && state.tasks[t.id].needs_work === 'amendment'
         ? '- The contract or plan was amended; rebuild this task against the amended version.'
-        : '';
+        : t.id && state.tasks[t.id] && state.tasks[t.id].needs_work === 'integration'
+          ? '- The integrated build (the job branch with the other tasks\' work) failed after your last build: `task show` lists the failing commands and their output under integration_failures. task start brings the integrated branch into yours; fix your part there.'
+          : '';
     const st = state.tasks[t.id] || {};
     tasks[t.id] = {
       id: t.id,
@@ -543,7 +545,7 @@ function realize(root, state, ctx, action) {
       attempt_base: st.attempts || 0,
       previous_failures: require('./tasks').lastFailures(st),
       // depends_on plus earlier-wave tasks on overlapping paths: a failed one skips this task.
-      depends_on: require('./plan').effectiveDeps(plan.tasks, t.id),
+      depends_on: require('./plan').effectiveDeps(plan.tasks, t.id, plan.interfaces),
       retry_limit: t.retry_limit || state.policy.limits.retry_limit,
       // Builders may move to a stronger model on retries (policy.agents.builder_escalation).
       builder: { ...agentSpec(state, 'builder'), escalate: ((state.policy.agents || {}).builder_escalation || []).slice() },
@@ -570,6 +572,16 @@ function realize(root, state, ctx, action) {
     waves,
     tasks,
     max_parallel_tasks: state.policy.limits.max_parallel_tasks,
+    // merge each wave into the job branch and run the job's checks before the next (P2.3): the
+    // CLI's `reconcile wave` does it, relayed by the integrator (a workflow cannot run it)
+    integrate_each_wave: state.policy.limits.integrate_each_wave !== false,
+    integrator: { ...agentSpec(state, 'integrator'), schema: schema('integrate-wave') },
+    integrate_prompt: prompt(
+      'integrator',
+      `${jc}\n- Wave integration: run the \`reconcile wave\` command given below your pointer to this file exactly once, and relay what it prints.\n- Job worktree: ${jobPaths(root, state.id).worktree}`,
+      'integrate-wave',
+      `Wave integration: \`${cli(root)} reconcile wave --tasks {{tasks}} --wave {{wave}} --job ${state.id}\``,
+    ),
     builder_schema: schema('builder'),
     tester_schema: schema('tester'),
   });

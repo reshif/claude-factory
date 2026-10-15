@@ -30,7 +30,7 @@ function goldens() {
     const [role, variant = null] = f.replace(/\.json$/, '').split('.');
     assert.ok(ROLE_OUTPUTS[role], `${f}: names a known role`);
     // god-eye: the base example and "intent-*" variants are intent critiques; design/plan are plain critiques.
-    const schema = role === 'god-eye' && variant && !variant.startsWith('intent') ? 'critique' : ROLE_OUTPUTS[role][0];
+    const schema = role === 'god-eye' && variant && !variant.startsWith('intent') ? 'critique' : role === 'integrator' && variant === 'wave' ? 'integrate-wave' : ROLE_OUTPUTS[role][0];
     assert.ok(ROLE_OUTPUTS[role].includes(schema));
     return { file: f, role, variant, schema, value: readJson(path.join(GOLDEN, f)) };
   });
@@ -109,6 +109,10 @@ function invariants(schema, o, { role } = {}) {
     case 'integrator':
       if (o.status !== 'merged' && !o.summary.trim()) e.push(`${o.status} without a summary`);
       if (o.status === 'behavioural_conflict' && !(o.files || []).length) e.push('behavioural_conflict names no files');
+      break;
+    case 'integrate-wave':
+      if (o.ok !== (o.kind === 'integrated')) e.push('ok exactly when kind is integrated');
+      if (!o.ok && !String(o.message || '').trim() && !(o.failures || []).length) e.push('not ok, and says nothing about why');
       break;
     case 'planner':
       if (o.valid !== (o.errors.length === 0)) e.push('valid must be true exactly when errors is empty');
@@ -255,7 +259,7 @@ test('golden replay: bug@low through the real workflows, with an unverifiable fi
   fs.writeFileSync(path.join(F.jobDir(root, J), 'contract.md'), F.contractText());
   let verdict = 'unverifiable';
   let clarifyRound = 0;
-  const agents = (role, text) => {
+  const agents = (role, text, raw) => {
     switch (role) {
       case 'intent-analyst':
         return /Your focus: \*\*intent\*\*/.test(text) ? golden('intent-analyst', 'intent') : { ...golden('intent-analyst'), focus: (/Your focus: \*\*(\w+)\*\*/.exec(text) || [])[1], questions: [] };
@@ -283,6 +287,7 @@ test('golden replay: bug@low through the real workflows, with an unverifiable fi
         return golden('tester', 'pass', { evidence_id: v.evidence_id });
       }
       case 'integrator': {
+        if (/reconcile wave/.test(raw)) return F.relayWave(root, raw);
         const r = F.cli(root, ['reconcile', 'run']);
         return r.status === 'merged' ? golden('integrator', null, { files: [] }) : golden('integrator', 'failed', { summary: r.message || r.status });
       }
@@ -305,7 +310,7 @@ test('golden replay: bug@low through the real workflows, with an unverifiable fi
     }
   };
   // finding-verifier gets the finding after its pointer, not in its instruction file
-  const agentsWithPrompt = (role, text, prompt) => agents(role, role === 'finding-verifier' ? prompt : text);
+  const agentsWithPrompt = (role, text, prompt) => agents(role, role === 'finding-verifier' ? prompt : text, prompt);
 
   for (clarifyRound = 1; clarifyRound <= 2; clarifyRound++) {
     const { record } = await runWorkflow(root, { workflow: 'fanout-judge', config: 'clarify' }, agentsWithPrompt);

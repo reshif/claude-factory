@@ -246,7 +246,7 @@ const READ_ONLY = new Set(['next', 'doc', 'why', 'job', 'contract', 'help', 'doc
 // Human-only commands that went through (the CLI accepted your terminal): you acting, judged by
 // their human.* decision, not a driver deviation. A refused attempt is still judged.
 const HUMAN_CMDS = new Set(['clarify:split', 'finding', 'env:set']);
-const MUTATING_IN_WAIT = new Set(['record', 'ship', 'task:start', 'task:verify', 'task:state', 'reconcile', 'verify', 'evidence', 'plan:from-contract', 'close', 'epic', 'amend', 'followup', 'distill:done', 'wfargs']);
+const MUTATING_IN_WAIT = new Set(['record', 'ship', 'task:start', 'task:verify', 'task:built', 'task:state', 'reconcile', 'verify', 'evidence', 'plan:from-contract', 'close', 'epic', 'amend', 'followup', 'distill:done', 'wfargs']);
 
 function cmdKey(e) {
   if (['task', 'plan', 'distill', 'lessons', 'clarify', 'env', 'reconcile'].includes(e.cmd)) return `${e.cmd}:${e.sub}`;
@@ -257,7 +257,7 @@ function expectationsFor(d) {
   const wf = (workflow, config) => ({
     required: [(e) => e.cmd === 'wfargs' && e.workflow === workflow && (!config || e.config === config), (e) => e.cmd === 'record' && (e.workflow === workflow || !e.workflow) && (!config || !e.config || e.config === config)],
     requiredLabel: `factory wfargs ${workflow}${config ? ` --config ${config}` : ''} and factory record`,
-    allowed: new Set(['answer', 'clarify:note', 'park', 'task:start', 'task:verify', 'task:state', 'reconcile', 'evidence', 'plan:validate', 'contract', 'wfargs', 'record']),
+    allowed: new Set(['answer', 'clarify:note', 'park', 'task:start', 'task:verify', 'task:built', 'task:state', 'env:prepare', 'reconcile', 'evidence', 'plan:validate', 'contract', 'wfargs', 'record']),
   });
   if (d.action === 'workflow') return wf(d.workflow, d.config);
   if (d.action === 'skill') {

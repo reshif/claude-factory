@@ -24,6 +24,7 @@ async function realize(root, builder, args = ['realize']) {
   const b = F.cli(root, ['wfargs', ...args], { allowFail: false });
   const { result, calls } = await H.run(REALIZE, JSON.stringify(b), (prompt, opts) => {
     if (opts.agentType === 'factory:builder') return builder(root);
+    if (opts.agentType === 'factory:integrator') return F.relayWave(root, prompt);
     const v = F.cli(root, ['task', 'verify', /^test (\S+)/.exec(opts.label)[1]]);
     return v.error ? { pass: false, refused: v.code, failures: [v.message] } : { pass: v.pass, evidence_id: v.evidence_id, failures: (v.failures || []).map((f) => `\`${f.cmd}\` exited ${f.code}:\n${f.output}`) };
   });

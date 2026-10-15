@@ -1,0 +1,7 @@
+{ "type": "object", "required": ["ok", "kind"], "properties": {
+  "ok": { "type": "boolean" },
+  "kind": { "enum": ["integrated", "commands", "conflict", "regression", "environment", "error"] },
+  "route": { "type": "array", "items": { "type": "string" } },
+  "reconciled": { "type": "boolean" },
+  "failures": { "type": "array", "items": { "type": "string" } },
+  "message": { "type": "string" } } }

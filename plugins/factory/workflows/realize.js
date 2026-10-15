@@ -1,6 +1,6 @@
 export const meta = {
   name: 'realize',
-  description: 'Software Factory: build tasks wave by wave, each in its own git worktree — builder, then `task verify` (relayed by the tester; the CLI\'s exit code and evidence decide), retried up to each task\'s limit with the previous attempt as input; a blocked or exhausted task skips only its dependents. Pass the JSON brief from `factory wfargs realize` as args.',
+  description: 'Software Factory: build tasks wave by wave, each in its own git worktree — builder, then `task verify` (relayed by the tester; the CLI\'s exit code and evidence decide), retried up to each task\'s limit with the previous attempt as input; after each wave the CLI integrates it into the job branch and checks it (relayed by the integrator); a blocked or exhausted task skips only its dependents. Pass the JSON brief from `factory wfargs realize` as args.',
 }
 
 const brief = (() => {
@@ -167,12 +167,88 @@ async function settle(ids) {
   }
 }
 
+// After a wave: merge its finished tasks into the job branch and run the job's checks on the
+// integrated tree. The CLI does it (`factory reconcile wave`); the integrator only runs it and
+// relays the result, and the job state the CLI wrote is what record trusts. A failure goes back
+// to the task(s) whose files it names (`task show` has the raw output under
+// integration_failures); they are rebuilt on the integrated branch (within their retry limit)
+// and the wave is integrated again. Returns null when the wave is integrated (or had nothing to
+// integrate), else why the integrated build is still broken.
+const integrations = []
+async function relayIntegrate(ids, wave) {
+  const prompt = brief.integrate_prompt.replace('{{tasks}}', () => ids.join(',')).replace('{{wave}}', () => String(wave))
+  runs += 1
+  let r = await call(prompt, opts(brief.integrator, `integrate wave ${wave}`))
+  if (!r) {
+    runs += 1
+    r = await call(prompt, opts(brief.integrator, `integrate wave ${wave} (retry)`))
+  }
+  return r
+}
+async function integrate(w) {
+  for (;;) {
+    const done = brief.waves[w].concat(Object.keys(st).filter((id) => st[id].reopened && !brief.waves[w].includes(id))).filter((id) => st[id] && st[id].outcome === 'done')
+    if (!done.length) return null
+    const ig = await relayIntegrate(done, w + 1)
+    integrations.push({ wave: w + 1, tasks: done, ok: Boolean(ig && ig.ok), kind: (ig && ig.kind) || null, route: (ig && ig.route) || [], ...(ig && ig.reconciled ? { reconciled: true } : {}) })
+    if (ig && ig.ok) return null
+    if (ig && ig.kind === 'environment') {
+      envBroken = { reason: ig.message || 'environment broken' }
+      return envBroken.reason
+    }
+    const why = !ig ? 'the integration step was not relayed' : ig.kind === 'commands' ? `${(ig.failures || []).join(', ') || 'its checks failed'}` : `${ig.kind || 'error'}${ig.message ? `: ${String(ig.message).slice(0, 200)}` : ''}`
+    const again = []
+    for (const id of (ig && ig.route) || []) {
+      const s = st[id]
+      if (!s) continue // built before this run: its next realize rebuilds it (needs_work: integration)
+      if (s.outcome !== 'done') continue // only work that was integrated goes back
+      s.failures = [`Attempt ${attemptNo(id) - 1}: the integrated build failed after wave ${w + 1} (${why}). \`task show\` lists the failing commands and their output under integration_failures; task start brings the integrated branch into yours.`]
+      if (s.attempts >= (T[id].retry_limit || 3)) {
+        s.outcome = 'exhausted'
+        s.summary = `Exhausted after ${s.attempts} attempt(s): the integrated build failed: ${why}`
+        continue
+      }
+      s.outcome = 'pending'
+      s.reopened = true
+      again.push(id)
+    }
+    if (!again.length) return why
+    phase(`realize: wave ${w + 1}: rebuilding ${again.join(', ')} on the integrated branch`)
+    await settle(again)
+    if (envBroken) return envBroken.reason
+    // A task rebuilt for the integration that still failed leaves its broken merge in the job
+    // branch: the wave is not integrated, whatever the remaining tasks' checks say.
+    const unfixed = again.filter((id) => st[id].outcome !== 'done')
+    if (unfixed.length) return `${why}; ${unfixed.join(', ')} could not fix it`
+  }
+}
+
+// The integrated build after a wave stayed broken (its failing tasks are exhausted, blocked or
+// were built before this run): later waves would start from broken code, so they don't start.
+function skipAfterBrokenIntegration(w, why) {
+  for (let v = w + 1; v < brief.waves.length; v++) {
+    for (const id of brief.waves[v]) {
+      if (!st[id] || st[id].outcome !== 'pending') continue
+      st[id].outcome = 'skipped_dependency'
+      st[id].summary = `Skipped: the integrated build after wave ${w + 1} is broken (${why}); it would start from broken code.`
+    }
+  }
+}
+
 for (let w = 0; w < brief.waves.length && !envBroken; w++) {
   skipDependents()
   const active = brief.waves[w].filter((id) => st[id] && st[id].outcome === 'pending')
   if (!active.length) continue
   phase(`realize: wave ${w + 1}/${brief.waves.length} (${active.join(', ')})`)
   await settle(active)
+  if (envBroken) break
+  if (brief.integrate_each_wave && brief.integrator && brief.integrate_prompt) {
+    const broken = await integrate(w)
+    if (broken && !envBroken) {
+      skipAfterBrokenIntegration(w, broken)
+      break
+    }
+  }
 }
 skipDependents()
 
@@ -190,7 +266,7 @@ const base = {
   questions: [],
 }
 if (envBroken) {
-  return { ...base, status: 'park', park_reason: envBroken.reason, summary: `Stopped: ${envBroken.reason}`, data: { tasks, verifications: checks, environment_broken: envBroken } }
+  return { ...base, status: 'park', park_reason: envBroken.reason, summary: `Stopped: ${envBroken.reason}`, data: { tasks, verifications: checks, integrations, environment_broken: envBroken } }
 }
 const notDone = tasks.filter((t) => t.outcome !== 'done')
 return {
@@ -198,5 +274,5 @@ return {
   status: notDone.length ? 'park' : 'ok',
   park_reason: notDone.length ? `Tasks not done: ${notDone.map((t) => `${t.id} (${t.outcome})`).join(', ')}` : null,
   summary: `${tasks.length - notDone.length}/${tasks.length} task(s) done.`,
-  data: { tasks, verifications: checks },
+  data: { tasks, verifications: checks, integrations },
 }
