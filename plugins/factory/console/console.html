@@ -358,7 +358,7 @@ button { font: inherit; color: inherit; }
 .mdot.opus { background: var(--m-opus); } .mdot.sonnet { background: var(--m-sonnet); } .mdot.haiku { background: var(--m-haiku); } .mdot.none { background: transparent; border: 1px dashed var(--rule); color: var(--muted); }
 .arow b { font: 500 12.5px var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .arow .o { font: 500 11px var(--mono); color: var(--muted); white-space: nowrap; }
-.arow .o.bad { color: var(--stop); } .arow .o.good { color: var(--track); }
+.arow .o.bad { color: var(--stop); } .arow .o.good { color: var(--track); } .arow .o.warn { color: var(--signal); }
 .log { margin: 0; padding: 0; list-style: none; display: grid; gap: 1px; font-size: 13px; max-height: 260px; overflow-y: auto; }
 .log button { width: 100%; text-align: left; display: grid; grid-template-columns: 70px 66px minmax(0, 1fr); gap: 6px; align-items: baseline; padding: 4px 6px; border: 0; border-left: 3px solid transparent; background: transparent; cursor: pointer; border-radius: 2px; }
 .log button:hover { background: var(--paper); }
@@ -380,7 +380,8 @@ button { font: inherit; color: inherit; }
 .sev { font: 600 10px var(--mono); text-transform: uppercase; letter-spacing: 0.06em; padding: 2px 5px; border-radius: 2px; border: 1px solid currentColor; white-space: nowrap; }
 .sev.blocker, .sev.major { color: var(--stop); } .sev.minor { color: var(--muted); }
 .stt { font: 500 11px var(--mono); }
-.stt.confirmed, .stt.fail { color: var(--stop); } .stt.refuted, .stt.done, .stt.pass { color: var(--track); }
+.stt.confirmed, .stt.fail { color: var(--stop); } .stt.unverified { color: var(--signal); }
+.vnote { font-size: 12px; color: var(--muted); } .stt.refuted, .stt.done, .stt.pass { color: var(--track); }
 
 .empty { padding: 26px 20px; display: grid; gap: 12px; justify-items: start; margin-top: 16px; }
 .empty h2 { font: 800 28px/1 var(--display); text-transform: uppercase; }
@@ -1147,27 +1148,32 @@ dialog.dlg::backdrop { background: rgba(4, 8, 7, .55); backdrop-filter: blur(2px
 
 <script>
 // ===================================================================== definitions
+// Each agent: [stage, what it does]. Its Claude Code tools come from the `tools:` line of its
+// own agents/<name>.md frontmatter: build.js writes them into AGENT_TOOLS, so the Crew and the
+// recipe map never drift from the files. An agent with Write or Edit can write; the others are read-only.
+const AGENT_TOOLS = {"architect":["Read","Grep","Glob","Bash","Write","Edit"],"builder":["Read","Grep","Glob","Bash","Write","Edit"],"code-reviewer":["Read","Grep","Glob","Bash"],"epic-reviewer":["Read","Grep","Glob","Bash"],"finding-verifier":["Read","Grep","Glob","Bash"],"god-eye":["Read","Grep","Glob","Bash"],"integrator":["Read","Grep","Glob","Bash","Edit"],"intent-analyst":["Read","Grep","Glob"],"judge":["Read","Grep","Glob"],"lesson-writer":["Read","Grep","Glob","Bash"],"option-generator":["Read","Grep","Glob"],"planner":["Read","Grep","Glob","Bash","Write","Edit"],"researcher":["Read","Grep","Glob","Bash","WebFetch","WebSearch"],"security-reviewer":["Read","Grep","Glob","Bash"],"slicer":["Read","Grep","Glob","Bash","Write","Edit"],"test-reviewer":["Read","Grep","Glob","Bash"],"tester":["Read","Grep","Glob","Bash"],"threat-modeler":["Read","Grep","Glob","Bash","Write"],"ux-reviewer":["Read","Grep","Glob","Bash"]};
 const AGENTS = {
-  'intent-analyst': ['Clarify', 'Reads the draft contract from one angle and asks only what the repo can\'t answer.', ['Read', 'Grep', 'Glob', 'Bash'], false],
-  'judge': ['Clarify', 'Merges the analysts\' questions, dismisses with reasons, never re-asks.', ['Read'], false],
-  'god-eye': ['Critique', 'Cold reviewer of the contract, design or plan. Approves only what someone could act on without asking.', ['Read', 'Grep', 'Glob', 'Bash'], false],
-  'researcher': ['Ground', 'Grounds one topic; every claim is cited or marked UNVERIFIED.', ['Read', 'Grep', 'Glob', 'Bash', 'WebFetch', 'WebSearch'], false],
-  'option-generator': ['Decide', 'Proposes one design optimised for one prior, without hedging.', ['Read', 'Grep', 'Glob', 'Bash'], false],
-  'threat-modeler': ['Decide', 'Writes the threat model before the design is decided.', ['Read', 'Grep', 'Glob', 'Bash', 'Write'], true],
-  'architect': ['Decide', 'Decides from findings, options and threats; writes the ADR or no-adr note.', ['Read', 'Grep', 'Glob', 'Bash', 'Write', 'Edit'], true],
-  'planner': ['Plan', 'Writes task contracts and validates them with the CLI.', ['Read', 'Grep', 'Glob', 'Bash', 'Write', 'Edit'], true],
-  'slicer': ['Plan', 'Splits an epic into slices, S00 first.', ['Read', 'Grep', 'Glob', 'Bash', 'Write', 'Edit'], true],
-  'builder': ['Build', 'Builds one task in its own worktree, only inside its allowed paths, and commits on its branch.', ['Read', 'Grep', 'Glob', 'Bash', 'Write', 'Edit'], true],
-  'tester': ['Build', 'Runs factory task verify independently and never edits code.', ['Read', 'Grep', 'Glob', 'Bash'], false],
-  'integrator': ['Build', 'Merges task branches through the CLI; resolves only textual conflicts.', ['Read', 'Grep', 'Glob', 'Bash', 'Edit'], true],
-  'code-reviewer': ['Challenge', 'Correctness, error handling, fit with the codebase, accepted lessons.', ['Read', 'Grep', 'Glob', 'Bash'], false],
-  'test-reviewer': ['Challenge', 'Whether the tests really prove the criteria.', ['Read', 'Grep', 'Glob', 'Bash'], false],
-  'security-reviewer': ['Challenge', 'Injection, authorisation, secrets, dependencies, threat-model mitigations.', ['Read', 'Grep', 'Glob', 'Bash'], false],
-  'ux-reviewer': ['Challenge', 'States, accessibility and copy when UI files changed.', ['Read', 'Grep', 'Glob', 'Bash'], false],
-  'finding-verifier': ['Challenge', 'Confirms or refutes one serious finding, sceptical both ways.', ['Read', 'Grep', 'Glob', 'Bash'], false],
-  'epic-reviewer': ['Challenge', 'Checks merged slices against frozen contracts and ADRs.', ['Read', 'Grep', 'Glob', 'Bash'], false],
-  'lesson-writer': ['Learn', 'Turns confirmed problems into at most three scoped lessons.', ['Read', 'Grep', 'Glob', 'Bash'], false],
+  'intent-analyst': ['Clarify', 'Reads the draft contract from one angle and asks only what the repo can\'t answer.'],
+  'judge': ['Clarify', 'Merges the analysts\' questions, dismisses with reasons, never re-asks.'],
+  'god-eye': ['Critique', 'Cold reviewer of the contract, design or plan. Approves only what someone could act on without asking.'],
+  'researcher': ['Ground', 'Grounds one topic; every claim is cited or marked UNVERIFIED.'],
+  'option-generator': ['Decide', 'Proposes one design optimised for one prior, without hedging.'],
+  'threat-modeler': ['Decide', 'Writes the threat model before the design is decided.'],
+  'architect': ['Decide', 'Decides from findings, options and threats; writes the ADR or no-adr note.'],
+  'planner': ['Plan', 'Writes task contracts and validates them with the CLI.'],
+  'slicer': ['Plan', 'Splits an epic into slices, S00 first.'],
+  'builder': ['Build', 'Builds one task in its own worktree, only inside its allowed paths, and commits on its branch.'],
+  'tester': ['Build', 'Runs factory task verify independently and never edits code.'],
+  'integrator': ['Build', 'Merges task branches through the CLI; resolves only textual conflicts.'],
+  'code-reviewer': ['Challenge', 'Correctness, error handling, fit with the codebase, accepted lessons.'],
+  'test-reviewer': ['Challenge', 'Whether the tests really prove the criteria.'],
+  'security-reviewer': ['Challenge', 'Injection, authorisation, secrets, dependencies, threat-model mitigations.'],
+  'ux-reviewer': ['Challenge', 'States, accessibility and copy when UI files changed.'],
+  'finding-verifier': ['Challenge', 'Confirms or refutes one serious finding, sceptical both ways; when it can\'t settle it, it says unverifiable and the finding stays unverified and blocking.'],
+  'epic-reviewer': ['Challenge', 'Checks merged slices against frozen contracts and ADRs.'],
+  'lesson-writer': ['Learn', 'Turns confirmed problems into scoped lessons, no more than the job\'s policy allows.'],
 };
+for (const [name, a] of Object.entries(AGENTS)) { a[2] = AGENT_TOOLS[name] || []; a[3] = a[2].includes('Write') || a[2].includes('Edit'); }
 
 const RECIPES = {
   'bug@low': { note: 'Small, low-risk fixes: one task built straight from the contract, code review only.', steps: ['clarify','H1','ground','decompose','realize','reconcile','prove','challenge','ship','H4','distill','close'], lanes: ['code'] },
@@ -1283,7 +1289,7 @@ const STAGES = [
     nodes: [
       { id: 'skill-distill', type: 'skill', title: 'factory:distill', sub: 'What went wrong, turned into rules', step: 'distill',
         detail: { what: 'Gathers confirmed findings, verify-fix rounds and minors that recur across jobs, and starts the lesson-writer.', skills: ['factory:distill'], cmds: ['factory distill context', 'factory distill done'] } },
-      { id: 'ag-lessons', type: 'agentnode', title: 'lesson-writer', sub: 'At most 3 general, scoped lessons', step: 'distill', role: 'lesson-writer',
+      { id: 'ag-lessons', type: 'agentnode', title: 'lesson-writer', sub: 'General, scoped lessons, within the policy\'s cap per job', step: 'distill', role: 'lesson-writer',
         detail: { what: 'Writes lessons in the project\'s own terms with the globs they apply to. Accepted lessons reach the next plan, build and review.', agents: ['lesson-writer'], cmds: ['factory lessons add'] } },
       { id: 'you-lesson', type: 'you', title: 'You accept or reject', sub: 'accept lesson L5 · reject lesson L5 <why>', step: 'distill',
         detail: { what: 'Nothing is learned without you.', you: ['accept lesson L5', 'reject lesson L5 <why>'] } },
@@ -1903,7 +1909,7 @@ const STEP_INFO = {
   epic_gate: ['Epic gate', 'All slices merged; the epic branch passes its checks.'],
   HS: ['HS · ship', 'You sign off before anything leaves.'],
   ship: ['Ship', 'Floors checked, completion report written, PR opened or a local merge prepared.'],
-  H4: ['H4 · merge', 'Only you merge. The merge commit is recorded.'],
+  H4: ['H4 · merge', 'Only you merge: on GitHub, or locally and reply merged <commit>. The merge commit is recorded.'],
   post_merge_challenge: ['Post-merge', 'A fresh review of what actually landed.'],
   distill: ['Learn', 'Confirmed problems become scoped lessons you accept.'],
   close: ['Close', 'Every floor met on the final build; worktrees removed.'],
@@ -1928,7 +1934,14 @@ const RULES = {
 const CHECKS = [['contract_approved', 'contract approved'], ['no_drift', 'no drift'], ['floors_satisfied_so_far', 'floors so far'], ['no_confirmed_serious', 'no confirmed finding'], ['acs_proven', 'criteria proven'], ['no_stale_evidence', 'no stale proof']];
 const WORD = { done: 'Clear', auto: 'Auto-approved', running: 'Running', waiting: 'Your turn', failed: 'Stopped', blocked: 'Blocked', pending: 'Ahead', again: 'Runs again', skipped: 'Not needed', none: 'Not in recipe' };
 const KIND_LABEL = { start: 'you · request', skill: 'skill', workflow: 'workflow', cli: 'factory cli', gate: 'gate · you', merge: 'merge · you' };
+// An agent's outcome, as the workflow's roster recorded it (workflows/*.js: the reply's status,
+// pass/fail or verdict, or no_result). Bad: it did not do its job. Warn: it did, and the answer
+// holds the job up (God Eye's revise, a verifier that could not settle a finding). Good: a
+// positive verdict. Anything else (ok, confirmed, refuted) stays neutral: nothing is green by default.
 const BAD_OUTCOME = new Set(['fail', 'no_result', 'blocked', 'failed', 'exhausted', 'error']);
+const WARN_OUTCOME = new Set(['unverifiable', 'revise', 'changes', 'needs_user', 'skipped_dependency']);
+const GOOD_OUTCOME = new Set(['pass', 'done', 'approve', 'merged', 'ready']);
+const outcomeClass = (o) => (BAD_OUTCOME.has(o) ? 'bad' : WARN_OUTCOME.has(o) ? 'warn' : GOOD_OUTCOME.has(o) ? 'good' : '');
 const reduceMotion = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
 const stepName = (id) => (STEP_INFO[id] ? STEP_INFO[id][0] : id || '—');
@@ -2242,7 +2255,7 @@ function rowLines(job, row) {
       case 'agents': add(i, `${it.workflow ? `${it.workflow}${it.config ? ` · ${it.config}` : ''}${it.mode ? ` (${it.mode})` : ''}` : 'agents seen by the hooks'} · ${it.runs} agent run${it.runs === 1 ? '' : 's'} · ${fmtDur(Date.parse(it.t) - t0)}`, 'wf', { agents: it.agents }); break;
       case 'result': {
         add(i, `${it.ok ? '✓' : it.outcome === 'ask' ? '?' : '✕'} ${it.text}`, it.ok ? 'ok' : it.outcome === 'ask' ? 'ask' : 'bad');
-        for (const f of (it.findings || []).filter((x) => x.status === 'confirmed' || x.status === 'unverified').slice(0, 3)) add(i, `⚑ ${f.id} · ${f.severity} · ${f.status}: ${f.summary}`, f.status === 'confirmed' ? 'bad find' : 'ask find');
+        for (const f of (it.findings || []).filter((x) => x.status === 'confirmed' || x.status === 'unverified').slice(0, 3)) add(i, `⚑ ${f.id} · ${f.severity} · ${f.status === 'unverified' ? `unverified, blocking${f.verifier === 'unverifiable' ? ' (verifier: unverifiable)' : ''}` : f.status}: ${f.summary}`, f.status === 'confirmed' ? 'bad find' : 'ask find');
         break;
       }
       case 'human': {
@@ -2779,8 +2792,7 @@ function who(it) {
 function agentRowsHtml(list) {
   return `<div class="alist">${list.map((a) => {
     const fam = modelFamily(a.model);
-    const bad = BAD_OUTCOME.has(a.outcome);
-    return `<div class="arow"><span class="mdot ${fam}" title="${esc(a.model || 'session model')}">${esc(modelLetter(a.model))}</span><b title="${esc(a.label)}">${esc(a.label)}</b><span class="o ${bad ? 'bad' : a.outcome && a.outcome !== 'ok' ? 'good' : ''}">${esc(a.outcome || '')}${a.ms ? ` · ${fmtDur(a.ms)}` : ''}</span></div>`;
+    return `<div class="arow"><span class="mdot ${fam}" title="${esc(a.model || 'session model')}">${esc(modelLetter(a.model))}</span><b title="${esc(a.label)}">${esc(a.label)}</b><span class="o ${outcomeClass(a.outcome)}">${esc(a.outcome || '')}${a.ms ? ` · ${fmtDur(a.ms)}` : ''}</span></div>`;
   }).join('')}</div>`;
 }
 function paintNow(i, S) {
@@ -2814,7 +2826,14 @@ function paintNow(i, S) {
   $('#now').innerHTML = parts.join('');
 }
 function findingsHtml(list) {
-  return `<div class="tblwrap"><table class="tbl"><tr><th>Lane</th><th>Severity</th><th>Status</th><th>Finding</th></tr>${list.map((f) => `<tr><td class="n">${esc(f.lane || '')}</td><td><span class="sev ${esc(f.severity)}">${esc(f.severity)}</span></td><td class="stt ${esc(f.status || '')}">${esc(f.status || '')}</td><td>${esc(f.summary)}${f.file ? ` <span class="mono">${esc(f.file)}${f.line ? `:${esc(f.line)}` : ''}</span>` : ''}</td></tr>`).join('')}</table></div>`;
+  return `<div class="tblwrap"><table class="tbl"><tr><th>Lane</th><th>Severity</th><th>Status</th><th>Finding</th></tr>${list.map((f) => `<tr><td class="n">${esc(f.lane || '')}</td><td><span class="sev ${esc(f.severity)}">${esc(f.severity)}</span></td><td class="stt ${esc(f.status || '')}">${esc(f.status || '')}${f.status === 'unverified' ? '<br><span class="label">blocking</span>' : ''}</td><td>${esc(f.summary)}${f.file ? ` <span class="mono">${esc(f.file)}${f.line ? `:${esc(f.line)}` : ''}</span>` : ''}${verifierNote(f) ? `<br><span class="vnote">${esc(verifierNote(f))}</span>` : ''}</td></tr>`).join('')}</table></div>`;
+}
+// what the finding-verifier said (review.js): its reason and evidence, and "unverifiable" when it
+// could not settle the finding (the status then stays unverified, and the finding keeps blocking)
+function verifierNote(f) {
+  if (!f.verifier && !f.verification && !(f.evidence || []).length) return '';
+  const who = f.verifier === 'unverifiable' ? 'Verifier: unverifiable' : f.status === 'confirmed' || f.status === 'refuted' ? `Verifier: ${f.status}` : 'Verifier';
+  return `${who}${f.verification ? ` — ${f.verification}` : ''}${(f.evidence || []).length ? ` (evidence: ${f.evidence.join('; ')})` : ''}`;
 }
 function paintStep(id) {
   const job = LV.job;
@@ -3969,7 +3988,7 @@ function renderStory() {
       const after = fmtDur(Date.parse(it.t) - tm);
       switch (it.type) {
         case 'agents': S.push(`${esc(it.workflow ? `${it.workflow}${it.config ? ` (${it.config})` : ''}` : 'The hooks saw')} ran ${it.runs} agent run${it.runs === 1 ? '' : 's'}: ${esc(agentsProse(it.agents))}, done ${esc(after)} in.`); break;
-        case 'result': S.push(it.ok ? `<span class="ok">✓ ${esc(it.text)}.</span>` : it.outcome === 'ask' ? `<b class="y">? ${esc(it.text)}.</b>` : `<span class="bad">✕ ${esc(it.text)}.</span>`); for (const f of (it.findings || []).filter((x) => x.status === 'confirmed')) S.push(`<span class="bad">Confirmed ${esc(f.severity)} finding ${esc(f.id)}: ${esc(f.summary)}.</span>`); break;
+        case 'result': S.push(it.ok ? `<span class="ok">✓ ${esc(it.text)}.</span>` : it.outcome === 'ask' ? `<b class="y">? ${esc(it.text)}.</b>` : `<span class="bad">✕ ${esc(it.text)}.</span>`); for (const f of (it.findings || []).filter((x) => x.status === 'confirmed')) S.push(`<span class="bad">Confirmed ${esc(f.severity)} finding ${esc(f.id)}: ${esc(f.summary)}.</span>`); for (const f of (it.findings || []).filter((x) => x.status === 'unverified')) S.push(`<b class="y">Unverified ${esc(f.severity)} finding ${esc(f.id)}, still blocking: ${esc(f.summary)}.</b>${verifierNote(f) ? ` <span class="q">${esc(verifierNote(f))}.</span>` : ' No verifier settled it.'}`); break;
         case 'human': {
           const g = it.gate || stepName(it.step);
           if (it.action === 'approve') S.push(`<b class="y">You approved ${esc(g)}</b>${it.via ? ` (${esc(it.via)})` : ''}, ${esc(after)} after it was put to you.`);

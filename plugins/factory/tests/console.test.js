@@ -204,3 +204,92 @@ test('console page: console.html is built from console/src (node console/build.j
     if (/\.(css|js)$/.test(f)) assert.ok(listed.has(f), `${f} is in src/manifest.json`);
   }
 });
+
+test('console: a review round carries the CLI lane verdicts and each finding\'s verifier word; unverified findings read as blocking', () => {
+  const root = F.makeRepo();
+  const J = F.cli(root, ['job', 'new', '--title', 'Bulk', '--type', 'feature', '--risk', 'low']).job;
+  const at = (m) => new Date(Date.UTC(2030, 0, 1, 9, m)).toISOString();
+  const ledger = path.join(F.jobDir(root, J), 'ledger.jsonl');
+  // review.js's own shape: an unverifiable verdict leaves status 'unverified' and sets verifier + evidence
+  fs.appendFileSync(ledger, [
+    { job: J, at: at(1), kind: 'agents', workflow: 'fanout-judge', config: 'challenge', decision_id: `${J}-D0009`, status: 'ok', agents: [{ label: 'review code', agent_type: 'factory:code-reviewer', model: 'sonnet', outcome: 'ok' }, { label: 'verify code-1', agent_type: 'factory:finding-verifier', model: 'sonnet', outcome: 'unverifiable' }] },
+    { job: J, at: at(2), kind: 'step', step: 'challenge', ok: false, detail: { round: 1, required: ['code', 'tests'], lanes: { code: 'changes', tests: 'pass' }, missing: [], findings: [
+      { id: 'code-1', lane: 'code', severity: 'major', status: 'unverified', verifier: 'unverifiable', verification: 'Could not build the fixture.', evidence: ['ran the tests: ok', 'read src/a.js:3'], file: 'src/a.js', line: 3, summary: 'Loads every id into memory' },
+      { id: 'code-2', lane: 'code', severity: 'blocker', status: 'refuted', verification: 'The loop is bounded.', summary: 'Unbounded loop' },
+      { id: 'tests-1', lane: 'tests', severity: 'minor', status: 'minor', summary: 'Small fixture' },
+    ] } },
+  ].map((e) => JSON.stringify(e)).join('\n') + '\n');
+  const { build } = require('../cli/core/console');
+  const data = build(root, { now: at(30) });
+  const job = data.jobs.find((j) => j.id === J);
+  const r = job.timeline.find((t) => t.type === 'result' && t.raw_step === 'challenge');
+  assert.match(r.text, /1 unverified, blocking/, 'the round text counts unverified serious findings');
+  assert.deepEqual(r.lanes, { code: 'changes', tests: 'pass' }, 'the CLI lane verdicts are carried, not re-parsed from text');
+  assert.deepEqual(r.required, ['code', 'tests']);
+  assert.deepEqual(r.missing, []);
+  assert.equal(r.round, 1);
+  const f = r.findings.find((x) => x.id === 'code-1');
+  assert.equal(f.status, 'unverified');
+  assert.equal(f.verifier, 'unverifiable');
+  assert.equal(f.verification, 'Could not build the fixture.');
+  assert.deepEqual(f.evidence, ['ran the tests: ok', 'read src/a.js:3']);
+  assert.equal(r.findings.find((x) => x.id === 'code-2').verifier, undefined, 'a confirmed or refuted verdict lives in status');
+  assert.deepEqual(job.review_lanes, ['code', 'tests'], 'the lanes the last review required');
+  const state = JSON.parse(fs.readFileSync(path.join(F.jobDir(root, J), 'state.json'), 'utf8'));
+  assert.equal(job.limits.max_review_rounds, state.policy.limits.max_review_rounds, 'the job\'s policy limits are in the data');
+  assert.equal(job.lessons_max, state.policy.lessons_max_per_job);
+  const ag = job.timeline.find((t) => t.type === 'agents').agents.find((a) => a.label === 'verify code-1');
+  assert.equal(ag.outcome, 'unverifiable');
+  // the page: the Story names the unverified finding as blocking, with the verifier's word
+  const html = fs.readFileSync(path.join(F.PLUGIN, 'console', 'console.html'), 'utf8');
+  assert.match(html, /Unverified \$\{esc\(f\.severity\)\} finding \$\{esc\(f\.id\)\}, still blocking/);
+  assert.match(html, /function verifierNote\(f\)[\s\S]{0,200}f\.verifier === 'unverifiable'/);
+});
+
+test('console: lessons carry scope and your decision; a job without a review still knows its lanes', () => {
+  const root = F.makeRepo();
+  const J = F.cli(root, ['job', 'new', '--title', 'Lanes', '--type', 'feature', '--risk', 'medium']).job;
+  F.cli(root, ['lessons', 'add', '--job', J, '--text', 'Validate ids at the boundary', '--scope', 'src/**']);
+  const doc = path.join(root, '.factory', 'lessons', 'lessons.json');
+  const L = JSON.parse(fs.readFileSync(doc, 'utf8'));
+  Object.assign(L.lessons[0], { status: 'accepted', decided_at: '2030-01-01T10:00:00.000Z', reason: 'yes' });
+  fs.writeFileSync(doc, JSON.stringify(L));
+  const { build } = require('../cli/core/console');
+  const job = build(root).jobs.find((j) => j.id === J);
+  assert.deepEqual(job.lessons.map((l) => [l.id, l.status, l.scope, l.decided_at, l.reason]), [['L1', 'accepted', ['src/**'], '2030-01-01T10:00:00.000Z', 'yes']]);
+  assert.ok(job.lessons[0].created_at);
+  const state = JSON.parse(fs.readFileSync(path.join(F.jobDir(root, J), 'state.json'), 'utf8'));
+  for (const l of state.policy.required_lanes.medium) assert.ok(job.review_lanes.includes(l), `${l} is required before any review ran`);
+});
+
+test('console page: the Crew\'s tools are each agent file\'s own tools: line, with Claude Code tool names', () => {
+  const html = fs.readFileSync(path.join(F.PLUGIN, 'console', 'console.html'), 'utf8');
+  const m = /const AGENT_TOOLS = (\{.*?\});/.exec(html);
+  assert.ok(m, 'console.html carries AGENT_TOOLS');
+  const shown = JSON.parse(m[1]);
+  const dir = path.join(F.PLUGIN, 'agents');
+  const files = fs.readdirSync(dir).filter((f) => f.endsWith('.md'));
+  assert.deepEqual(Object.keys(shown).sort(), files.map((f) => f.replace(/\.md$/, '')).sort(), 'one entry per agent file');
+  for (const f of files) {
+    const fm = /^---\r?\n([\s\S]*?)\r?\n---/.exec(fs.readFileSync(path.join(dir, f), 'utf8'))[1];
+    const tools = /^tools:\s*(.+)$/m.exec(fm)[1].split(',').map((t) => t.trim()).filter(Boolean);
+    assert.deepEqual(shown[f.replace(/\.md$/, '')], tools, `${f}: the console shows the file's tools`);
+    for (const t of tools) assert.match(t, /^[A-Z][A-Za-z]+$/, `${f}: ${t} is a Claude Code tool name`);
+  }
+  const src = fs.readFileSync(path.join(F.PLUGIN, 'console', 'src', 'js', 'definitions.js'), 'utf8');
+  const table = src.slice(src.indexOf('const AGENTS'), src.indexOf('\n};', src.indexOf('const AGENTS')));
+  assert.ok(!/'(Read|Grep|Glob|Bash|Write|Edit|WebFetch|WebSearch)'/.test(table), 'no hand-written tool list left in definitions.js');
+  for (const a of Object.keys(shown)) assert.ok(table.includes(`'${a}':`), `Crew lists ${a}`);
+  assert.match(src, /'finding-verifier': \[[^\]]*unverifiable/, 'the finding-verifier says what unverifiable does');
+  assert.ok(!/at most (three|3)[^.]*lessons|At most 3 general/i.test(src), 'no stale lesson cap');
+});
+
+test('console page: agent outcomes get bad, warn, good or neutral, never good by default', () => {
+  const vm = require('vm');
+  const ctx = { window: {} };
+  vm.runInNewContext(`${fs.readFileSync(path.join(F.PLUGIN, 'console', 'src', 'js', 'job-line', 'data.js'), 'utf8')}\nthis.outcomeClass = outcomeClass;`, ctx);
+  for (const o of ['failed', 'error', 'no_result', 'fail', 'blocked', 'exhausted']) assert.equal(ctx.outcomeClass(o), 'bad', o);
+  for (const o of ['unverifiable', 'revise', 'skipped_dependency']) assert.equal(ctx.outcomeClass(o), 'warn', o);
+  for (const o of ['approve', 'pass', 'done', 'merged']) assert.equal(ctx.outcomeClass(o), 'good', o);
+  for (const o of ['ok', 'confirmed', 'refuted', 'something-new', null]) assert.equal(ctx.outcomeClass(o), '', String(o));
+});

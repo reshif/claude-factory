@@ -63,7 +63,7 @@ function rowLines(job, row) {
       case 'agents': add(i, `${it.workflow ? `${it.workflow}${it.config ? ` · ${it.config}` : ''}${it.mode ? ` (${it.mode})` : ''}` : 'agents seen by the hooks'} · ${it.runs} agent run${it.runs === 1 ? '' : 's'} · ${fmtDur(Date.parse(it.t) - t0)}`, 'wf', { agents: it.agents }); break;
       case 'result': {
         add(i, `${it.ok ? '✓' : it.outcome === 'ask' ? '?' : '✕'} ${it.text}`, it.ok ? 'ok' : it.outcome === 'ask' ? 'ask' : 'bad');
-        for (const f of (it.findings || []).filter((x) => x.status === 'confirmed' || x.status === 'unverified').slice(0, 3)) add(i, `⚑ ${f.id} · ${f.severity} · ${f.status}: ${f.summary}`, f.status === 'confirmed' ? 'bad find' : 'ask find');
+        for (const f of (it.findings || []).filter((x) => x.status === 'confirmed' || x.status === 'unverified').slice(0, 3)) add(i, `⚑ ${f.id} · ${f.severity} · ${f.status === 'unverified' ? `unverified, blocking${f.verifier === 'unverifiable' ? ' (verifier: unverifiable)' : ''}` : f.status}: ${f.summary}`, f.status === 'confirmed' ? 'bad find' : 'ask find');
         break;
       }
       case 'human': {
