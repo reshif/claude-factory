@@ -407,6 +407,13 @@ function challenge(root, state, ctx, action) {
   })();
   const ls = lessons.inScope(root, changed);
   const jc = jobContext(root, state);
+  // What the human approved, for every lane: the design record (H2) and the plan (H3).
+  const designFiles = invalidation.designFiles(root, state.id).filter((f) => f.endsWith('.md'));
+  const designRefs = [
+    designFiles.length ? `- Design record (approved at H2): ${designFiles.join(', ')} — its Decision and Architecture diagram are what the change must implement.` : '',
+    require('fs').existsSync(jp.plan) ? `- Plan (approved at H3): ${jp.plan} — each task's objective, paths and interfaces.` : '',
+    require('fs').existsSync(jp.findings) ? `- Findings: ${jp.findings}` : '',
+  ].filter(Boolean).map((l) => `${l}\n`).join('');
   const fanout = lanes.map((lane) => {
     const role = cfg.lanes[lane];
     if (!role) fail(`No reviewer configured for lane "${lane}"`, 'plugin_broken');
@@ -416,7 +423,7 @@ function challenge(root, state, ctx, action) {
       label: `review · ${lane}`,
       prompt: prompt(
         role,
-        `${jc}\n- Lane: **${lane}**\n- See the change with: \`${diffCmd}\`\n- Changed files: ${changed.join(', ') || '(see diff)'}\n${extra}\n- Accepted lessons to check (a broken lesson is a finding with rule "lesson:<id>"):\n${ls.map((l) => `  - ${l.id}: ${l.text}`).join('\n') || '  - (none)'}\n- Finding ids start with "${lane}-"; lane is "${lane}".`,
+        `${jc}\n- Lane: **${lane}**\n- See the change with: \`${diffCmd}\`\n- Changed files: ${changed.join(', ') || '(see diff)'}\n${designRefs}${extra}\n- Accepted lessons to check (a broken lesson is a finding with rule "lesson:<id>"):\n${ls.map((l) => `  - ${l.id}: ${l.text}`).join('\n') || '  - (none)'}\n- Finding ids start with "${lane}-"; lane is "${lane}".`,
         'reviewer',
       ),
       schema: schema('reviewer'),
@@ -545,7 +552,7 @@ function realize(root, state, ctx, action) {
       tester: agentSpec(state, 'tester'),
       builder_prompt: prompt(
         'builder',
-        `${jc}\n- Task: **${t.id}** — ${t.objective}\n- Start: \`${cli(root)} task start ${t.id} --job ${state.id}\`\n- Show: \`${cli(root)} task show ${t.id} --job ${state.id}\`\n- Built (your last step): \`${cli(root)} task built ${t.id} --job ${state.id} --status done\` (or \`--status blocked --reason needs_paths|dependency_conflict|environment_broken\`)\n- Worktree: ${wt}\n- Allowed paths: ${t.allowed_paths.join(', ')}\n- Time: about ${minutes} minutes for this attempt. Commit each working increment as you go; if you stop before you are done, commit what you have as \`wip: …\` first (the next attempt continues from your branch).${envNote}${fixNote ? `\n${fixNote}` : ''}`,
+        `${jc}\n- Task: **${t.id}** — ${t.objective}\n- Start: \`${cli(root)} task start ${t.id} --job ${state.id}\`\n- Show: \`${cli(root)} task show ${t.id} --job ${state.id}\` — its \`packet\` is your part of the approved design: the ADR's Decision and diagram, this task's rows of "How each acceptance criterion is met", the findings on your paths, the interfaces you own or consume, and the other tasks' objectives. Build to it.\n- Built (your last step): \`${cli(root)} task built ${t.id} --job ${state.id} --status done\` (or \`--status blocked --reason needs_paths|dependency_conflict|environment_broken\`)\n- Worktree: ${wt}\n- Allowed paths: ${t.allowed_paths.join(', ')}\n- Time: about ${minutes} minutes for this attempt. Commit each working increment as you go; if you stop before you are done, commit what you have as \`wip: …\` first (the next attempt continues from your branch).${envNote}${fixNote ? `\n${fixNote}` : ''}`,
         'builder',
         'Attempt {{attempt}}. What the previous attempts left (task verify\'s failing commands, or the builder\'s reply; `task show` has the raw output under history and the last attempt\'s diff under previous_attempt), if any:\n{{failures}}',
       ),
