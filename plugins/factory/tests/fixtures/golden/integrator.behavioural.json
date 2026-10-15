@@ -1,0 +1,7 @@
+{
+  "status": "behavioural_conflict",
+  "summary": "T1 and T2 both change the rounding in src/cart.js:20 in different ways; resolving means choosing one behaviour. Aborted.",
+  "files": [
+    "src/cart.js"
+  ]
+}

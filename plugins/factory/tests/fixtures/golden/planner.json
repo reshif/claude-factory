@@ -1,0 +1,6 @@
+{
+  "valid": true,
+  "errors": [],
+  "path": ".factory/jobs/J-0007/plan.json",
+  "summary": "3 tasks: T1 limiter module (ADR 001), T2 wiring in src/api/server.js, T3 config defaults; T2 and T3 depend on T1."
+}

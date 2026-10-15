@@ -1,0 +1,13 @@
+{
+  "kind": "adr",
+  "paths": [
+    ".factory/jobs/J-0007/adr-001-rate-limiter.md"
+  ],
+  "summary": "A token-bucket limiter as middleware in src/api/limiter.js, keyed by client id (findings: codebase, interfaces).",
+  "rejected": [
+    {
+      "option": "Limit at the load balancer",
+      "reason": "It can't key by client id (findings, interfaces: deploy/lb.conf:12)."
+    }
+  ]
+}

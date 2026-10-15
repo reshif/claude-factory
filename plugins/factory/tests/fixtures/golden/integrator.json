@@ -1,0 +1,7 @@
+{
+  "status": "merged",
+  "summary": "Merged T1, T2 and T3; resolved one textual conflict in src/index.js by keeping both tasks' exports.",
+  "files": [
+    "src/index.js"
+  ]
+}

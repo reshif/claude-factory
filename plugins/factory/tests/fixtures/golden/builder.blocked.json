@@ -1,0 +1,9 @@
+{
+  "status": "blocked",
+  "summary": "The limiter must be registered in src/api/server.js, which is outside this task's allowed paths.",
+  "commits": [],
+  "swept": [],
+  "needs_paths": [
+    "src/api/server.js"
+  ]
+}

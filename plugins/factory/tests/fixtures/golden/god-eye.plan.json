@@ -1,0 +1,10 @@
+{
+  "verdict": "revise",
+  "items": [
+    {
+      "issue": "T2 covers AC-2 but its verify command only lints src/sub.js, so it can pass with sub() broken.",
+      "severity": "blocker",
+      "suggestion": "Run node tests/sub.test.js as T2's verify command."
+    }
+  ]
+}

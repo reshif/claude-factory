@@ -1,0 +1,17 @@
+{
+  "verdict": "revise",
+  "intent_confirmed": true,
+  "restatement": {
+    "problem": "add(2, 3) returns -1, so cart totals are wrong",
+    "who": "callers of src/add.js (the cart totals)",
+    "outcome": "add returns the arithmetic sum",
+    "success": "tests/add.test.js passes"
+  },
+  "items": [
+    {
+      "issue": "AC-2 'handles big numbers' has manual evidence and no range, so nobody can tell when it is met.",
+      "severity": "major",
+      "suggestion": "State the range (up to Number.MAX_SAFE_INTEGER) and prove it with a test."
+    }
+  ]
+}

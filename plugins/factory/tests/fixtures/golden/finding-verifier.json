@@ -1,0 +1,10 @@
+{
+  "finding_id": "code-1",
+  "status": "confirmed",
+  "evidence": [
+    "src/api/orders.js:42 reads req.body.items.length with no check",
+    "Every other handler calls validate() first (src/api/users.js:15, src/api/carts.js:9)",
+    "Ran a script in a temp dir that posts {} to the handler: TypeError, HTTP 500"
+  ],
+  "reason": "An order without items crashes the handler; the shared schema check the other handlers use is missing here."
+}

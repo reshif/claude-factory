@@ -1,0 +1,13 @@
+{
+  "lane": "tests",
+  "findings": [
+    {
+      "id": "tests-1",
+      "severity": "blocker",
+      "file": "tests/limiter.test.js",
+      "line": 18,
+      "summary": "AC-2 (the 101st request gets 429) is only checked with the limiter mocked out, so the test passes even if limiting is broken.",
+      "rule": null
+    }
+  ]
+}

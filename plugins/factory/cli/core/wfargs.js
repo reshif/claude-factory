@@ -18,15 +18,76 @@ const invalidation = require('./invalidation');
 const questions = require('./questions');
 const docs = require('./doc');
 
-// The self-check an agent runs on a doc it wrote before returning.
+// The self-check command an agent runs on a doc it wrote (agents/<role>.md says when and why).
 function docCheck(root, state, file) {
-  return `Before returning, run \`${cli(root)} doc check ${file} --job ${state.id}\` and fix every problem it lists (missing or out-of-order sections, front matter, placeholders, tables, uncovered criteria, malformed or missing Mermaid). \`factory record\` runs the same check and rejects the design otherwise.`;
+  return `Doc check: \`${cli(root)} doc check ${file} --job ${state.id}\``;
+}
+
+// Which output schema(s) each role may be given. One place, so a brief can't hand a role a
+// schema its "Your final message" recipe doesn't describe (tests/contracts.test.js checks both).
+const ROLE_OUTPUTS = {
+  'intent-analyst': ['analyst'],
+  judge: ['judge'],
+  'god-eye': ['intent-critique', 'critique'],
+  'option-generator': ['option'],
+  'threat-modeler': ['threat'],
+  architect: ['architect'],
+  researcher: ['researcher'],
+  planner: ['planner'],
+  slicer: ['planner'],
+  builder: ['builder'],
+  tester: ['tester'],
+  integrator: ['integrator'],
+  'code-reviewer': ['reviewer'],
+  'test-reviewer': ['reviewer'],
+  'security-reviewer': ['reviewer'],
+  'ux-reviewer': ['reviewer'],
+  'epic-reviewer': ['reviewer'],
+  'finding-verifier': ['verifier'],
+  'lesson-writer': ['lesson'], // started by the distill step, not a workflow (factory distill context)
+};
+
+function roleFile(role) {
+  const t = readText(pluginPath('agents', `${role}.md`), null);
+  if (t === null) fail(`Agent definition agents/${role}.md is missing`, 'plugin_broken');
+  return t;
 }
 
 function roleBody(role) {
-  const t = readText(pluginPath('agents', `${role}.md`), null);
-  if (t === null) fail(`Agent definition agents/${role}.md is missing`, 'plugin_broken');
-  return t.replace(/^---[\s\S]*?\n---\n/, '').trim();
+  return roleFile(role).replace(/^---[\s\S]*?\n---\n/, '').trim();
+}
+
+// The Claude Code tools an agent's frontmatter grants (`tools: Read, Grep, …`).
+function roleTools(role) {
+  const fm = /^---\n([\s\S]*?)\n---\n/.exec(roleFile(role));
+  const line = fm && fm[1].split('\n').find((l) => /^tools:/.test(l));
+  if (!line) fail(`agents/${role}.md has no tools: list`, 'plugin_broken');
+  return line.slice('tools:'.length).split(',').map((x) => x.trim()).filter(Boolean);
+}
+
+const and = (xs) => (xs.length <= 1 ? xs.join('') : `${xs.slice(0, -1).join(', ')} and ${xs[xs.length - 1]}`);
+
+// "Your tools": names only the tools this role has, so a read-only or shell-less role is never
+// told to Write, Edit or use Bash. The role's own rules (what to read, what it may change) stay
+// in agents/<role>.md; this section only says how to use the tools it holds.
+function toolsText(role) {
+  const t = roleTools(role);
+  const has = (x) => t.includes(x);
+  const read = ['Read', 'Grep', 'Glob'].filter(has);
+  const edit = ['Write', 'Edit'].filter(has);
+  const web = ['WebSearch', 'WebFetch'].filter(has);
+  const L = ['## Your tools', `- You have ${and(t)}, and nothing else.`];
+  if (read.length) L.push(`- Read files, including anything in the job folder, with ${and(read)}.`);
+  if (edit.length) L.push(`- Change files only with ${and(edit)}, and only the ones this run tells you to.${has('Write') && has('Edit') ? ' If Edit cannot match a long passage, rewrite the whole file with Write.' : ''}`);
+  else L.push(`- You have no file-editing tool: leave every file in the repository and the job folder as you found it${has('Bash') ? ', including through Bash' : ''}.`);
+  if (has('Bash')) {
+    L.push(edit.length
+      ? "- Use Bash for the project's own commands, git, and the factory CLI shown above."
+      : '- Use Bash only for commands that change nothing in the repository or the job folder (git diff, log and show; listing or running tests), and for the factory CLI shown above.');
+    L.push("- Never run python, node or other interpreter scripts against the job folder or the factory's own files, not even to pretty-print JSON or replace a section: the guard blocks it and the attempt is logged.");
+  }
+  if (web.length) L.push(`- ${and(web)}: only for what your role's rules allow.`);
+  return L.join('\n');
 }
 
 function schema(name) {
@@ -51,13 +112,10 @@ function fullText(role, context, schemaName, withRole = false) {
     '## This run',
     context.trim(),
     '',
-    '## Working with files',
-    '- Read files (including anything in the job folder) with the Read, Grep and Glob tools. Change files with Write and Edit, and only the ones this run tells you to.',
-    '- Never run python, node or other interpreter scripts against the job folder or the factory\'s own files, not even to pretty-print JSON or replace a section: the guard blocks it and the attempt is logged. If Edit cannot match a long passage, rewrite the whole file with Write.',
-    '- Use Bash for the project\'s own commands and the factory CLI shown above.',
+    toolsText(role),
     '',
     '## Your output',
-    'Return only one JSON object that matches this schema — no prose before or after it:',
+    'Your final message is the JSON object your role\'s "Your final message" section describes, and nothing else. This run\'s exact schema:',
     '```json',
     JSON.stringify(schema(schemaName)),
     '```',
@@ -65,6 +123,7 @@ function fullText(role, context, schemaName, withRole = false) {
 }
 
 function prompt(role, context, schemaName, tail = '') {
+  if (!(ROLE_OUTPUTS[role] || []).includes(schemaName)) fail(`Brief for ${role} uses schema ${schemaName}, which its agent file does not describe`, 'plugin_broken');
   if (!RUN) {
     const text = fullText(role, context, schemaName, true);
     return tail ? `${text}\n\n${tail}` : text;
@@ -76,7 +135,7 @@ function prompt(role, context, schemaName, tail = '') {
   return [
     `You are running as the Software Factory's ${role} (your role instructions are your system prompt). Before doing anything else, read this run's context and the exact JSON output schema from this file:`,
     `  ${file}`,
-    'Follow your role and that context exactly, and finish by returning only that JSON object.',
+    'Follow your role and that context, and finish with that JSON object as your final message.',
     tail ? `\n${tail}` : '',
   ].join('\n').trim();
 }
@@ -146,17 +205,14 @@ function clarify(root, state, ctx, acceptDegraded) {
   const jc = jobContext(root, state, ['H1', 'EH1']);
   const askedText = asked.map((q) => `  - ${q}`).join('\n') || '  - (none)';
   const answersText = answers.map((a) => `  - Q: ${a.question}\n    A: ${a.answer}`).join('\n') || '  - (none)';
-  const protocol = [
-    `- Question protocol: categories in priority order ${cfg.priority.join(' > ')}. While any intent question is open, only intent questions are asked; the rest wait.`,
-    '- Every question: one line, answerable in one line (multiple choice with 2-4 options when possible), with why it matters and the default the factory will use if unanswered.',
-  ].join('\n');
+  const protocol = `- Question priority: ${cfg.priority.join(' > ')}.`;
   const fanout = cfg.fanout.map((f) => ({
     id: `${f.role}:${f.focus}`,
     ...agentSpec(state, f.role),
     category: f.category || questions.FOCUS_CATEGORY[f.focus] || 'scope',
     gate: Boolean(f.gate),
     label: `analyst · ${f.focus}`,
-    prompt: prompt(f.role, `${jc}\n- Your focus: **${f.focus}** (category: ${f.category || 'scope'}) — ${f.brief}${f.gate ? '\n- You are the intent gate: you run first and alone. Mark a question blocking only if the problem, who, outcome or success signal is genuinely unclear; the other angles wait until you have none. Fill restatement with your one-line readings.' : ''}\n${protocol}\n- Round ${round}. Questions already asked (never repeat them):\n${askedText}\n- Answers given earlier:\n${answersText}`, 'analyst'),
+    prompt: prompt(f.role, `${jc}\n- Your focus: **${f.focus}** (category: ${f.category || 'scope'}) — ${f.brief}${f.gate ? '\n- You are the intent gate (see your role\'s rules for the intent focus).' : ''}\n${protocol}\n- Round ${round}. Questions already asked (never repeat them):\n${askedText}\n- Answers given earlier:\n${answersText}`, 'analyst'),
     schema: schema('analyst'),
   }));
   const judge = {
@@ -170,7 +226,7 @@ function clarify(root, state, ctx, acceptDegraded) {
   };
   const critique = {
     ...agentSpec(state, 'god-eye'),
-    prompt: prompt('god-eye', `${jc}\n- Focus: **intent**. Read ${jobPaths(root, state.id).contract} cold, as someone who has never seen this conversation.\n- First restate, in one line each, the problem, who has it, the outcome and the success signal, from the contract alone. Set intent_confirmed true only if your restatement matches the Intent and Goal sections and they agree with each other.\n- Approve only if intent_confirmed, a builder could start from it without asking anything, and every criterion is provable by its evidence type.`, cfg.critique.schema || 'critique'),
+    prompt: prompt('god-eye', `${jc}\n- Focus: **intent**. The document: ${jobPaths(root, state.id).contract}`, cfg.critique.schema || 'critique'),
     schema: schema(cfg.critique.schema || 'critique'),
     max_rounds: 1,
     when: 'no_questions',
@@ -216,13 +272,13 @@ function decide(root, state, ctx, action) {
     .filter((f) => !(mode === 'recommendation' && f.role === 'threat-modeler'))
     .map((f, i) => {
       if (f.role === 'threat-modeler') {
-        return { id: 'threat-modeler', ...agentSpec(state, 'threat-modeler'), label: 'threat model', prompt: prompt('threat-modeler', `${jc}\n- Write the threat model to ${jp.threatModel}, following ${docs.templatePath('threat-model')} exactly: its front matter, its sections in order, a Mermaid data-flow diagram with every trust boundary as a subgraph, and a STRIDE table with ids TH-1, TH-2…\n- ${docCheck(root, state, jp.threatModel)}\n- Then return its path and the threats.`, 'threat'), schema: schema('threat') };
+        return { id: 'threat-modeler', ...agentSpec(state, 'threat-modeler'), label: 'threat model', prompt: prompt('threat-modeler', `${jc}\n- Write the threat model to ${jp.threatModel}, following ${docs.templatePath('threat-model')}.\n- ${docCheck(root, state, jp.threatModel)}`, 'threat'), schema: schema('threat') };
       }
       return {
         id: `option-${i + 1}`,
         ...agentSpec(state, 'option-generator'),
         label: `option · ${f.prior}`,
-        prompt: prompt('option-generator', `${jc}\n- Your prior: optimise for **${f.prior}**. Other generators optimise for other things; do not hedge toward them.${mode === 'contracts' ? '\n- This is an epic: the option must say which interfaces/contracts get frozen first.' : ''}${mode === 'recommendation' ? '\n- This is a spike: the option is a candidate answer to the research question.' : ''}`, 'option'),
+        prompt: prompt('option-generator', `${jc}\n- Your prior: optimise for **${f.prior}**. Other generators optimise for other things; do not hedge toward them.${mode === 'contracts' ? '\n- This is an epic: list the interfaces/contracts that get frozen first at the top of touches.' : ''}${mode === 'recommendation' ? '\n- This is a spike: the option is a candidate answer to the research question.' : ''}`, 'option'),
         schema: schema('option'),
       };
     });
@@ -234,22 +290,21 @@ function decide(root, state, ctx, action) {
         ? `Write the decision as an ADR (${nextAdr}) following ${tpl('adr')}, the human-readable contracts to ${jp.contractsMd} following ${tpl('contracts')}, and the machine-readable interface list to ${jp.contractsJson}. kind = "contracts".`
         : `If there is a real decision (two or more viable options with different consequences), write an ADR to ${nextAdr} following ${tpl('adr')} (kind "adr"). Otherwise write ${jp.noAdr} following ${tpl('no-adr')} (kind "no-adr").`;
   const rules = [
-    '- Every design doc keeps its template\'s front matter (doc, template, job, title, status, date, contract, related) and its "##" sections in the template\'s order. Every acceptance criterion gets a row in "How each acceptance criterion is met".',
-    mode === 'recommendation' ? '' : `- An ADR needs a Mermaid architecture diagram (a C4-style flowchart: actors and external systems, the system boundary as a subgraph, the modules inside, every edge labelled) that shows how things will look after the change; add a sequenceDiagram under "### Key flow" when ordering matters.${threat ? ' Map every threat id (TH-n) from the threat model in "Threat mitigations".' : ''}`,
+    threat ? `- Threat model: ${jp.threatModel} (map every TH-n id in "Threat mitigations").` : '',
     `- ${docCheck(root, state, '<file>')}`,
   ].filter(Boolean).join('\n');
   const judge = {
     ...agentSpec(state, 'architect'),
-    prompt: prompt('architect', `${jc}\n- ${what}\n${rules}\n- The option generators' outputs${threat ? ' and the threat model' : ''} follow under INPUTS. Record the options you rejected and why.`, 'architect'),
+    prompt: prompt('architect', `${jc}\n- ${what}\n${rules}\n- The option generators' outputs${threat ? ' and the threat model' : ''} follow under INPUTS.`, 'architect'),
     schema: schema('architect'),
   };
   const maxRounds = state.policy.limits.max_design_critique_rounds;
   const critique = {
     ...agentSpec(state, 'god-eye'),
-    prompt: prompt('god-eye', `${jc}\n- Focus: **design**. Read the design record (paths under INPUTS) cold. Approve only if it follows from the findings, meets every criterion, and a planner could split it into tasks.${mode === 'recommendation' ? '' : ' The architecture diagram must match the Decision (same modules, same flows) and be specific to this change, not generic boxes.'}${threat ? ` Check the threat model at ${jp.threatModel} is addressed.` : ''}`, 'critique'),
+    prompt: prompt('god-eye', `${jc}\n- Focus: **design**. The documents: the design record under INPUTS (its paths)${threat ? ` and the threat model at ${jp.threatModel}` : ''}.${mode === 'recommendation' ? ' This is a spike recommendation: it has no architecture diagram.' : ''}`, 'critique'),
     schema: schema('critique'),
     max_rounds: maxRounds,
-    revise: { ...agentSpec(state, 'architect'), prompt: prompt('architect', `${jc}\n- Revise the design record you wrote to address the critique under INPUTS. Keep the same file paths and keep following the templates.\n${rules}`, 'architect'), schema: schema('architect') },
+    revise: { ...agentSpec(state, 'architect'), prompt: prompt('architect', `${jc}\n- Revise the design record you wrote to address the critique under INPUTS, in the same files.\n${rules}`, 'architect'), schema: schema('architect') },
   };
   return base(root, state, 'fanout-judge', { config: 'decide', mode, input_hash: inputHash({ contract: ctx.b.contract, findings: ctx.b.findings }), fanout, judge, critique, verifier: null, threat_model: threat });
 }
@@ -305,7 +360,7 @@ function challenge(root, state, ctx, action) {
       label: `review · ${lane}`,
       prompt: prompt(
         role,
-        `${jc}\n- Lane: **${lane}**\n- See the change with: \`${diffCmd}\`\n- Changed files: ${changed.join(', ') || '(see diff)'}\n${extra}\n- Accepted lessons to check (a broken lesson is a finding with rule "lesson:<id>"):\n${ls.map((l) => `  - ${l.id}: ${l.text}`).join('\n') || '  - (none)'}\n- Give every finding a unique id starting with "${lane}-". Use severity blocker/major only for real defects you can point to.`,
+        `${jc}\n- Lane: **${lane}**\n- See the change with: \`${diffCmd}\`\n- Changed files: ${changed.join(', ') || '(see diff)'}\n${extra}\n- Accepted lessons to check (a broken lesson is a finding with rule "lesson:<id>"):\n${ls.map((l) => `  - ${l.id}: ${l.text}`).join('\n') || '  - (none)'}\n- Finding ids start with "${lane}-"; lane is "${lane}".`,
         'reviewer',
       ),
       schema: schema('reviewer'),
@@ -313,7 +368,7 @@ function challenge(root, state, ctx, action) {
   });
   const verifier = {
     ...agentSpec(state, 'finding-verifier'),
-    prompt_template: prompt('finding-verifier', `${jc}\n- See the change with: \`${diffCmd}\`\n- The finding to verify is given below your pointer to this file.\n- Try to reproduce or disprove it from the code and, where cheap, by running something. Be sceptical in both directions.`, 'verifier', 'The finding to verify:\n{{finding}}'),
+    prompt_template: prompt('finding-verifier', `${jc}\n- See the change with: \`${diffCmd}\`\n- The finding to verify is given below your pointer to this file.`, 'verifier', 'The finding to verify:\n{{finding}}'),
     schema: schema('verifier'),
     severities: cfg.verifier.severities,
   };
@@ -352,7 +407,7 @@ function ground(root, state, ctx, action) {
     id: t,
     ...agentSpec(state, 'researcher'),
     label: `ground · ${t}`,
-    prompt: prompt('researcher', `${jc}\n- Topic: **${t}** — ${brief}\n- Every claim needs a source: file:line, a command and its output, or a URL. If you can't source it, set source to "UNVERIFIED".\n- Answers you already gave:\n${answers.map((a) => `  - Q: ${a.question}\n    A: ${a.answer}`).join('\n') || '  - (none)'}\n- Mark an unknown as blocking only if the design genuinely cannot proceed without your answer.`, 'researcher'),
+    prompt: prompt('researcher', `${jc}\n- Topic: **${t}** — ${brief}\n- Answers the human already gave:\n${answers.map((a) => `  - Q: ${a.question}\n    A: ${a.answer}`).join('\n') || '  - (none)'}`, 'researcher'),
     schema: schema('researcher'),
   }));
   return base(root, state, 'ground', { mode: action.mode || null, input_hash: inputHash({ contract: ctx.b.contract, answers: answers.length }), probes });
@@ -372,14 +427,14 @@ function decompose(root, state, ctx, action) {
     ...agentSpec(state, slices ? 'slicer' : 'planner'),
     prompt: prompt(
       slices ? 'slicer' : 'planner',
-      `${jc}\n- ${what}\n- Then run \`${cli(root)} plan validate --job ${state.id}\` and fix every error before returning. Return valid=true only if that command says valid.\n- Accepted lessons each relevant task must carry:\n${ls.map((l) => `  - ${l.id} (${l.scope.join(', ')}): ${l.text}`).join('\n') || '  - (none)'}`,
+      `${jc}\n- ${what}\n- Validate command: \`${cli(root)} plan validate --job ${state.id}\`\n- Accepted lessons each relevant task must carry:\n${ls.map((l) => `  - ${l.id} (${l.scope.join(', ')}): ${l.text}`).join('\n') || '  - (none)'}`,
       'planner',
     ),
     schema: schema('planner'),
     max_rounds: rounds,
   };
   const critique = action.plan_critique
-    ? { ...agentSpec(state, 'god-eye'), prompt: prompt('god-eye', `${jc}\n- Focus: **plan**. Read ${jp.plan} cold. Approve only if the tasks cover every criterion, are independently buildable, and their verify commands would really prove them.`, 'critique'), schema: schema('critique'), max_rounds: 2 }
+    ? { ...agentSpec(state, 'god-eye'), prompt: prompt('god-eye', `${jc}\n- Focus: **plan**. The document: ${jp.plan}`, 'critique'), schema: schema('critique'), max_rounds: 2 }
     : null;
   return base(root, state, 'decompose', { mode: slices ? 'slices' : 'plan', input_hash: inputHash({ contract: ctx.b.contract, design: ctx.b.design }), planner, critique });
 }
@@ -397,8 +452,8 @@ function realize(root, state, ctx, action) {
     const wt = taskWorktree(root, state.id, t.id);
     const fixNote = state.fix && (state.fix.tasks || []).includes(t.id)
       ? state.fix.kind === 'fix'
-        ? '- This is a FIX round for confirmed review findings (they are in `task show` under fix_findings). Fix the class of bug, not just the instance; list every place you swept in "swept".'
-        : '- This is a VERIFY-FIX round: commands failed on the integrated build (see verify_failures in `task show`). Fix the cause; list swept places.'
+        ? '- This is a fix round for confirmed review findings (`task show` lists them under fix_findings).'
+        : '- This is a verify-fix round: commands failed on the integrated build (`task show` lists them under verify_failures).'
       : t.id && state.tasks[t.id] && state.tasks[t.id].needs_work === 'amendment'
         ? '- The contract or plan was amended; rebuild this task against the amended version.'
         : '';
@@ -412,13 +467,13 @@ function realize(root, state, ctx, action) {
       tester: agentSpec(state, 'tester'),
       builder_prompt: prompt(
         'builder',
-        `${jc}\n- Task: **${t.id}** — ${t.objective}\n- 1. Run \`${cli(root)} task start ${t.id} --job ${state.id}\` (creates or reuses your worktree at ${wt} and merges your dependencies).\n- 2. Run \`${cli(root)} task show ${t.id} --job ${state.id}\` for your full contract, lessons, and any findings or failures to fix.\n- 3. Work only inside ${wt}, only on: ${t.allowed_paths.join(', ')}.\n- 4. Commit on the task branch (git -C "${wt}" commit). Never push, never touch other branches.\n${fixNote}\n- If you need paths outside your allowed paths, stop and return status "blocked" with needs_paths.`,
+        `${jc}\n- Task: **${t.id}** — ${t.objective}\n- Start: \`${cli(root)} task start ${t.id} --job ${state.id}\`\n- Show: \`${cli(root)} task show ${t.id} --job ${state.id}\`\n- Worktree: ${wt}\n- Allowed paths: ${t.allowed_paths.join(', ')}${fixNote ? `\n${fixNote}` : ''}`,
         'builder',
         'Attempt {{attempt}}. Previous tester failures, if any:\n{{failures}}',
       ),
       tester_prompt: prompt(
         'tester',
-        `${jc}\n- Task: **${t.id}** — ${t.objective}\n- Run \`${cli(root)} task verify ${t.id} --job ${state.id}\`. It runs the verify commands in ${wt} and records evidence; its output is the truth. Do not edit any files.\n- Also check the places the builder says it swept (listed below).\n- Return pass exactly as the command reported it, with its evidence_id, and the failures in your own words.`,
+        `${jc}\n- Task: **${t.id}** — ${t.objective}\n- Verify: \`${cli(root)} task verify ${t.id} --job ${state.id}\`\n- Worktree: ${wt}`,
         'tester',
         'Places the builder says it swept: {{swept}}',
       ),
@@ -444,7 +499,7 @@ function reconcile(root, state, ctx) {
       ...agentSpec(state, 'integrator'),
       prompt: prompt(
         'integrator',
-        `${jc}\n- Run \`${cli(root)} reconcile run --job ${state.id}\`.\n- If it reports textual_conflict: resolve the markers in the listed files inside ${jobPaths(root, state.id).worktree}, keep both tasks' intent, git add them, then run \`${cli(root)} reconcile continue --job ${state.id}\`. Repeat until merged.\n- Resolving means combining, never choosing a side: every line the job branch already has from merged tasks or fix rounds stays (\`git checkout --ours/--theirs\` on a whole file is almost always wrong). Where the incoming task changed a line that was rewritten since, re-apply its change on top of the merged version.\n- If it reports regression, the CLI found merged or fixed lines missing from the result: return regression with its message. Do not work around it.\n- If the conflict is behavioural (the tasks' logic disagrees, not just their text), run \`${cli(root)} reconcile abort --job ${state.id}\` and return behavioural_conflict.`,
+        `${jc}\n- Run: \`${cli(root)} reconcile run --job ${state.id}\`\n- Continue: \`${cli(root)} reconcile continue --job ${state.id}\`\n- Abort: \`${cli(root)} reconcile abort --job ${state.id}\`\n- Job worktree: ${jobPaths(root, state.id).worktree}`,
         'integrator',
       ),
       schema: schema('integrator'),
@@ -512,4 +567,4 @@ function currentInputHash(root, state, envelope) {
   }
 }
 
-module.exports = { build, currentInputHash, prompt, roleBody, cli, agentSpec };
+module.exports = { build, currentInputHash, prompt, roleBody, roleTools, toolsText, cli, agentSpec, ROLE_OUTPUTS };

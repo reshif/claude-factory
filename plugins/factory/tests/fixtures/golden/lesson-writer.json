@@ -1,0 +1,13 @@
+{
+  "lessons": [
+    {
+      "id": "L4",
+      "text": "In src/api/**, every handler validates its body with the shared schema before use.",
+      "scope": [
+        "src/api/**"
+      ],
+      "why": "code-3: handler trusted the body unvalidated"
+    }
+  ],
+  "nothing_to_learn": false
+}

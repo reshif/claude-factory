@@ -1,0 +1,11 @@
+{
+  "verdict": "approve",
+  "intent_confirmed": true,
+  "restatement": {
+    "problem": "add(2, 3) returns -1, so cart totals are wrong",
+    "who": "callers of src/add.js (the cart totals)",
+    "outcome": "add returns the arithmetic sum",
+    "success": "tests/add.test.js passes"
+  },
+  "items": []
+}
