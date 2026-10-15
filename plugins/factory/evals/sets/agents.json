@@ -1,0 +1,71 @@
+{
+  "about": "Tier 2 must-not-fire set: factory agents are started only by factory workflows. Outside a workflow, these requests must be handled without starting any factory:* agent. Source of truth for evals/agents/**; regenerate with `node evals/tools/generate.js`.",
+  "cases": [
+    {
+      "id": "code-reviewer-diff",
+      "agent": "code-reviewer",
+      "prompt": "Review this diff:\n```diff\n--- a/src/cart.js\n+++ b/src/cart.js\n@@ -10,7 +10,7 @@ function cartTotal(items, discount) {\n-  const subtotal = items.reduce((s, i) => s + i.price * i.qty, 0);\n+  const subtotal = items.reduce((s, i) => s + i.price, 0);\n   return subtotal - discount;\n }\n```",
+      "expect": "Reviews the diff itself (or with a general-purpose helper) and points out that quantity is no longer multiplied in."
+    },
+    {
+      "id": "code-reviewer-direct",
+      "agent": "code-reviewer",
+      "prompt": "Review this code:\n```js\nexport function applyDiscount(total, code) {\n  if (code = 'SAVE10') return total * 0.9;\n  return total;\n}\n```",
+      "expect": "Reviews the code directly and points out the assignment `=` used instead of a comparison in the if condition."
+    },
+    {
+      "id": "security-reviewer-sql",
+      "agent": "security-reviewer",
+      "prompt": "Is this safe?\n```js\napp.get('/users', (req, res) => {\n  db.query(\"SELECT * FROM users WHERE name = '\" + req.query.name + \"'\", (err, rows) => res.json(rows));\n});\n```",
+      "expect": "Identifies the SQL injection and suggests a parameterised query."
+    },
+    {
+      "id": "test-reviewer-mock",
+      "agent": "test-reviewer",
+      "prompt": "Are these tests any good?\n```js\njest.mock('../src/cart', () => ({ cartTotal: () => 42 }));\nconst { cartTotal } = require('../src/cart');\ntest('total', () => { expect(cartTotal([{ price: 40 }, { price: 2 }])).toBe(42); });\n```",
+      "expect": "Points out that the test mocks away the code under test, so it proves nothing."
+    },
+    {
+      "id": "ux-reviewer-component",
+      "agent": "ux-reviewer",
+      "prompt": "Give me UX feedback on this component:\n```jsx\nexport function Orders() {\n  const [orders, setOrders] = useState([]);\n  useEffect(() => { fetch('/api/orders').then(r => r.json()).then(setOrders); }, []);\n  return <ul>{orders.map(o => <li key={o.id}>{o.total}</li>)}</ul>;\n}\n```",
+      "expect": "Gives UX feedback such as the missing loading, empty and error states."
+    },
+    {
+      "id": "planner-plan",
+      "agent": "planner",
+      "prompt": "Plan the implementation of CSV export for invoices: which files to touch and in what order.",
+      "expect": "Gives an implementation plan directly (or asks about the codebase)."
+    },
+    {
+      "id": "architect-design",
+      "agent": "architect",
+      "prompt": "Design the architecture for a notification service that sends email and SMS. Give me the main components.",
+      "expect": "Proposes components for the notification service."
+    },
+    {
+      "id": "god-eye-critique",
+      "agent": "god-eye",
+      "prompt": "Critique this plan coldly:\n1. Add a `discount` column to orders.\n2. Update the total calculation.\n3. Ship it.",
+      "expect": "Critiques the plan (missing migration, tests, rollback, which calculation)."
+    },
+    {
+      "id": "researcher-library",
+      "agent": "researcher",
+      "prompt": "Research how axios handles retries and timeouts, and whether it retries by default.",
+      "expect": "Answers about axios retries and timeouts (axios does not retry by default)."
+    },
+    {
+      "id": "builder-code",
+      "agent": "builder",
+      "prompt": "Write a function `slugify(title)` that lowercases, trims and replaces runs of non-alphanumerics with a single dash.",
+      "expect": "Writes the slugify function."
+    },
+    {
+      "id": "finding-verifier-claim",
+      "agent": "finding-verifier",
+      "prompt": "A reviewer claims `parseInt(x)` without a radix is a bug in modern JavaScript. Is that finding valid?",
+      "expect": "Assesses the claim (modern engines default to base 10 for decimal strings; the radix still matters for clarity and edge cases)."
+    }
+  ]
+}
