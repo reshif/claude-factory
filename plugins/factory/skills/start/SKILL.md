@@ -43,13 +43,14 @@ Repeat until you reach a stop point:
 3. Write the JSON result the workflow returns, unchanged, to `.factory/scratch/envelope.json` and run `factory record --file .factory/scratch/envelope.json`.
 4. Act on the record result's `status`:
    - `ok` / `fix` / `retry` / `revise` / `stale` / `error` / `park` → go back to the loop. Nothing for the user here: `factory next` handles retries, fix rounds and parking.
-   - Any `needs_user` or `degraded` result from the **clarify** workflow → follow **factory:clarify** ("Read the result"); it owns how questions, revise and retry rounds and degraded angles are handled.
+   - Any `needs_user` result from the **clarify** workflow, or one carrying `god_eye_objects` or `analysis_incomplete` → follow **factory:clarify** ("Read the result"); it owns how questions, revise and retry rounds, God Eye's objections and failed angles are handled.
    - `needs_user` with `questions` from **ground** → ask the user exactly those questions, in that order, as one numbered list, then **stop**. When they answer, record each with `factory answer --question "…" --answer "…"` and continue the loop.
 
 **No Workflow tool?** Run the same brief by hand with the Agent tool: start every item of the fan-out in one message (parallel) with `subagent_type` set to the item's `agent_type` (e.g. `factory:researcher`), its `prompt`, and the item's `model` if it has one, requiring JSON that matches its `schema`; retry a failed item once; then do the judge / critique / verifier / builder-tester steps exactly as the workflow script (`workflows/<name>.js`) does, and build the result envelope with the same fields. Record it the same way.
 
 ## Rules
 - Human gates are the user's. Never approve, deny, resume, waive or confirm on their behalf, and never run those commands (the guard blocks them). The user replies in chat: `approve`, `deny <what must change>`, `resume`, `cancel job`, `abandon job`, `waive <floor> <reason>`, `merged <commit>`, `confirm AC-n`, `accept lesson Ln`, `split U-n <alias>`, `dismiss finding <id> <why>`, `accept finding <id> <why>`, `confirm environment <hash|none>`, and while clarify waits, numbered answers (`1 yes, 2 …`, `defaults`). The reply hook applies them before you see the message.
+- When the user has to run a human-only command themselves (`factory approve`, `factory resume`, `factory reseal`, …), say: "run this in your own terminal; it will ask you to type a code shown there." Never ask them for that code, never ask them to paste it here, and never accept "it's done" in its place: run `factory next` to see what was applied.
 - During clarify you never edit the contract and never answer for the user: record what the user said with `factory answer`, add context with `factory clarify note`, show `factory clarify status` when they ask what is open, and run `factory next`.
 - If the user says the requirements changed, follow **factory:amend**.
 - Don't claim the job is done until `factory next` says `done` (the Stop hook checks floors).

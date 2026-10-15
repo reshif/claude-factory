@@ -166,8 +166,10 @@ allowed. The deny names `factory answer`, `factory clarify note`, `factory clari
   in a row without progress, or at the hard ceiling `limits.max_intent_rounds` (now default
   10; `factory next` parks with `cap.clarify_rounds`).
 - A degraded round (analysts failed after their retry) is retried once automatically
-  (`status: retry`); it counts toward neither rule. A second degraded round in a row asks the
-  user, as before.
+  (`status: retry`); it counts toward neither rule. A second degraded round in a row parks the
+  job (0.15.1), naming the failed analysts: `resume` to try again, or resume and run the round
+  with `--accept-degraded`. A round that went on without an angle says so (`analysis_incomplete`)
+  in its result and at H1.
 - `resume` resets the no-progress counter and, after a ceiling park, allows
   `clarify_no_progress_rounds` more rounds. The round counter itself stays monotonic.
 

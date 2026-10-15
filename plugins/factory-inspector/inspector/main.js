@@ -21,7 +21,7 @@ function requireRoot(opt) {
 function humanOnly(channel) {
   if (channel === 'chat') return;
   if (channel === 'tty' && process.stdin.isTTY && process.stdout.isTTY) return;
-  throw Object.assign(new Error('This is a human-only action. Reply in chat (e.g. "ack finding F3", "inspect mode bug@low sample 10") or run it from your own terminal.'), { code: 'human_only' });
+  throw Object.assign(new Error('This is a human-only action. Reply in chat (e.g. "ack finding F3", "inspect mode bug@low sample 10") or run it in your own terminal: it will ask you to type a code shown there (type it there; never paste it into the chat).'), { code: 'human_only' });
 }
 
 // pending: closed jobs not yet inspected since they closed. explicit: the given job (any status).

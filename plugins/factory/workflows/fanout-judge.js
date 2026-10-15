@@ -128,6 +128,9 @@ function faces(x) {
   for (const a of x.aliases || []) out.push(new Set(tokens(a.text || '')))
   return out.map((f) => new Set([...f].map(wordRoot))).filter((f) => f.size)
 }
+// The job's vocabulary (its title's words) is no evidence of identity: a match must also share
+// two words outside it, or the one a face has (the same rule as cli/core/clarify.js faceMatch)
+const VOCAB = new Set((LG && LG.vocabulary) || [])
 function faceMatch(ta, tb, strict) {
   let shared = 0
   for (const t of ta) if (tb.has(t)) shared += 1
@@ -139,7 +142,16 @@ function faceMatch(ta, tb, strict) {
   if (onlyA && onlyA === onlyB && shared < 5) return false
   const jac = shared / (ta.size + tb.size - shared)
   const ovl = shared / Math.min(ta.size, tb.size)
-  return strict ? jac >= 0.6 : jac >= 0.5 || ovl >= 0.75
+  if (!(strict ? jac >= 0.6 : jac >= 0.5 || ovl >= 0.75)) return false
+  if (!VOCAB.size) return true
+  const a = [...ta].filter((t) => !VOCAB.has(t))
+  const b = new Set([...tb].filter((t) => !VOCAB.has(t)))
+  const need = Math.min(2, a.length, b.size) // a face with one own word needs only that one
+  if (!need) return !a.length && !b.size
+  let own = 0
+  for (const t of a) if (b.has(t)) own += 1
+  if (own < need) return false
+  return own / (a.length + b.size - own) >= 0.34 || own / Math.min(a.length, b.size) >= 0.6
 }
 function sameIssue(a, b) {
   if (a.subject && a.subject === b.subject && (a.subject_explicit || b.subject_explicit)) return true
@@ -252,7 +264,7 @@ function groundQuestions(list) {
 // The ledger's own proposals are asked even if the judge left them out (over budget or held
 // back earlier, God Eye's blockers, the editor's skipped changes), with their default.
 function ledgerAsks(questions, dismissed) {
-  const covered = new Set([...(questions || []).map((q) => String(q.unknown || '').toUpperCase()), ...(dismissed || []).map((x) => String(x.unknown || x.same_as || '').toUpperCase())])
+  const covered = new Set([...(questions || []).map((q) => String(q.unknown || '').toUpperCase()), ...(dismissed || []).filter((x) => String(x.reason || '').trim()).map((x) => String(x.unknown || x.same_as || '').toUpperCase())]) // a dismissal without a reason covers nothing (record.js drops nothing for it)
   const cat = (k) => (['intent', 'scope', 'constraint', 'acceptance'].includes(k) ? k : 'scope')
   return openQuestions().filter((q) => !covered.has(q.unknown)).map((q) => ({
     question: q.ask, category: cat(q.kind), why: q.why || 'Only you can settle it.', default: q.default || 'None: answer needed', unknown: q.unknown, kind: q.kind, subject: q.subject, ...(q.options ? { options: q.options } : {}),
@@ -419,16 +431,20 @@ if (brief.config === 'clarify') {
     if (critique) shaped = shape([...withLedger(judge), ...direct])
   }
   const approved = Boolean(critique && critique.verdict === 'approve' && critique.intent_confirmed !== false)
-  const withNotes = Boolean(critique && !approved && !shaped.questions.length)
+  // God Eye's blockers and majors are never approval: with nothing left to ask, what God Eye
+  // still objects to (settled issues it disputes included) goes to H1 as its objections, for the
+  // user to approve over explicitly. Only minor items make an approve-with-notes.
+  const objections = critique && !approved && !shaped.questions.length ? (critique.items || []).filter((it) => it && it.issue && ['blocker', 'major'].includes(it.severity)).map((it) => ({ ref: it.ref || null, severity: it.severity, issue: String(it.issue).slice(0, 300), ...(it.suggestion ? { suggestion: String(it.suggestion).slice(0, 300) } : {}) })) : []
+  const withNotes = Boolean(critique && !approved && !shaped.questions.length && !objections.length)
   const status = degraded.length && !brief.accept_degraded ? 'degraded' : shaped.questions.length ? 'needs_user' : critique ? 'ok' : 'needs_user'
   const summary = degraded.length
     ? `Missing angle(s): ${degraded.join(', ')}.`
     : shaped.questions.length
       ? `${shaped.questions.length} ${shaped.intent_open ? 'intent ' : ''}question(s) for you.${held.length ? ` Held until intent is clear: ${held.map((f) => f.id).join(', ')}.` : ''}`
-      : critique ? `God Eye: ${approved ? 'approve' : withNotes ? `approve with notes (${notes.length})` : critique.verdict}.` : 'No critique.'
+      : critique ? `God Eye: ${approved ? 'approve' : withNotes ? `approve with notes (${notes.length})` : objections.length ? `${critique.verdict}; it objects to ${objections.length} item(s), shown at H1` : critique.verdict}.` : 'No critique.'
   const ledgerNote = led ? ` Ledger: ${led.issues.length} issue(s), ${led.issues.filter((u) => FINALS.has(u.status)).length} closed, ${led.raised.created.length} new, ${led.raised.folded.length + led.raised.notes.length} raised again and folded.` : ''
   const contract = revised ? { text: revised, edits } : edits.length ? { text: null, edits } : null
-  return envelope(status, `${summary}${ledgerNote}`, { analysts: inputs, degraded, quiet, intent_open: shaped.intent_open || (intentOpen && held.length > 0), held_back: held.map((f) => f.id), judge: { ...judge, questions: shaped.questions, held: [...(judge.held || []), ...shaped.held.map((q) => ({ question: q.question, category: q.category }))], over_budget_or_repeat: shaped.dropped }, critique, critiques, approved_with_notes: withNotes, notes, ...(contract ? { contract } : {}), ...(led ? { ledger: { issues: led.issues, raised: led.raised, open: openQuestions() } } : {}) }, { questions: shaped.questions })
+  return envelope(status, `${summary}${ledgerNote}`, { analysts: inputs, degraded, quiet, intent_open: shaped.intent_open || (intentOpen && held.length > 0), held_back: held.map((f) => f.id), judge: { ...judge, questions: shaped.questions, held: [...(judge.held || []), ...shaped.held.map((q) => ({ question: q.question, category: q.category }))], over_budget_or_repeat: shaped.dropped }, critique, critiques, approved_with_notes: withNotes, ...(objections.length ? { god_eye_objects: objections } : {}), notes, ...(contract ? { contract } : {}), ...(led ? { ledger: { issues: led.issues, raised: led.raised, open: openQuestions() } } : {}) }, { questions: shaped.questions })
 }
 
 const degraded = degradedNow([])

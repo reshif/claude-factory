@@ -2,25 +2,25 @@
   "description": "Software Factory enforcement: agents propose, the CLI and these hooks decide.",
   "hooks": {
     "SessionStart": [
-      { "hooks": [ { "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/session-start.js\"", "timeout": 10 } ] }
+      { "hooks": [ { "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/session-start.js\" || { c=$?; command -v node >/dev/null 2>&1 || { echo \"[factory:session] node is not on PATH; factory hooks are off (the guard allows everything)\" >&2; exit 1; }; V=$(node -v 2>/dev/null); case \"$V\" in v[0-9].*|v1[0-3].*) echo \"[factory:session] node $V is too old for the factory hooks (they need Node 14 or newer): factory hooks are off (the guard allows everything)\" >&2;; *) echo \"[factory:session] hook failed (exit $c)\" >&2;; esac; exit 1; }", "timeout": 10 } ] }
     ],
     "UserPromptSubmit": [
-      { "hooks": [ { "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/prompt.js\"", "timeout": 30 } ] }
+      { "hooks": [ { "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/prompt.js\" || { c=$?; command -v node >/dev/null 2>&1 || { echo \"[factory:prompt] node is not on PATH; factory hooks are off (the guard allows everything)\" >&2; exit 1; }; V=$(node -v 2>/dev/null); case \"$V\" in v[0-9].*|v1[0-3].*) echo \"[factory:prompt] node $V is too old for the factory hooks (they need Node 14 or newer): factory hooks are off (the guard allows everything)\" >&2;; *) echo \"[factory:prompt] hook failed (exit $c)\" >&2;; esac; exit 1; }", "timeout": 30 } ] }
     ],
     "PreToolUse": [
-      { "matcher": "Write|Edit|MultiEdit|NotebookEdit|Bash|Read|Grep|Glob|NotebookRead", "hooks": [ { "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/guard.js\"", "timeout": 15 } ] }
+      { "matcher": "Write|Edit|MultiEdit|NotebookEdit|Bash|Read|Grep|Glob|NotebookRead", "hooks": [ { "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/guard.js\" || { c=$?; command -v node >/dev/null 2>&1 || { echo \"[factory:guard] node is not on PATH; factory hooks are off (the guard allows everything)\" >&2; exit 1; }; V=$(node -v 2>/dev/null); case \"$V\" in v[0-9].*|v1[0-3].*) echo \"[factory:guard] node $V is too old for the factory hooks (they need Node 14 or newer): factory hooks are off (the guard allows everything)\" >&2;; *) echo \"[factory:guard] hook failed (exit $c)\" >&2;; esac; exit 1; }", "timeout": 15 } ] }
     ],
     "PostToolUse": [
-      { "matcher": "Bash|Write|Edit|MultiEdit|NotebookEdit|Task|Agent|WebFetch|WebSearch", "hooks": [ { "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/activity.js\"", "timeout": 10 } ] }
+      { "matcher": "Bash|Write|Edit|MultiEdit|NotebookEdit|Task|Agent|WebFetch|WebSearch", "hooks": [ { "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/activity.js\" || { c=$?; command -v node >/dev/null 2>&1 || { echo \"[factory:activity] node is not on PATH; factory hooks are off (the guard allows everything)\" >&2; exit 1; }; V=$(node -v 2>/dev/null); case \"$V\" in v[0-9].*|v1[0-3].*) echo \"[factory:activity] node $V is too old for the factory hooks (they need Node 14 or newer): factory hooks are off (the guard allows everything)\" >&2;; *) echo \"[factory:activity] hook failed (exit $c)\" >&2;; esac; exit 1; }", "timeout": 10 } ] }
     ],
     "SubagentStart": [
-      { "hooks": [ { "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/activity.js\"", "timeout": 10 } ] }
+      { "hooks": [ { "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/activity.js\" || { c=$?; command -v node >/dev/null 2>&1 || { echo \"[factory:subagent-start] node is not on PATH; factory hooks are off (the guard allows everything)\" >&2; exit 1; }; V=$(node -v 2>/dev/null); case \"$V\" in v[0-9].*|v1[0-3].*) echo \"[factory:subagent-start] node $V is too old for the factory hooks (they need Node 14 or newer): factory hooks are off (the guard allows everything)\" >&2;; *) echo \"[factory:subagent-start] hook failed (exit $c)\" >&2;; esac; exit 1; }", "timeout": 10 } ] }
     ],
     "SubagentStop": [
-      { "hooks": [ { "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/subagent-stop.js\"", "timeout": 15 } ] }
+      { "hooks": [ { "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/subagent-stop.js\" || { c=$?; command -v node >/dev/null 2>&1 || { echo \"[factory:subagent-stop] node is not on PATH; factory hooks are off (the guard allows everything)\" >&2; exit 1; }; V=$(node -v 2>/dev/null); case \"$V\" in v[0-9].*|v1[0-3].*) echo \"[factory:subagent-stop] node $V is too old for the factory hooks (they need Node 14 or newer): factory hooks are off (the guard allows everything)\" >&2;; *) echo \"[factory:subagent-stop] hook failed (exit $c)\" >&2;; esac; exit 1; }", "timeout": 15 } ] }
     ],
     "Stop": [
-      { "hooks": [ { "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/stop.js\"", "timeout": 30 } ] }
+      { "hooks": [ { "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/stop.js\" || { c=$?; command -v node >/dev/null 2>&1 || { echo \"[factory:stop] node is not on PATH; factory hooks are off (the guard allows everything)\" >&2; exit 1; }; V=$(node -v 2>/dev/null); case \"$V\" in v[0-9].*|v1[0-3].*) echo \"[factory:stop] node $V is too old for the factory hooks (they need Node 14 or newer): factory hooks are off (the guard allows everything)\" >&2;; *) echo \"[factory:stop] hook failed (exit $c)\" >&2;; esac; exit 1; }", "timeout": 30 } ] }
     ]
   }
 }

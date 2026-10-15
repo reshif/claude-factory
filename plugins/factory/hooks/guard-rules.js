@@ -211,7 +211,7 @@ function isUserRelay(a, b) {
 }
 
 function humanMessage(a, b) {
-  return `"factory ${a}${b && a !== 'approve' && !HUMAN_ONLY.has(a) ? ` ${b}` : ''}" is a human-only action. Ask the human to reply in chat (e.g. "approve", "resume") or run it in their own terminal.`;
+  return `"factory ${a}${b && a !== 'approve' && !HUMAN_ONLY.has(a) ? ` ${b}` : ''}" is a human-only action. Ask the human to reply in chat (e.g. "approve", "resume"), or to run it in their own terminal: it will ask them to type a code shown there. Never ask them for that code or to paste it into the chat.`;
 }
 
 // A path or word that runs the factory CLI: `factory` (a shim on PATH), …/bin/factory, or the

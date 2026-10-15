@@ -20,5 +20,5 @@ One definition per term. The skills and docs use these words in exactly this sen
 | **Deferred to design** | An implementation detail (exact field names, line ranges, command syntax, parser behaviour) clarify hands to ground and decide instead of asking; it never blocks H1. |
 | **God Eye** | The cold critic agent (`factory:god-eye`). It reads the contract, design or plan as if it had never seen the conversation and returns `approve` or `revise`. Clarify loops until it approves and confirms the intent. |
 | **Finding verifier** | An agent that tries to reproduce or disprove one review finding; its verdict decides whether the finding is confirmed or refuted. |
-| **Degraded** | A fan-out step finished without one of its angles or lanes (an agent failed twice). The user decides: re-run, or go on without it. |
+| **Degraded** | A fan-out step finished without one of its angles or lanes (an agent failed twice). The user decides: re-run, or go on without it (in clarify, a second degraded round in a row parks the job and names the failed analysts). |
 | **Decision record** | One line per `factory next` routing decision, with the rule that fired (`factory why` renders them). |

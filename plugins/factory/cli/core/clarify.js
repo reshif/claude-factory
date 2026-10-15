@@ -16,6 +16,7 @@
 // (workflows cannot import). tests/clarify-v2.test.js checks they agree.
 
 const fs = require('fs');
+const path = require('path');
 const { readJson, writeJson, nowIso, fail } = require('../lib/util');
 const { jobPaths, pluginPath } = require('../lib/paths');
 const sealMod = require('../lib/seal');
@@ -78,7 +79,19 @@ function faces(x) {
   for (const a of x.aliases || []) out.push(new Set(tokens(a.text || '')));
   return out.map((f) => new Set([...f].map(wordRoot))).filter((f) => f.size);
 }
-function faceMatch(ta, tb, strict) {
+// The job's own vocabulary (the words of its title, e.g. "Nautobot VLAN sync from Cisco
+// devices") is shared by nearly every issue of that job, so it is no evidence that two issues
+// are the same. It still counts towards the overlap, but a match must also share at least two
+// words outside it (or the one own word of a face that has only one). Without this rule "How
+// does the sync get credentials for the Cisco devices?" folds into a settled "Which Cisco
+// devices does the Nautobot VLAN sync read?" and the credentials issue vanishes as a note on
+// the scoping issue. The workflow keeps the same rule (workflows/fanout-judge.js faceMatch),
+// fed by the brief's ledger.vocabulary.
+function vocabulary(title) {
+  return [...new Set(tokens(title || '').map(wordRoot))];
+}
+const asSet = (bg) => (bg instanceof Set ? bg : new Set(Array.isArray(bg) ? bg : []));
+function faceMatch(ta, tb, strict, bg) {
   let shared = 0;
   for (const t of ta) if (tb.has(t)) shared += 1;
   if (shared < 3) return false;
@@ -90,22 +103,35 @@ function faceMatch(ta, tb, strict) {
   if (onlyA && onlyA === onlyB && shared < 5) return false;
   const jac = shared / (ta.size + tb.size - shared);
   const ovl = shared / Math.min(ta.size, tb.size);
-  return strict ? jac >= 0.6 : jac >= 0.5 || ovl >= 0.75;
+  if (!(strict ? jac >= 0.6 : jac >= 0.5 || ovl >= 0.75)) return false;
+  const B = asSet(bg);
+  if (!B.size) return true;
+  const a = [...ta].filter((t) => !B.has(t));
+  const b = new Set([...tb].filter((t) => !B.has(t)));
+  // two shared own words, or as many as the shorter face has (the same question raised again
+  // word for word may have only one word outside the vocabulary); none on both sides: the
+  // faces are the vocabulary alone and already matched on it
+  const need = Math.min(2, a.length, b.size);
+  if (!need) return !a.length && !b.size;
+  let own = 0;
+  for (const t of a) if (b.has(t)) own += 1;
+  if (own < need) return false;
+  return own / (a.length + b.size - own) >= 0.34 || own / Math.min(a.length, b.size) >= 0.6;
 }
 // Same issue? Deterministic: same_as is handled by the caller; here the subject key, then
-// significant tokens of any face (the issue or one of its aliases).
-function sameIssue(a, b) {
+// significant tokens of any face (the issue or one of its aliases). bg: the job's vocabulary.
+function sameIssue(a, b, bg) {
   // equal subject keys given by an agent; a derived key (the text's first words) is no identity
   // on its own: the words decide
   if (a.subject && a.subject === b.subject && (a.subject_explicit || b.subject_explicit)) return true;
   const strict = Boolean(a.subject_explicit && b.subject_explicit && a.subject !== b.subject);
   const fa = faces(a);
   const fb = faces(b);
-  return fa.some((x) => fb.some((y) => faceMatch(x, y, strict)));
+  return fa.some((x) => fb.some((y) => faceMatch(x, y, strict, bg)));
 }
 const byRef = (list, ref) => list.find((u) => u.id === ref || (u.aliases || []).some((a) => a.id === ref)) || null;
 // The live issue a raised item is about: same_as, then an alias, then the dedup rule.
-function findSame(list, raw) {
+function findSame(list, raw, bg) {
   const ref = String((raw && (raw.same_as || raw.unknown || raw.issue)) || '').trim().toUpperCase();
   if (/^U-\d+$/.test(ref)) {
     const hit = byRef(list, ref);
@@ -113,7 +139,7 @@ function findSame(list, raw) {
   }
   const s = subjectOf(raw);
   const probe = { subject: s.subject, subject_explicit: s.explicit, text: raw.text || raw.question || '' };
-  return list.find((u) => sameIssue(probe, u)) || null;
+  return list.find((u) => sameIssue(probe, u, bg)) || null;
 }
 
 // ---------------------------------------------------------------- classification
@@ -251,11 +277,12 @@ function migrate(state, answers = []) {
   const report = { from: 1, at: nowIso(), folded: [], matched_answers: [], unmatched_answers: [], deferred: [], settled: [], ceiling: L.ceiling, legacy_policy: L.legacy_snapshot, rounds_before: (state.counters && state.counters.clarify_rounds) || 0 };
   const issues = [];
   const into = {};
+  const bg = vocabulary(state.title);
   log.forEach((q, i) => {
     const id = `U-${i + 1}`;
     const s = subjectOf({ text: q.question });
     const probe = { subject: s.subject, subject_explicit: false, text: q.question };
-    const hit = issues.find((x) => sameIssue(probe, x));
+    const hit = issues.find((x) => sameIssue(probe, x, bg));
     if (hit) {
       hit.aliases.push({ id, text: clip(q.question, 300), question_id: q.id });
       into[q.id] = hit.id;
@@ -282,7 +309,7 @@ function migrate(state, answers = []) {
       hit = issueOf(q.id);
       how = a.id ? `by ${a.id}` : 'by question text';
     } else if (!a.id && (!h1At || String(a.at || '') < h1At)) {
-      hit = findSame(issues, { text: a.question || '' });
+      hit = findSame(issues, { text: a.question || '' }, bg);
       how = hit ? 'by overlap' : null;
     }
     if (!hit) {
@@ -430,7 +457,7 @@ function resolveRef(data, state, ref, text) {
       const hit = resolveRef(data, state, q.id);
       if (hit) return hit;
     }
-    return findSame(list.filter((u) => u.status !== 'dropped'), { text });
+    return findSame(list.filter((u) => u.status !== 'dropped'), { text }, vocabulary(state.title));
   }
   return null;
 }
@@ -701,6 +728,7 @@ function view(state, data) {
     trend: tr.trend,
     limits: { ceiling: L.ceiling, no_progress_rounds: L.no_progress, rounds_counted: L.counted, ...(L.before_v2 ? { rounds_before_v2: L.before_v2 } : {}), no_progress_streak: (state.counters && state.counters.clarify_no_progress) || 0 },
     notes: (data.notes || []).slice(-10),
+    dropped: droppedLines(data),
     ...(data.migration ? { migration: data.migration } : {}),
   };
 }
@@ -718,6 +746,10 @@ function statusText(v) {
   if (v.rounds.length) {
     L.push('', 'Round  opened  settled  deferred  asked  progress');
     for (const r of v.rounds) L.push(`${String(r.round).padEnd(6)} ${String(r.opened).padEnd(7)} ${String(r.settled).padEnd(8)} ${String(r.deferred).padEnd(9)} ${String(r.asked).padEnd(6)} ${r.degraded ? 'degraded (not counted)' : r.progress ? 'yes' : 'no'}`);
+  }
+  if ((v.dropped || []).length) {
+    L.push('', 'Dropped:');
+    for (const x of v.dropped) L.push(`  ${x.line}`);
   }
   if (v.issues.some((r) => r.aliases.length)) L.push('', 'Two different issues folded into one? Reply "split <U-n> <alias>" in chat, or run factory clarify split <U-n> <alias> in your own terminal: the alias becomes its own issue again.');
   if (v.questions.length) {
@@ -757,6 +789,103 @@ function nextSummary(root, state) {
     if (!data) return null;
     const v = view(state, data);
     return { open_by_owner: v.open_by_owner, settled: v.totals.settled, deferred_to_design: v.totals.deferred_to_design, questions: v.questions, answer_commands: v.answer_commands, trend: v.trend, status_command: `factory clarify status --job ${state.id}` };
+  } catch {
+    return null;
+  }
+}
+
+// ---------------------------------------------------------------- no issue vanishes
+// A guard factory record applies to every clarify round: each issue known before the round (and
+// each alias), and each issue the workflow says it opened, is still in the ledger with a known
+// status; a newly dropped issue carries the actor and the reason that dropped it. prior: the
+// ledger before the round ({ issues: [{ id, text, status, aliases: [{ id }] }] }).
+function invariant(prior, data, created = []) {
+  const problems = [];
+  const where = new Map();
+  for (const u of data.issues) {
+    where.set(u.id, u);
+    for (const a of u.aliases || []) where.set(a.id, u);
+    if (!STATUSES.includes(u.status)) problems.push(`${u.id} has no known status (${u.status})`);
+  }
+  const before = prior ? prior.issues : [];
+  for (const p of before) {
+    if (!where.has(p.id)) problems.push(`${p.id} (${clip(p.text, 60)}) vanished from the ledger`);
+    for (const a of p.aliases || []) if (!where.has(a.id)) problems.push(`${a.id} (an alias of ${p.id}) vanished from the ledger`);
+  }
+  for (const id of created) if (!where.has(id)) problems.push(`${id}, opened this round, vanished from the ledger`);
+  const wasDropped = new Set(before.filter((u) => u.status === 'dropped').map((u) => u.id));
+  for (const u of data.issues) {
+    if (u.status !== 'dropped' || wasDropped.has(u.id)) continue;
+    const h = dropEvent(u);
+    if (!h || !h.actor || !String(h.text || '').trim()) problems.push(`${u.id} (${clip(u.text, 60)}) was dropped without a recorded reason and actor`);
+  }
+  return problems;
+}
+// Who dropped an issue, and why: its last drop event.
+function dropEvent(u) {
+  return (u.history || []).slice().reverse().find((x) => ['dropped', 'dismissed'].includes(x.event)) || null;
+}
+// "dropped by judge: <reason>", for H1 and clarify status.
+function droppedLines(data) {
+  return data.issues
+    .filter((u) => u.status === 'dropped')
+    .sort((a, b) => num(a.id) - num(b.id))
+    .map((u) => {
+      const h = dropEvent(u) || {};
+      // 0.15.0 dropped on a dismissal with no reason: its note is "dismissed by the judge: " alone
+      const why = String(h.text || '').trim() || (/:\s*$/.test(String(u.note || '')) ? '' : String(u.note || '').trim());
+      return { id: u.id, subject: u.subject, text: clip(u.text, 160), actor: h.actor || null, reason: clip(why, 200), line: `${u.id}: ${clip(u.text, 160).replace(/\s+/g, ' ')} (dropped by ${h.actor || 'unknown'}: ${clip(why || 'no reason recorded', 200).replace(/\s+/g, ' ')})` };
+    });
+}
+
+// What the analysis could not do, so nobody mistakes the contract for checked from every angle.
+// Clarify here does no research (no scouts, no web): its equivalent of a failed mapper is an
+// analyst angle that failed twice and was gone on without (--accept-degraded). Read from the
+// latest round that ran the analysts and counted; a later round that ran every angle clears it.
+// Shown in every round result while it holds, and at H1. null when every angle ran.
+function analysisGaps(data) {
+  const rounds = ((data && data.rounds) || []).filter((r) => !r.quiet && r.ledger && !r.ledger.degraded);
+  const last = rounds[rounds.length - 1];
+  const missing = last && Array.isArray(last.degraded) ? last.degraded.filter(Boolean) : [];
+  if (!missing.length) return null;
+  const one = missing.length === 1;
+  return {
+    missing_angles: missing,
+    round: last.round,
+    text: `Analysis incomplete: ${missing.join(', ')} failed and clarify went on without ${one ? 'it' : 'them'} (--accept-degraded) in round ${last.round}, so the contract was not checked from ${one ? 'that angle' : 'those angles'}.`,
+  };
+}
+
+// God Eye's blockers and majors in a critique: what it objects to. The workflow sends them as
+// god_eye_objects; a critique from before them (0.15.0 counted them as "approve with notes")
+// is read through this.
+function godEyeObjections(crit) {
+  return ((crit && crit.items) || [])
+    .filter((it) => it && it.issue && ['blocker', 'major'].includes(it.severity))
+    .map((it) => ({ ref: it.ref || null, severity: it.severity, issue: String(it.issue).slice(0, 300), ...(it.suggestion ? { suggestion: String(it.suggestion).slice(0, 300) } : {}) }));
+}
+
+// What H1 / EH1 must show besides the contract (factory next carries it as `clarify` on the
+// gate): issues dropped, with who dropped them and why; analyst angles gone on without; what
+// God Eye still objects to.
+function h1Summary(root, state) {
+  try {
+    const raw = load(root, state.id);
+    if (!raw || raw.tampered) return null;
+    const data = ensure(root, state, raw);
+    const out = {};
+    const dropped = droppedLines(data);
+    if (dropped.length) out.dropped = dropped.map((x) => x.line);
+    const gaps = analysisGaps(data);
+    if (gaps) out.analysis_incomplete = gaps.text;
+    // God Eye's objections to this very contract (it did not approve; nothing was left to ask)
+    const crit = readJson(path.join(jobPaths(root, state.id).critiquesDir, 'intent.json'), null);
+    const hash = require('./invalidation').current(root, state).contract;
+    const objects = !crit ? [] : Array.isArray(crit.god_eye_objects) ? crit.god_eye_objects : crit.approved_with_notes && !(crit.verdict === 'approve' && crit.intent_confirmed !== false) ? godEyeObjections(crit) : [];
+    if (crit && crit.hash === hash && objects.length) {
+      out.god_eye_objects = objects.map((o) => `${o.severity}${o.ref ? ` (${o.ref})` : ''}: ${clip(o.issue, 240)}${o.suggestion ? ` — suggests: ${clip(o.suggestion, 160)}` : ''}`);
+    }
+    return Object.keys(out).length ? { ...out, status_command: `factory clarify status --job ${state.id}` } : null;
   } catch {
     return null;
   }
@@ -803,7 +932,8 @@ function deferredFor(root, state) {
 
 module.exports = {
   KINDS, OWNERS, STATUSES, SETTLED_BY, FINAL,
-  tokens, subjectKey, subjectOf, sameIssue, findSame, isImplementationFact, classify, limits, cleanIssue, settle, event,
+  tokens, subjectKey, subjectOf, vocabulary, sameIssue, findSame, isImplementationFact, classify, limits, cleanIssue, settle, event,
   empty, load, save, migrate, ensure, advance, mergeIssues, acceptDefaults, questionSet, resolveRef, applyAnswer, answer, parseNumbered, applyNumbered, note, split, inClarify, isNone, defaultValue,
   rows, totals, trend, view, statusText, status, nextSummary, clarificationLines, deferredLines, writeContract, deferredText, deferredFor, openIds,
+  invariant, droppedLines, analysisGaps, godEyeObjections, h1Summary,
 };

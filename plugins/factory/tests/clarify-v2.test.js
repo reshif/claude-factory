@@ -158,7 +158,7 @@ test('B: the workflow and the CLI apply the same dedup; a raise against a settle
   assert.deepEqual(d2.issues[0].aliases.map((a) => a.id), ['U-2']);
   // the token rule is written twice: the workflow's copy is the CLI's
   const wf = fs.readFileSync(WF, 'utf8');
-  for (const line of ['if (onlyA && onlyA === onlyB && shared < 5) return false', 'return strict ? jac >= 0.6 : jac >= 0.5 || ovl >= 0.75']) assert.ok(wf.includes(line) && fs.readFileSync(path.join(F.PLUGIN, 'cli', 'core', 'clarify.js'), 'utf8').includes(line), line);
+  for (const line of ['if (onlyA && onlyA === onlyB && shared < 5) return false', 'if (!(strict ? jac >= 0.6 : jac >= 0.5 || ovl >= 0.75)) return false', 'if (!need) return !a.length && !b.size', 'return own / (a.length + b.size - own) >= 0.34 || own / Math.min(a.length, b.size) >= 0.6']) assert.ok(wf.includes(line) && fs.readFileSync(path.join(F.PLUGIN, 'cli', 'core', 'clarify.js'), 'utf8').includes(line), line);
 });
 
 test('B: every agent that raises an issue carries same_as and subject in its schema and recipe; every brief carries the ledger', () => {
@@ -274,9 +274,15 @@ test('E: God Eye\'s checklist: unpointed or settled items are notes (approve wit
   // revise, nothing actionable: notes only
   let r = await H.run(WF, brief(deferred), crew({ GOD: () => ({ ...APPROVE, verdict: 'revise', items: [{ issue: 'The goal could be tighter', severity: 'minor' }, { issue: NXOS[1], severity: 'major', ref: 'U-1' }, { issue: 'Log format?', severity: 'major' }] }) }));
   assert.equal(r.result.status, 'ok');
-  assert.equal(r.result.data.approved_with_notes, true);
+  // 0.15.1: majors and blockers are never approval, even about a settled issue: God Eye objects (shown at H1)
+  assert.equal(r.result.data.approved_with_notes, false);
+  assert.deepEqual(r.result.data.god_eye_objects.map((o) => [o.ref, o.severity]), [['U-1', 'major'], [null, 'major']]);
   assert.equal(r.result.data.notes.length, 3);
   assert.match(r.result.data.notes.find((n) => n.ref === 'U-1').text, /already settled \(deferred_to_design/);
+  // only minor items left: approve with notes
+  r = await H.run(WF, brief(deferred), crew({ GOD: () => ({ ...APPROVE, verdict: 'revise', items: [{ issue: 'The goal could be tighter', severity: 'minor' }] }) }));
+  assert.equal(r.result.data.approved_with_notes, true);
+  assert.equal(r.result.data.god_eye_objects, undefined);
   // a pointed blocker: editor → God Eye again → approve
   let god = 0;
   r = await H.run(WF, brief(deferred), crew({
@@ -350,12 +356,14 @@ test('G: rounds without progress park the job (not converging); a waiting questi
   let st = job.load(root, J);
   assert.deepEqual([st.counters.clarify_no_progress, st.counters.clarify_degraded_rounds], [1, 1]);
   assert.equal(clarify.limits(st).counted, 2);
-  // with nothing for the user: a degraded round is a retry, two in a row ask the user
+  // with nothing for the user: a degraded round is a retry, two in a row park the job (0.15.1), naming the analyst
   const r2 = F.makeRepo();
   const J3 = newJob(r2);
   const deg = () => { const bb = F.cli(r2, ['wfargs', 'fanout-judge', '--config', 'clarify']); return F.record(r2, F.envelope(bb, 'degraded', { analysts: [], degraded: ['intent-analyst:ambiguity'], judge: { questions: [], dismissed: [] } })); };
   assert.equal(deg().status, 'retry');
-  assert.equal(deg().status, 'degraded');
+  const parked = deg();
+  assert.equal(parked.status, 'park');
+  assert.match(parked.park_reason, /intent-analyst:ambiguity/);
   st = job.load(r2, J3);
   assert.deepEqual([st.counters.clarify_rounds, clarify.limits(st).counted, st.counters.clarify_no_progress || 0], [2, 0, 0], 'degraded rounds count toward neither rule');
   // two rounds in a row with no progress: not converging → park
