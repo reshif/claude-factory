@@ -4,10 +4,10 @@ Turns a request into a verified, merged change. Claude does the work through spe
 
 | Plugin | Version | What it is |
 |---|---|---|
-| `factory` | 0.12.0 | The orchestrator: skills, hooks, the `factory` CLI, workflows, agents, recipes, templates and the console |
+| `factory` | 0.12.1 | The orchestrator: skills, hooks, the `factory` CLI, workflows, agents, recipes, templates and the console |
 | `factory-inspector` | 0.3.0 | An independent auditor: checks each job against the rulebook it declared and the factory's health |
 
-0.12.0 adds the console's **Blueprint** view (the factory as an engineering drawing set) and makes every view show review data faithfully: unverified findings stay visibly blocking, outcomes are coloured by what they mean, and the Crew's tools come from the agent files.
+0.12.0 adds the console's **Blueprint** view (the factory as an engineering drawing set) and makes every view show review data faithfully: unverified findings stay visibly blocking, outcomes are coloured by what they mean, and the Crew's tools come from the agent files. 0.12.1: when clarify asks you questions, the Blueprint shows it as your turn (a Q callout at Contract), matching the Board.
 
 ## How it fits together
 

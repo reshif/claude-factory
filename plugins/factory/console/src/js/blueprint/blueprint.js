@@ -41,7 +41,9 @@
   function fill(n) { clear(n); return kids(n, [].slice.call(arguments, 1)); }
 
   // ------------------------------------------------------------------ fixed vocabulary
-  var GATE = { awaiting_intent_approval: "H1", awaiting_design_approval: "H2", awaiting_findings_approval: "HF", awaiting_plan_approval: "H3", awaiting_ship_approval: "HS", awaiting_amendment_approval: "A", parked: "P" };
+  // Q is not a recipe gate: clarify asked questions only you can answer (adapter.js BP_GATE_OF). It waits on you like a
+  // gate (callout, amber, Your turn) but has no step ring on the line: there is no such step to light.
+  var GATE = { awaiting_answers: "Q", awaiting_intent_approval: "H1", awaiting_design_approval: "H2", awaiting_findings_approval: "HF", awaiting_plan_approval: "H3", awaiting_ship_approval: "HS", awaiting_amendment_approval: "A", parked: "P" };
   var DONE_STATES = { closed: 1, findings_delivered: 1, cancelled: 1, abandoned: 1 };
   var STOPPED_STATES = { cancelled: 1, abandoned: 1 };   // finished, but not done: red and ■, as the Board's Stopped
   var TYPE_NAME = { feature: "feature", bug: "bug fix", hotfix: "hotfix", spike: "spike", refactor: "refactor", migration: "migration", dependency: "dependency update", docs: "docs", greenfield: "greenfield" };   // policy work_types
@@ -69,7 +71,7 @@
   var LOOPS = { intent: "questions", design: "revise", plan: "revise" };   // "revise" is said in words: wd("revise")
   // the return rails: work sent back to Build, each on its own level above the row (up = px above the row's top)
   var RAILS = [{ from: "verify", name: "Checks failed: sent back", up: 38, land: 18 }, { from: "review", name: "Changes asked: sent back", up: 68, land: 0 }, { from: "ship", name: "CI failed: sent back", up: 98, land: -18 }];
-  var NEXT = { received: "intake next", intent: "intent loop running", designing: "design in progress", planning: "planner writing the plan", building: "builders at work", integrating: "combining the task branches", verifying: "re-running every check", reviewing: "reviewers at work", ready_to_ship: "the report, then a pull request or a local merge", awaiting_ship_approval: "your ship sign-off", pr_open: "you merge: on GitHub, or locally and reply merged <commit>", merged: "the merge result is verified again", post_merge_review: "review after merge due", learning: "distill proposes lessons, then close checks every floor", closed: "closed", findings_delivered: "findings delivered", amending: "changing the contract and plan", needs_replan: "needs a new plan", cancelled: "cancelled", abandoned: "abandoned" };
+  var NEXT = { received: "intake next", intent: "intent loop running", awaiting_answers: "your answers, then clarify runs the next round", designing: "design in progress", planning: "planner writing the plan", building: "builders at work", integrating: "combining the task branches", verifying: "re-running every check", reviewing: "reviewers at work", ready_to_ship: "the report, then a pull request or a local merge", awaiting_ship_approval: "your ship sign-off", pr_open: "you merge: on GitHub, or locally and reply merged <commit>", merged: "the merge result is verified again", post_merge_review: "review after merge due", learning: "distill proposes lessons, then close checks every floor", closed: "closed", findings_delivered: "findings delivered", amending: "changing the contract and plan", needs_replan: "needs a new plan", cancelled: "cancelled", abandoned: "abandoned" };
   var STAGE_TONE = { intake: .10, intent: .18, design: .26, plan: .34, build: .48, verify: .56, review: .64, ship: .74, done: .10, change: .3, parked: .2, stopped: .1 };
   var VIEWS = ["line", "globe", "board", "sched", "agents", "learn"];
   var VIEW_NAME = { line: "The line", globe: "Projection", board: "Matrix", sched: "Schedule", agents: "Parts list", learn: "General notes", epics: "Epic register", eflow: "Epic assembly", ebreak: "Epic breakdown" };
@@ -198,12 +200,12 @@
   // The console's shared glossary (core/words.js, given to displays as api.words) when it exists; until then, and for
   // any word it lacks, this local copy with the same mapping. Internal ids (H1, AC-2, states) stay as small tags.
   var LOCAL_WORDS = {
-    gate: { H1: "Approve the contract", H2: "Approve the design", H3: "Approve the plan", H4: "Merge", HF: "Approve the findings",
+    gate: { Q: "Answer clarify's questions", H1: "Approve the contract", H2: "Approve the design", H3: "Approve the plan", H4: "Merge", HF: "Approve the findings",
             HS: "Sign off the ship", A: "Approve a change to the criteria", P: "Parked: your call",
             EH1: "Approve the epic's goal", EH2: "Approve the epic's architecture", EH3: "Approve the slices", EA: "Approve a change to the epic" },
     lane: { code: "Code review", tests: "Test review", security: "Security review", ux: "Usability review", conformance: "Conformance review" },
     state: {
-      received: "Just in", intent: "Writing the contract", awaiting_intent_approval: "Waiting for you: contract", designing: "Designing",
+      received: "Just in", intent: "Writing the contract", awaiting_answers: "Waiting for you: questions", awaiting_intent_approval: "Waiting for you: contract", designing: "Designing",
       awaiting_design_approval: "Waiting for you: design", awaiting_findings_approval: "Waiting for you: findings", planning: "Planning",
       awaiting_plan_approval: "Waiting for you: plan", building: "Building", integrating: "Combining the work", verifying: "Checking",
       reviewing: "Reviewing", ready_to_ship: "Ready to ship", awaiting_ship_approval: "Waiting for you: ship", pr_open: "Waiting for you: merge", merged: "Merged",
@@ -305,6 +307,8 @@
     function gateOf(j, t) { var s = stateAt(j, t); if (!s) return null; if (GATE[s]) return GATE[s]; if (s === "pr_open") return "H4"; return null; }
     function chatReply(j, g) {
       var wo = j.waiting_on;   // the reply the prompt hook applies, from the data ("approve J-0004 H3 · deny J-0004 …")
+      // clarify's questions: answered in your own words (Claude records them with factory answer), not a hook reply
+      if (g === "Q") return wo && wo.gate === "Q" && wo.answer ? { main: wo.answer, alt: wo.hint || "" } : { main: "1 <your answer>, 2 <your answer>", alt: "answer clarify's questions by number, in your own words; skip one and it takes its default" };
       if (wo && wo.reply && wo.gate === g) { var parts = String(wo.reply).split(/\s+·\s+/); return { main: parts[0], alt: parts.length > 1 ? "or: " + parts.slice(1).join(" · ") : "" }; }
       if (g === "P") return { main: "resume " + j.id, alt: "or: cancel job · abandon job" };
       if (g === "H4") return { main: "merged " + j.id + " <commit>", alt: "after you merge it on GitHub or locally" };
@@ -781,14 +785,16 @@
       kids(g, [Z("line", { x1: x + SW / 2, y1: rw.SY + rw.SH, x2: x + SW / 2, y2: BY, "class": ag ? "ln-agent" : "ln2", "stroke-dasharray": "2 2" }), Z("circle", { cx: x + SW / 2, cy: rw.SY + rw.SH, r: 2.5, fill: ag ? "var(--agent)" : "var(--ink)" }),
         boxText(x, BY, SW, BH, { "class": "paper2", stroke: ag ? "var(--agent)" : "var(--ink-2)", "stroke-width": ag ? 1.6 : 1.1 })]);
       // the bank's name, and how many of its agents are at work
-      var cnt = bk.members.length ? (ag ? Math.min(ag, bk.members.length) + " of " + bk.members.length + " at work" : "idle") : "", cw = cnt ? measure(cnt, "t2", 13, 600) + 18 : 0;
+      // a bank whose station holds a job waiting on your answers is not idle: it waits on you (clarify's questions)
+      var waitsQ = !ag && recs.some(function (r) { return r.g === "Q"; });
+      var cnt = bk.members.length ? (ag ? Math.min(ag, bk.members.length) + " of " + bk.members.length + " at work" : waitsQ ? "waiting on you" : "idle") : "", cw = cnt ? measure(cnt, "t2", 13, 600) + 18 : 0;
       if (ag && measure(bk.name, "t-disp tight", 13, 700) + cw + 16 > SW) { cnt = Math.min(ag, bk.members.length) + " of " + bk.members.length; cw = measure(cnt, "t2", 13, 600) + 18; }
       kids(g, [tx(x + 8, BY + 19, bk.name, { "font-size": 13, "class": "t-disp tight", "font-weight": 700, "data-fit": SW - 14 - cw })]);
-      if (cnt) kids(g, [tx(x + SW - 8, BY + 19, cnt, { "text-anchor": "end", "font-size": 13, "class": ag ? "t-agent" : "t3", "font-weight": 600 })]);
+      if (cnt) kids(g, [tx(x + SW - 8, BY + 19, cnt, { "text-anchor": "end", "font-size": 13, "class": ag ? "t-agent" : waitsQ ? "t-hl" : "t3", "font-weight": 600 })]);
       var ry = 0;
       groups.forEach(function (gr) {
         var cy = BY + 40 + ry * 21, jobs = work[gr.role] || [], lit = Math.min(gr.n, jobs.length), lx = x + 13;
-        var row = Z("g", { "class": "lamprow" + (lit ? " on" : "") }, Z("title", null, gr.name + (gr.n > 1 ? " ×" + gr.n : "") + (gr.role === "god-eye" ? " (" + wd("godEyeSub") + ")" : "") + (jobs.length ? " — at work on " + uniq(jobs.map(function (j) { return j.slug + " (" + fD(S.t - j.since) + ")"; })).join(", ") : " — idle")));
+        var row = Z("g", { "class": "lamprow" + (lit ? " on" : "") }, Z("title", null, gr.name + (gr.n > 1 ? " ×" + gr.n : "") + (gr.role === "god-eye" ? " (" + wd("godEyeSub") + ")" : "") + (jobs.length ? " — at work on " + uniq(jobs.map(function (j) { return j.slug + " (" + fD(S.t - j.since) + ")"; })).join(", ") : waitsQ ? " — waiting on your answers" : " — idle")));
         for (var n = 0; n < gr.n; n++) kids(row, [n < lit ? Z("circle", { cx: lx + n * 14, cy: cy, r: 5.5, "class": "lamp-ring pulse" }) : null, Z("circle", { cx: lx + n * 14, cy: cy, r: 5.5, "class": "lamp" + (n < lit ? " on" : "") })]);
         var tx0 = lx + gr.n * 14 + 4;
         var nmx = gr.name + (gr.n > 1 && !lit ? " ×" + gr.n : "");
@@ -1164,12 +1170,13 @@
       });
       // an epic (not drawn here) waiting at a gate: the decision and the exact reply
       S.epicTurn.forEach(function (e, i) {
-        var parts = String(e.reply).split(" · ");
+        // clarify's questions (Q) are answered in your own words, with no terminal command; a gate has its exact reply
+        var parts = String(e.reply || "").split(" · "), rq = e.gate === "Q" ? { main: e.answer, alt: e.hint || "" } : { main: parts[0], alt: parts.length > 1 ? "or: " + parts.slice(1).join(" · ") : "" };
         kids(sec, [H("div", { "class": "note" }, H("span", { "class": "num", text: String(ng + EG.length + i + 1) }),
           H("div", { "class": "what" }, gv(e.gate), " ", H("span", { "class": "chip tag", text: e.gate })),
           H("div", { "class": "head" }, H("b", { text: e.id }), " ", H("span", { "class": "chip mute", text: "epic · on the Board" })),
           H("div", { "class": "meta", text: e.title + " · waiting " + fD(t - P(e.gate_at)) + " · since " + fT(P(e.gate_at)) }),
-          replyBox({ main: parts[0], alt: parts.length > 1 ? "or: " + parts.slice(1).join(" · ") : "" }, "factory approve " + e.gate + " --job " + e.id))]);
+          replyBox(rq, e.gate === "Q" ? null : "factory approve " + e.gate + " --job " + e.id))]);
       });
       S.lessonsWaiting.forEach(function (l, i) {
         var rep = "accept lesson " + l.id;
@@ -1541,7 +1548,7 @@
     }
     function gateWaitChart(jobs, t) {
       var per = {}; jobs.forEach(function (j) { intervals(j, t).forEach(function (iv) { var g = GATE[iv.state] || (iv.state === "pr_open" ? "H4" : null); if (!g) return; (per[g] = per[g] || []).push(iv.b - iv.a); }); });
-      var rows = ["H1", "H2", "HF", "H3", "HS", "A", "P", "H4"].filter(function (g) { return per[g]; }).map(function (g) { return { label: g + " · " + per[g].length + "×", work: 0, wait: per[g].reduce(function (a, b) { return a + b; }, 0) / per[g].length }; });
+      var rows = ["Q", "H1", "H2", "HF", "H3", "HS", "A", "P", "H4"].filter(function (g) { return per[g]; }).map(function (g) { return { label: g + " · " + per[g].length + "×", work: 0, wait: per[g].reduce(function (a, b) { return a + b; }, 0) / per[g].length }; });
       return dimChart("Human wait per gate · mean", rows, "d4");
     }
 

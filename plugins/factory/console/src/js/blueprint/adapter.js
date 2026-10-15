@@ -7,7 +7,7 @@
 // every other view reads. Nothing here goes back to the CLI.
 const BP_STAGES = [
   { key: 'intake', label: 'Intake', states: ['received'] },
-  { key: 'intent', label: 'Contract', states: ['intent', 'awaiting_intent_approval'] },
+  { key: 'intent', label: 'Contract', states: ['intent', 'awaiting_answers', 'awaiting_intent_approval'] },
   { key: 'design', label: 'Design', states: ['designing', 'awaiting_design_approval', 'awaiting_findings_approval'] },
   { key: 'plan', label: 'Plan', states: ['planning', 'awaiting_plan_approval'] },
   { key: 'build', label: 'Build', states: ['building', 'integrating'] },
@@ -30,9 +30,12 @@ const BP_STEP_STATE = {
   ship: 'ready_to_ship', HS: 'awaiting_ship_approval', H4: 'pr_open', post_merge_challenge: 'post_merge_review', distill: 'learning', close: 'learning',
   amend: 'amending', A: 'awaiting_amendment_approval',
 };
-const BP_GATE_OF = { awaiting_intent_approval: 'H1', awaiting_design_approval: 'H2', awaiting_findings_approval: 'HF', awaiting_plan_approval: 'H3', awaiting_ship_approval: 'HS', awaiting_amendment_approval: 'A', pr_open: 'H4', parked: 'P' };
+// awaiting_answers is not a recipe gate: clarify asked questions only you can answer, and the job waits on your
+// reply as it does at a gate (the Board's "Your turn · Clarify"). "Q" is its pseudo-gate id; it has no step ring.
+const BP_GATE_OF = { awaiting_answers: 'Q', awaiting_intent_approval: 'H1', awaiting_design_approval: 'H2', awaiting_findings_approval: 'HF', awaiting_plan_approval: 'H3', awaiting_ship_approval: 'HS', awaiting_amendment_approval: 'A', pr_open: 'H4', parked: 'P' };
 const BP_MEANING = {
   received: 'the request is in; the router picks the first step', intent: 'clarify drafts the contract and asks only what the repo cannot answer',
+  awaiting_answers: 'you answer clarify\'s questions in Claude Code; a question you skip takes its default',
   awaiting_intent_approval: 'you approve the contract (H1)', designing: 'ground and decide: sourced facts, then a design record',
   awaiting_design_approval: 'you approve the design (H2)', awaiting_findings_approval: 'you accept the findings (HF)',
   planning: 'decompose writes the task waves', awaiting_plan_approval: 'you approve the plan (H3)', building: 'builders work in their own worktrees, testers verify each task',
@@ -50,6 +53,7 @@ function bpHistory(job) {
   let cur = 'received';
   let parkedFrom = null;
   let decided = null; // your reply at a gate: the move off the gate that follows is yours, not the router's
+  let asked = null; // the clarify result whose questions wait on your answers (awaiting_answers)
   const go = (at, to, by, reason) => { if (!at || !to || to === cur) return; hist.push({ at, from: cur, to, by, reason: reason || '' }); cur = to; };
   for (const it of job.timeline || []) {
     if (it.type === 'route') {
@@ -58,12 +62,21 @@ function bpHistory(job) {
       let to = BP_STEP_STATE[step] || cur;
       if (cur === 'merged' && step === 'H4') to = cur; // the CI re-verify of a merge already recorded belongs to the merge
       if (decided && BP_GATE_OF[cur] && to !== cur) { go(it.t, to, 'you', decided); decided = null; continue; }
+      // clarify runs again only after you answered its questions (skill clarify): that move is yours
+      if (cur === 'awaiting_answers' && to === 'intent') { go(it.t, to, 'you', 'you answered'); asked = null; continue; }
+      asked = null;
       go(it.t, to, 'router', it.reason || (it.rule ? `rule ${it.rule}` : ''));
+    } else if (it.type === 'result' && it.raw_step === 'clarify' && it.outcome === 'ask') {
+      // the CLI marks a clarify result that asks you questions `outcome: 'ask'` (cli/core/console.js)
+      const n = bpQuestionCount(it);
+      go(it.t, 'awaiting_answers', 'router', `clarify asked ${n} question(s)`); asked = it;
+    } else if (it.type === 'result' && it.raw_step === 'clarify' && cur === 'awaiting_answers') {
+      go(it.t, 'intent', 'you', 'you answered'); asked = null;
     } else if (it.type === 'human' && (it.action === 'approve' || it.action === 'deny') && BP_GATE_OF[cur]) {
       const g = it.gate || BP_GATE_OF[cur];
       decided = it.action === 'approve' ? `you approved ${g}${it.via && it.via !== 'chat' ? ` (${it.via})` : ''}` : `you asked for changes at ${g}${it.reason ? `: ${it.reason}` : ''}`;
     } else if (it.type === 'park') {
-      parkedFrom = cur; go(it.t, 'parked', it.from === 'manual' ? 'you' : 'router', it.text);
+      asked = null; parkedFrom = cur === 'awaiting_answers' ? 'intent' : cur; go(it.t, 'parked', it.from === 'manual' ? 'you' : 'router', it.text);
     } else if (it.type === 'human' && it.action === 'resume' && cur === 'parked') {
       go(it.t, parkedFrom || 'received', 'you', 'you resumed the job'); parkedFrom = null;
     } else if (it.type === 'human' && it.action === 'merged') {
@@ -81,12 +94,32 @@ function bpHistory(job) {
   } else if (job.status === 'closed') {
     go(end, job.work_type === 'spike' && !job.pr ? 'findings_delivered' : 'closed', 'router', 'job closed');
   } else if (job.status === 'parked' || (job.pending_gate && job.pending_gate.id === 'P')) {
-    if (cur !== 'parked') { parkedFrom = cur; go((job.park && job.park.at) || end, 'parked', 'router', job.park && job.park.reason); }
+    if (cur !== 'parked') { parkedFrom = cur === 'awaiting_answers' ? 'intent' : cur; go((job.park && job.park.at) || end, 'parked', 'router', job.park && job.park.reason); }
   } else if (job.pending_gate) {
     const want = BP_STEP_STATE[job.pending_gate.id];
     if (want) go(job.pending_gate.at, want, 'router', 'waiting on you');
   }
-  return { hist, state: cur, parkedFrom };
+  return { hist, state: cur, parkedFrom, asked: cur === 'awaiting_answers' ? asked : null };
+}
+
+// how many questions a clarify result asked: its question ids, or the count in its text ("2 question(s) for you")
+function bpQuestionCount(it) {
+  if (Array.isArray(it.question_ids) && it.question_ids.length) return it.question_ids.length;
+  const m = /^(\d+) question/.exec(it.text || '');
+  return m ? Number(m[1]) : 0;
+}
+
+// The answer to clarify's questions is not a reply the prompt hook applies: it is ordinary chat that reaches Claude,
+// which records each answer with `factory answer` (skill clarify: "1 yes, skip 2"). There is no terminal command for it.
+function bpAnswer(asked) {
+  const ids = asked && Array.isArray(asked.question_ids) ? asked.question_ids : [];
+  const n = Math.max(1, ids.length || bpQuestionCount(asked || {}));
+  const nums = n === 1 ? ['<your answer>'] : n <= 3 ? Array.from({ length: n }, (_, i) => `${i + 1} <your answer>`) : ['1 <your answer>', '2 <your answer>', `… ${n} <your answer>`];
+  return {
+    answer: nums.join(', '),
+    hint: n === 1 ? `answer ${ids[0] || 'the question'} in your own words; skip it and it takes its default`
+      : `answer ${ids.length ? ids.join(', ') : 'the questions'} by number, in your own words; skip one and it takes its default`,
+  };
 }
 
 function bpTaskStatus(t) {
@@ -160,10 +193,11 @@ function bpActivity(job, hist) {
   return out;
 }
 
-function bpWaiting(job, state) {
+function bpWaiting(job, state, asked) {
   const g = BP_GATE_OF[state];
   if (job.status !== 'active' && job.status !== 'parked') return { who: 'nobody', what: BP_MEANING[state] || state };
   if (!g) return { who: 'agent', what: BP_MEANING[state] || state };
+  if (g === 'Q') return { who: 'you', gate: g, what: BP_MEANING[state], ...bpAnswer(asked), command: null };
   // the replies the prompt hook applies (human.parseReply, the README's "Your replies"), and the same
   // human-only command from your own terminal (factory approve · resume · merged, with --job)
   const reply = g === 'P' ? `resume ${job.id} · cancel job ${job.id} · abandon job ${job.id}` : g === 'H4' ? `merged ${job.id} <commit>` : `approve ${job.id} ${g} · deny ${job.id} <what must change>`;
@@ -182,11 +216,15 @@ function toDisplay(data) {
     // an epic is its own drawing series, not a job on the line: the Board shows it, and its slices run here
     // an epic waiting on your reply at a gate counts in Your turn, as the Board counts it
     if (j.epic) {
-      const g = j.status === 'active' && j.pending_gate && j.pending_gate.id !== 'P' ? j.pending_gate.id : null;
-      epics.push({ id: j.id, title: j.title || j.id, status: j.status, children: (j.children || []).length, gate: g, gate_at: g ? j.pending_gate.at : null, reply: g ? `approve ${j.id} ${g} · deny ${j.id} <what must change>` : null });
+      // and so does one whose clarify asked you questions (Q), as the Board's "Your turn · Clarify"
+      const eh = j.status === 'active' && !j.pending_gate ? bpHistory(j) : null;
+      const q = eh && eh.state === 'awaiting_answers' ? eh.asked : null;
+      const g = j.status === 'active' && j.pending_gate && j.pending_gate.id !== 'P' ? j.pending_gate.id : q ? 'Q' : null;
+      epics.push({ id: j.id, title: j.title || j.id, status: j.status, children: (j.children || []).length, gate: g, gate_at: q ? q.t : g ? j.pending_gate.at : null,
+        ...(q ? { reply: null, ...bpAnswer(q) } : { reply: g ? `approve ${j.id} ${g} · deny ${j.id} <what must change>` : null }) });
       continue;
     }
-    const { hist, state, parkedFrom } = bpHistory(j);
+    const { hist, state, parkedFrom, asked } = bpHistory(j);
     const parent = j.parent ? all.find((x) => x.id === j.parent) : null;
     const challenge = (j.steps || []).find((s) => s.id === 'challenge' && s.lanes);
     const reviews = bpReviews(j);
@@ -196,7 +234,7 @@ function toDisplay(data) {
       id: j.id, slug: j.title || j.id, type: j.work_type || 'feature', risk: j.risk || 'low', state,
       epic: parent && parent.epic ? parent.id : null, slice: parent && parent.epic ? j.id : null,
       created_at: j.created_at, updated_at: j.updated_at, parked_from: parkedFrom,
-      waiting_on: bpWaiting(j, state), rework_loops: hist.filter((h) => h.to === 'building' && ['verifying', 'reviewing', 'integrating', 'ready_to_ship', 'pr_open'].includes(h.from)).length,
+      waiting_on: bpWaiting(j, state, asked), rework_loops: hist.filter((h) => h.to === 'building' && ['verifying', 'reviewing', 'integrating', 'ready_to_ship', 'pr_open'].includes(h.from)).length,
       history: hist,
       tasks: (j.tasks || []).map((t) => ({ id: t.id, objective: t.objective, depends_on: t.depends_on || [], criteria: [], allowed_paths: [], verify_commands: [], status: bpTaskStatus(t), runs: t.attempts || 0 })),
       criteria: bpCriteria(j), reviews, gate: null,
