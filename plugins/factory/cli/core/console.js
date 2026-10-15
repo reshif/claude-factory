@@ -29,6 +29,8 @@ const HUMAN_GATES = new Set(['H1', 'H2', 'H3', 'HF', 'HS', 'EH1', 'EH2', 'EH3', 
 // a crashed or closed session never sends the stop, so past this age, or once the job is no
 // longer active, it is listed as stale instead of running forever.
 const STALE_AGENT_MS = 2 * 3600 * 1000;
+// the workflow runs kept per job (the latest), with their steps
+const MAX_RUNS = 40;
 
 function secretFile() {
   return process.env.FACTORY_SECRET_FILE || path.join(require('os').homedir(), '.config', 'software-factory', 'secret');
@@ -174,6 +176,20 @@ function jobData(root, id, all, checker, nowMs = Date.now()) {
     if (state.status === 'active' && age >= 0 && age < STALE_AGENT_MS) runningNow.push(a);
     else staleNow.push({ ...a, stale: true });
   }
+
+  // Workflow runs, step by step (run-steps.js): framed by workflow_start (factory wfargs) and
+  // workflow_end (factory record), with the agents the hooks saw start and stop in between. A run
+  // with no end is at work while the job is active and the run was busy recently, as an agent with
+  // no stop is. Older logs have no such lines: no runs, and the page shows the agents as before.
+  const RS = require('./run-steps');
+  const allRuns = RS.fromEvents(events, { stepOfDecision, alive: (r, last) => state.status === 'active' && nowMs - Date.parse(last) < STALE_AGENT_MS });
+  const runs = allRuns.slice(-MAX_RUNS).map((r) => {
+    const v = RS.view(r);
+    return { ...r, stage: STAGE_OF[r.step] || null, steps: v.steps, at: v.at, of: v.of, next: v.next };
+  });
+  const lastByStage = {};
+  for (const r of runs) if (r.stage && r.status !== 'running') lastByStage[r.stage] = r.id;
+  const liveRun = runs.filter((r) => r.status === 'running').pop() || null;
 
   const T = [];
   let seq = 0;
@@ -323,6 +339,8 @@ function jobData(root, id, all, checker, nowMs = Date.now()) {
     timeline: T,
     running_agents: runningNow,
     stale_agents: staleNow,
+    runs,
+    runs_live: { running: liveRun ? liveRun.id : null, last_by_stage: lastByStage },
     tasks,
     lessons,
   };

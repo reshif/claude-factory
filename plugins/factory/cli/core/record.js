@@ -268,6 +268,8 @@ function apply(root, { jobId, file, envelope }) {
   if (errs.length) fail(`Envelope invalid:\n- ${errs.join('\n- ')}`, 'bad_envelope', errs);
   const state = job.resolve(root, jobId || env.job);
   if (state.id !== env.job) fail(`Envelope is for ${env.job}, not ${state.id}`, 'bad_input');
+  // the workflow came back: its run ends here, with the roster (console step list, run-steps.js)
+  require('./wfrun').end(root, { job: state.id, workflow: env.workflow, config: env.config || null, outcome: env.status === 'error' ? 'failed' : 'ok', status: env.status, error: env.status === 'error' ? env.summary : null, roster: env.agents });
   if (state.status !== 'active') fail(`${state.id} is ${state.status}; nothing recorded.`, 'not_active');
 
   budgets.addAgentRuns(state, env.budgets && env.budgets.used && env.budgets.used.agent_runs);

@@ -121,7 +121,7 @@ The factory records what it does, so the separate `factory-inspector` plugin can
 
 - **`recipe.lock.json`.** A sealed snapshot of each job's rulebook, taken at creation. It holds the full recipe and its hash, the floors, the selection rules and the inputs that chose the recipe, the limits, and a hash of the plugin's skills, agents and workflows.
 - **Decision ids.** Every routing decision has an id (`J-0001-D0007`) plus the step, workflow, config, command, skill and gate hash it chose. Human actions record which decision they happened `during`.
-- **`events.jsonl`.** One sealed line per `factory` command: its arguments (long prose truncated), the job, and the decision id in force. For `wfargs` and `record` lines it also holds the workflow and config. The log also records guard denials, refused chat replies, Stop blocks, hook failures (`hook_error`), agent starts and stops, and tool activity for tools that change things (Bash, edits, Task/Agent, web fetches).
+- **`events.jsonl`.** One sealed line per `factory` command: its arguments (long prose truncated), the job, and the decision id in force. For `wfargs` and `record` lines it also holds the workflow and config. The log also records guard denials, refused chat replies, Stop blocks, hook failures (`hook_error`), agent starts and stops, and tool activity for tools that change things (Bash, edits, Task/Agent, web fetches). Each workflow run is framed by a `workflow_start` line (from `factory wfargs`, with what the brief plans to run) and a `workflow_end` line (from `factory record`, with the envelope's roster); distill's by `distill context` and `distill done`. Both carry a run id, the job and the decision id, like the agent lines between them.
 
 ## 6c. The console (`cli/core/console.js`, `console/console.html`)
 
@@ -137,6 +137,7 @@ The factory records what it does, so the separate `factory-inspector` plugin can
   - parks and amendments from the event log; amendment re-binds collapse into one event
   - follow-up jobs
   - the inspector's findings from `.factory/inspect/register.json`, anchored to the decision or moment they cite
+- **Workflow runs.** `cli/core/run-steps.js` folds each run into its steps. A workflow script cannot run a command and the Workflow tool shows its `phase()` calls to no hook, so the steps are worked out from what reaches the log live: each agent that starts goes to the step its role belongs to in the workflow's template (the steps in the order its script runs them), from the step in force onwards; realize's builders and testers go to the wave of the task they name. The run's `workflow_end` roster then adds each agent's label and outcome: failures and retries show once the run is recorded. A run with no end is at work while the job is active and the run was busy within two hours; a later `factory next` or brief cuts it off. The page carries the same file, so a replay folds the steps as they stood. Older logs have no `workflow_start` lines and no runs.
 - **Seals.** They are checked only when this machine already has the key; the result is `verified`, `tampered` or `not_checked`. The console never creates a key (`seal.secret()` would).
 - **The page.** It folds the timeline into a state per event, groups events into rows, and draws a flow canvas:
   - stage columns with a lane per step, and time running downward
