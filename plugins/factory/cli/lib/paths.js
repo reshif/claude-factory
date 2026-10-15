@@ -59,6 +59,7 @@ function jobPaths(root, jobId) {
     noAdr: path.join(d, 'no-adr.md'),
     recommendation: path.join(d, 'recommendation.md'),
     answers: path.join(d, 'answers.json'),
+    clarifyLedger: path.join(d, 'clarify-ledger.json'),
     contractsMd: path.join(d, 'contracts.md'),
     contractsJson: path.join(d, 'contracts.json'),
     plan: path.join(d, 'plan.json'),

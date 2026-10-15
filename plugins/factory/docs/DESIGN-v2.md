@@ -189,7 +189,7 @@ Inside the conditions above, the recipe decides the order of not-yet-run steps.
 |---|---|
 | Outcome tree depth | 2 |
 | Minimum task size | ≥ 1 AC and ≥ 1 verify command |
-| `clarify` rounds | `max_intent_rounds` (CLI refuses at +2) |
+| `clarify` rounds | `clarify_no_progress_rounds` in a row without progress, or the ceiling `max_intent_rounds` (clarify v2: [DESIGN-CLARIFY-v2.md](DESIGN-CLARIFY-v2.md)) |
 | `decide` critique rounds | 2 |
 | `decompose` validate rounds | 3 |
 | `realize` attempts per task | `retry_limit` (with model escalation) |

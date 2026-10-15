@@ -133,6 +133,12 @@ function invariants(schema, o, { role } = {}) {
       if (o.held && o.held.length && !o.questions.some((q) => q.category === 'intent')) e.push('held questions with no intent question open');
       for (const d of o.dismissed) if (!d.reason.trim()) e.push(`dismissed "${d.question}" without a reason`);
       break;
+    case 'contract-edit':
+      if (!/^## Intent$/m.test(o.contract)) e.push('the revised contract has no Intent section');
+      for (const a of o.applied) if (!a.ref.trim() || !a.change.trim()) e.push('an applied change without its ref or what changed');
+      for (const s of o.skipped) if (!s.reason.trim()) e.push(`skipped ${s.ref} without a reason`);
+      for (const r of o.removed || []) if (!r.because.trim()) e.push(`removed ${r.ref} without a reason`);
+      break;
     case 'researcher':
       for (const c of o.claims) if (!SOURCE.test(c.source)) e.push(`claim "${c.claim}" has source "${c.source}" (file:line, "command → output", URL or UNVERIFIED)`);
       break;
@@ -187,6 +193,7 @@ test('golden outputs match their schemas strictly and hold their semantic invari
     ['lesson', { lessons: [], nothing_to_learn: false }],
     ['judge', { questions: [{ question: 'a', category: 'intent', why: 'w', default: 'd' }, { question: 'b', category: 'scope', why: 'w', default: 'd' }], dismissed: [] }],
     ['researcher', { topic: 't', claims: [{ claim: 'c', source: 'I think so' }], unknowns: [] }],
+    ['contract-edit', { contract: '# x\n\n## Goal\nno intent here', applied: [], skipped: [], removed: [{ ref: 'AC-2', because: '' }] }],
   ];
   for (const [schema, value] of bad) assert.ok(invariants(schema, value).length > 0, `${schema} invariant rejects ${JSON.stringify(value)}`);
   // strict mode catches a field the schema lacks (the option-generator drift the audit found)
@@ -255,6 +262,12 @@ test('golden replay: bug@low through the real workflows, with an unverifiable fi
         return clarifyRound === 1 ? golden('judge') : golden('judge', 'none');
       case 'god-eye':
         return golden('god-eye', 'intent-approve');
+      case 'contract-editor': {
+        // clarify v2: the editor applies the user's answer (round 2) to the contract it was given, as its golden shows
+        const cur = fs.readFileSync(path.join(F.jobDir(root, J), 'contract.md'), 'utf8');
+        const g = golden('contract-editor');
+        return { ...g, contract: cur.replace('## Non-goals\n', '## Non-goals\n- Numeric strings are not converted\n') };
+      }
       case 'researcher':
         return golden('researcher', null, { topic: (/Topic: \*\*([\w ]+)\*\*/.exec(text) || [])[1] });
       case 'builder': {

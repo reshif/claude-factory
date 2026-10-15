@@ -53,7 +53,7 @@
   var BANKS = {
     intake: { name: "No agents", members: [] },
     // clarify's fan-out (config/workflows/clarify.json): the intent analyst first, then three more angles, the judge, God Eye
-    intent: { name: "Clarify agents", members: [["intent-analyst", "analysts ×4"], ["judge", "judge"], ["god-eye", "God Eye"]] },
+    intent: { name: "Clarify agents", members: [["intent-analyst", "analysts ×4"], ["judge", "judge"], ["contract-editor", "contract editor"], ["god-eye", "God Eye"]] },
     design: { name: "Design agents", members: [["researcher", "researcher"], ["option-generator", "option generator"], ["threat-modeler", "threat-modeler"], ["architect", "architect"], ["god-eye", "God Eye"]] },
     plan: { name: "Plan agents", members: [["planner", "planner"], ["god-eye", "God Eye"]] },
     build: { name: "Build agents", members: [["builder", "builder"], ["builder", "builder"], ["tester", "tester"], ["tester", "tester"], ["integrator", "integrator"]] },
@@ -732,7 +732,7 @@
     }
 
     // an agent bank: every member a named lamp; lit (and naming its job) while that agent is at work
-    var ROLE_NAME = { "option-generator": "option generator", "intent-analyst": "analyst", judge: "judge", "god-eye": "God Eye", researcher: "researcher", "threat-modeler": "threat model", architect: "architect",
+    var ROLE_NAME = { "option-generator": "option generator", "intent-analyst": "analyst", judge: "judge", "contract-editor": "contract editor", "god-eye": "God Eye", researcher: "researcher", "threat-modeler": "threat model", architect: "architect",
       planner: "planner", slicer: "slicer", builder: "builder", tester: "tester", integrator: "integrator", "finding-verifier": "finding verifier", "lesson-writer": "lesson writer" };
     var ROLE_LANE = { "code-reviewer": "code", "test-reviewer": "tests", "security-reviewer": "security", "ux-reviewer": "ux", "epic-reviewer": "conformance" };
     var LANE_ROLE = { code: "code-reviewer", tests: "test-reviewer", security: "security-reviewer", ux: "ux-reviewer", conformance: "epic-reviewer" };
@@ -790,7 +790,7 @@
       return (S.runAt[key] = { key: key, live: live[0] || null, more: live.slice(1), last: last });
     }
     var STEP_ROLE = { researcher: ["probe", "probes"], "intent-analyst": ["analyst", "analysts"], judge: ["judge", "judges"],
-      "god-eye": ["God Eye", "God Eye"], "option-generator": ["option", "options"], "threat-modeler": ["threat model", "threat models"], architect: ["architect", "architect"], planner: ["planner", "planner"],
+      "god-eye": ["God Eye", "God Eye"], "contract-editor": ["contract editor", "contract editor"], "option-generator": ["option", "options"], "threat-modeler": ["threat model", "threat models"], architect: ["architect", "architect"], planner: ["planner", "planner"],
       slicer: ["slicer", "slicer"], builder: ["builder", "builders"], tester: ["tester", "testers"], integrator: ["integrator", "integrator"], "finding-verifier": ["verifier", "verifiers"], "lesson-writer": ["lesson writer", "lesson writer"] };
     function stepRole(role, n, key) {
       if (ROLE_LANE[role]) return ROLE_LANE[role] + " lane";
@@ -1466,6 +1466,8 @@
       if (api.conversation) out.push(H("section", { "class": "sec-blk cvblk", "aria-label": "Latest exchange about this job, as of " + fT(t) }, api.conversation(j.id, t)));
       // 2. path
       out.push(H("section", { "class": "sec-blk" }, H("h3", null, "Path", H("em", { text: "each stop is a stay at a station · amber stripe = waiting on you · ↺ = " + wd("revise") })), pathHTML(j, t)));
+      // 2a. clarify v2: the issue ledger (status, owner, next action), the per-round trend, what went to design
+      if (j.clarify && j.clarify.issues && j.clarify.issues.length) out.push(clarifyBlock(j));
       // 2b. workflow runs: each run's steps, as they stood at the replay time, the latest first
       out.push(runsBlock(j, t));
       // 3. tasks by wave
@@ -1520,6 +1522,33 @@
       // 7. history
       out.push(H("section", { "class": "sec-blk hist" }, H("h3", null, "History by station", H("em", { text: plural(j.history.filter(function (h) { return P(h.at) <= t; }).length, "move") })), historyNodes(j, t)));
       fill(secBody, H("div", { "class": "sec-wrap" }, out));
+    }
+    // The Clarify block: the ledger as factory clarify status prints it (the latest state, not replayed)
+    var CL_STATUS = { open: "open", proposed: "with you", settled: "settled", deferred_to_design: "to design", dropped: "dropped" };
+    var CL_BY = { user: "by you", assumption_accepted: "default accepted", design_deferral: "deferred" };
+    function clarifyBlock(j) {
+      var c = j.clarify, tt = c.totals || {}, o = c.open_by_owner || {}, rounds = arr(c.rounds);
+      var mx = Math.max.apply(null, [1].concat(rounds.map(function (r) { return Math.max(r.opened, r.settled); })));
+      var bar = function (n, cls) { return H("i", { "class": "clb " + cls, style: { height: (Math.round((n / mx) * 28) + (n ? 2 : 0)) + "px" }, title: String(n) }); };
+      var trend = rounds.length ? H("div", { "class": "cltrend", role: "img", "aria-label": "Per round: issues opened and settled" },
+        rounds.map(function (r) {
+          return H("span", { "class": "clr" + (r.degraded ? " deg" : r.progress ? "" : " np"), title: "round " + r.round + ": " + r.opened + " opened, " + r.settled + " settled, " + r.deferred + " deferred, " + r.asked + " asked" + (r.degraded ? " · degraded, not counted" : r.progress ? "" : " · no progress") },
+            bar(r.opened, "op"), bar(r.settled, "st"), H("b", { text: "R" + r.round }));
+        }), H("span", { "class": "cllg" }, H("i", { "class": "clb op" }), "opened ", H("i", { "class": "clb st" }), "settled · " + c.trend)) : H("p", { "class": "meta", text: c.trend });
+      var rows = arr(c.issues).map(function (r) {
+        return H("tr", { "class": "cl-" + r.status },
+          H("td", { "class": "clid" }, r.id, r.aliases && r.aliases.length ? H("div", { "class": "meta", title: "folded duplicates", text: "= " + r.aliases.join(", ") }) : null),
+          H("td", null, H("code", { text: r.subject || "—" }), H("div", { "class": "meta", text: r.title })),
+          H("td", null, H("span", { "class": "chip " + (r.status === "settled" ? "ok" : r.status === "proposed" ? "hl" : r.status === "deferred_to_design" ? "tag" : "mute"), text: CL_STATUS[r.status] || r.status }), r.settled_by ? H("div", { "class": "meta", text: CL_BY[r.settled_by] || r.settled_by }) : null),
+          H("td", { "class": "clid", text: r.owner }),
+          H("td", { text: r.next }));
+      });
+      var qs = arr(c.questions).length ? H("div", { "class": "clq" }, H("h4", null, "Waiting on you", H("em", { text: plural(c.questions.length, "question") + " · reply 1 yes, 2 …, or defaults" })),
+        c.questions.map(function (q) { return H("div", { "class": "clqi" }, H("b", { text: q.id }), " " + q.question + (q.default ? " (default: " + q.default + ")" : ""), H("div", null, H("code", { text: "factory answer " + q.id + " \"…\"" }), q.default ? H("code", { text: "factory answer " + q.id + " --default" }) : null)); })) : null;
+      var def = arr(c.deferred).length ? H("div", { "class": "cld" }, H("h4", null, "Handed to design", H("em", { text: "ground and decide settle these; they do not block H1" })),
+        H("ul", null, c.deferred.map(function (d) { return H("li", null, H("b", { text: d.id }), " ", H("code", { text: d.subject }), " " + d.title); }))) : null;
+      return H("section", { "class": "sec-blk clarify" }, H("h3", null, "Clarify", H("em", { text: tt.issues + " issues · " + tt.closed + " closed · open: you " + (o.user || 0) + ", design " + (o.design || 0) + (c.migrated ? " · migrated from v1" : "") })),
+        trend, qs, H("div", { "class": "cltblw" }, H("table", { "class": "cltbl" }, H("tr", null, H("th", { text: "Issue" }), H("th", { text: "Subject" }), H("th", { text: "Status" }), H("th", { text: "Owner" }), H("th", { text: "Next" })), rows)), def);
     }
     var RUN_NAME = { "fanout-judge:clarify": "Clarify", "fanout-judge:decide": "Decide", "fanout-judge:challenge": "Challenge", ground: "Ground", decompose: "Decompose", realize: "Realize", reconcile: "Reconcile", distill: "Distill" };
     function runName(v) { return RUN_NAME[v.workflow + ":" + v.config] || RUN_NAME[v.workflow] || (v.workflow + (v.config ? " " + v.config : "")); }
@@ -1716,7 +1745,7 @@
         if (a.phase === "denied") r.den++; r.last = a;
       });
       var active = {}; S.agents.forEach(function (a) { active["factory:" + a.agent] = 1; });
-      var order = ["factory:intent-analyst", "factory:judge", "factory:god-eye", "factory:option-generator", "factory:researcher", "factory:architect", "factory:threat-modeler", "factory:planner", "factory:slicer", "factory:builder", "factory:tester", "factory:integrator", "factory:code-reviewer", "factory:test-reviewer", "factory:security-reviewer", "factory:ux-reviewer", "factory:finding-verifier", "factory:epic-reviewer", "factory:lesson-writer"];
+      var order = ["factory:intent-analyst", "factory:judge", "factory:contract-editor", "factory:god-eye", "factory:option-generator", "factory:researcher", "factory:architect", "factory:threat-modeler", "factory:planner", "factory:slicer", "factory:builder", "factory:tester", "factory:integrator", "factory:code-reviewer", "factory:test-reviewer", "factory:security-reviewer", "factory:ux-reviewer", "factory:finding-verifier", "factory:epic-reviewer", "factory:lesson-writer"];
       var keys = order.concat(Object.keys(roles).filter(function (k) { return order.indexOf(k) < 0; }).sort());
       var bw = 260;
       var rowsN = keys.map(function (k, i) {

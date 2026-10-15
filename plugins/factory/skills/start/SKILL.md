@@ -24,7 +24,7 @@ Repeat until you reach a stop point:
 
 | action | what you do |
 |---|---|
-| `skill` | Follow the factory skill named in `skill` (clarify, ship, distill, amend), then go back to step 1. |
+| `skill` | Follow the factory skill named in `skill` (clarify, ship, distill, amend), then go back to step 1. For clarify, `clarify` carries the ledger summary: open issues by owner, the open questions and the exact `answer_commands`. |
 | `workflow` | Run it as described under **Running a workflow** below, then go back to step 1. |
 | `cli` | Run exactly the `command` shown. Read its JSON. If it failed, show the user the message and run `factory next` again (the CLI decides whether to retry or park). |
 | `evidence` | A criterion needs a doc or diff record, not a code change. For each AC in `acs`, check the build (the job worktree) shows it, then run its line in `commands` yourself with the real file path (relative to the repository root). If it isn't there, tell the user and stop. Then go back to step 1. |
@@ -42,14 +42,15 @@ Repeat until you reach a stop point:
 2. Start the workflow **`factory:<workflow>`** with the Workflow tool, passing that JSON, unchanged, as its args.
 3. Write the JSON result the workflow returns, unchanged, to `.factory/scratch/envelope.json` and run `factory record --file .factory/scratch/envelope.json`.
 4. Act on the record result's `status`:
-   - `ok` / `fix` / `retry` / `stale` / `error` / `park` → go back to the loop. Nothing for the user here: `factory next` handles retries, fix rounds and parking.
-   - Any `needs_user` or `degraded` result from the **clarify** workflow → follow **factory:clarify** ("Read the result"); it owns how questions, critique, problems and degraded angles are handled.
+   - `ok` / `fix` / `retry` / `revise` / `stale` / `error` / `park` → go back to the loop. Nothing for the user here: `factory next` handles retries, fix rounds and parking.
+   - Any `needs_user` or `degraded` result from the **clarify** workflow → follow **factory:clarify** ("Read the result"); it owns how questions, revise and retry rounds and degraded angles are handled.
    - `needs_user` with `questions` from **ground** → ask the user exactly those questions, in that order, as one numbered list, then **stop**. When they answer, record each with `factory answer --question "…" --answer "…"` and continue the loop.
 
 **No Workflow tool?** Run the same brief by hand with the Agent tool: start every item of the fan-out in one message (parallel) with `subagent_type` set to the item's `agent_type` (e.g. `factory:researcher`), its `prompt`, and the item's `model` if it has one, requiring JSON that matches its `schema`; retry a failed item once; then do the judge / critique / verifier / builder-tester steps exactly as the workflow script (`workflows/<name>.js`) does, and build the result envelope with the same fields. Record it the same way.
 
 ## Rules
-- Human gates are the user's. Never approve, deny, resume, waive or confirm on their behalf, and never run those commands (the guard blocks them). The user replies in chat: `approve`, `deny <what must change>`, `resume`, `cancel job`, `abandon job`, `waive <floor> <reason>`, `merged <commit>`, `confirm AC-n`, `accept lesson Ln`.
+- Human gates are the user's. Never approve, deny, resume, waive or confirm on their behalf, and never run those commands (the guard blocks them). The user replies in chat: `approve`, `deny <what must change>`, `resume`, `cancel job`, `abandon job`, `waive <floor> <reason>`, `merged <commit>`, `confirm AC-n`, `accept lesson Ln`, `split U-n <alias>`, and while clarify waits, numbered answers (`1 yes, 2 …`, `defaults`). The reply hook applies them before you see the message.
+- During clarify you never edit the contract and never answer for the user: record what the user said with `factory answer`, add context with `factory clarify note`, show `factory clarify status` when they ask what is open, and run `factory next`.
 - If the user says the requirements changed, follow **factory:amend**.
 - Don't claim the job is done until `factory next` says `done` (the Stop hook checks floors).
 - `factory why --format md` explains every routing decision if the user asks why something happened.

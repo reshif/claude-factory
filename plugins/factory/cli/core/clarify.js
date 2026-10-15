@@ -1,0 +1,808 @@
+'use strict';
+// Clarify v2: the issue ledger (docs/DESIGN-CLARIFY-v2.md).
+//
+// The ledger is the job's sealed jobs/<J>/clarify-ledger.json: every question clarify raises
+// is an issue (U-n) with a stable subject, an owner (user | design) and a status
+// (open → proposed → settled, or deferred_to_design / dropped) and how it was settled. The
+// CLI owns it: the workflow proposes, `factory record` re-applies the rules, `factory answer`,
+// `factory clarify note` and `factory clarify split` are the only other writers.
+//
+// Clarify here has no research phase (no scouts, no evidence): the analysts read the
+// repository themselves and the judge dismisses what it answers. So an issue is the user's
+// (only the requester can settle it) or design's (an implementation detail ground and decide
+// settle); nothing is settled "by evidence".
+//
+// The subject and dedup rules are written twice: here and in workflows/fanout-judge.js
+// (workflows cannot import). tests/clarify-v2.test.js checks they agree.
+
+const fs = require('fs');
+const { readJson, writeJson, nowIso, fail } = require('../lib/util');
+const { jobPaths, pluginPath } = require('../lib/paths');
+const sealMod = require('../lib/seal');
+
+const KINDS = ['intent', 'scope', 'constraint', 'acceptance', 'decision', 'user'];
+const OWNERS = ['user', 'design'];
+const STATUSES = ['open', 'proposed', 'settled', 'deferred_to_design', 'dropped'];
+const SETTLED_BY = ['user', 'assumption_accepted', 'design_deferral'];
+const FINAL = new Set(['settled', 'deferred_to_design', 'dropped']);
+
+// ---------------------------------------------------------------- subjects and identity
+const STOP = new Set('a an the of to for in on at by with and or is are be been does do did should shall which what when where who whom how this that these those it its as from into per than then there their our we you your can could will would must may might not no yes any all each either via vs about exact exactly precise specific confirm confirmed check verify whether if use used using uses one two new current currently today get gets set sets'.split(' '));
+const SYN = { cli: 'command', cmd: 'command', commands: 'command', syntax: 'command', configures: 'configure', configured: 'configure', configuring: 'configure', configuration: 'configure', config: 'configure', ports: 'port', interfaces: 'interface', vlans: 'vlan', fields: 'field', names: 'name', lines: 'line' };
+const ALSO_STOP = new Set(['form', 'forms', 'way', 'kind', 'thing', 'value', 'list']);
+
+function norm(s) {
+  return String(s || '').toLowerCase().replace(/\b([a-z0-9]{1,3})-([a-z0-9]{1,3})\b/g, '$1$2');
+}
+function stem(w) {
+  if (SYN[w]) return SYN[w];
+  let x = w;
+  if (x.length > 4 && x.endsWith('ies')) x = `${x.slice(0, -3)}y`;
+  else if (x.length > 5 && /(ches|shes|xes|sses)$/.test(x)) x = x.slice(0, -2);
+  else if (x.length > 3 && x.endsWith('s') && !/(ss|os|us|is)$/.test(x)) x = x.slice(0, -1);
+  return SYN[x] || x;
+}
+// Significant tokens of a text, in order of first appearance.
+function tokens(text) {
+  const out = [];
+  for (const w of norm(text).split(/[^a-z0-9]+/)) {
+    if (!w || w.length < 2 || STOP.has(w) || /^\d+$/.test(w)) continue;
+    const s = stem(w);
+    if (STOP.has(s) || ALSO_STOP.has(s) || out.includes(s)) continue;
+    out.push(s);
+  }
+  return out;
+}
+// The normalised subject key: "NX-OS switchport command" → "nxos.switchport.command".
+function subjectKey(s) {
+  return tokens(norm(s).replace(/[._/:-]+/g, ' ')).join('.');
+}
+// An issue's subject: the agent's, normalised, or derived from its text (first four tokens).
+function subjectOf(raw) {
+  if (raw && raw.subject && subjectKey(raw.subject)) return { subject: subjectKey(raw.subject), explicit: true };
+  return { subject: tokens((raw && (raw.text || raw.question)) || '').slice(0, 4).join('.'), explicit: false };
+}
+// For comparing faces only (subject keys keep tokens()): "failed"/"fails", "required"/"require"
+// and "allowed"/"allows" meet on one root.
+function wordRoot(w) {
+  let x = w;
+  if (x.length > 5 && x.endsWith('ing')) x = x.slice(0, -3);
+  else if (x.length > 4 && x.endsWith('ed')) x = x.slice(0, -2);
+  if (x.length > 4 && x.endsWith('e')) x = x.slice(0, -1);
+  return x;
+}
+// The faces an issue is known by: its subject and text, and each alias's text.
+function faces(x) {
+  const subj = tokens(norm(x.subject).replace(/[._/:-]+/g, ' '));
+  const out = [new Set([...subj, ...tokens(x.text || x.question || '')])];
+  for (const a of x.aliases || []) out.push(new Set(tokens(a.text || '')));
+  return out.map((f) => new Set([...f].map(wordRoot))).filter((f) => f.size);
+}
+function faceMatch(ta, tb, strict) {
+  let shared = 0;
+  for (const t of ta) if (tb.has(t)) shared += 1;
+  if (shared < 3) return false;
+  // a word swapped for another ("native VLAN" / "allowed VLANs", "leaf" / "spine", "add" /
+  // "remove"): that difference may be the point, so fold only on a wide common core. (One side
+  // saying more, "in scope?" / "in scope (leaf, spine, border)?", is not a swap.)
+  const onlyA = ta.size - shared;
+  const onlyB = tb.size - shared;
+  if (onlyA && onlyA === onlyB && shared < 5) return false;
+  const jac = shared / (ta.size + tb.size - shared);
+  const ovl = shared / Math.min(ta.size, tb.size);
+  return strict ? jac >= 0.6 : jac >= 0.5 || ovl >= 0.75;
+}
+// Same issue? Deterministic: same_as is handled by the caller; here the subject key, then
+// significant tokens of any face (the issue or one of its aliases).
+function sameIssue(a, b) {
+  // equal subject keys given by an agent; a derived key (the text's first words) is no identity
+  // on its own: the words decide
+  if (a.subject && a.subject === b.subject && (a.subject_explicit || b.subject_explicit)) return true;
+  const strict = Boolean(a.subject_explicit && b.subject_explicit && a.subject !== b.subject);
+  const fa = faces(a);
+  const fb = faces(b);
+  return fa.some((x) => fb.some((y) => faceMatch(x, y, strict)));
+}
+const byRef = (list, ref) => list.find((u) => u.id === ref || (u.aliases || []).some((a) => a.id === ref)) || null;
+// The live issue a raised item is about: same_as, then an alias, then the dedup rule.
+function findSame(list, raw) {
+  const ref = String((raw && (raw.same_as || raw.unknown || raw.issue)) || '').trim().toUpperCase();
+  if (/^U-\d+$/.test(ref)) {
+    const hit = byRef(list, ref);
+    if (hit) return hit;
+  }
+  const s = subjectOf(raw);
+  const probe = { subject: s.subject, subject_explicit: s.explicit, text: raw.text || raw.question || '' };
+  return list.find((u) => sameIssue(probe, u)) || null;
+}
+
+// ---------------------------------------------------------------- classification
+// Implementation detail belongs to ground/decide, not to clarify: exact API field names,
+// source line ranges, command syntax, parser behaviour.
+const IMPL = /\b(exact|precise|specific)\s+(syntax|commands?|fields?|names?|format|lines?|api|endpoints?|regex|signatures?|parameters?|keys?|path)\b|\b(command|cli)\s+(syntax|forms?|format)\b|\bsyntax\b|\bline ranges?\b|\bline numbers?\b|\blines?\s+\d+\s*[-–]\s*\d+|\b(api|json|payload|response|schema|serializer)\s+(fields?|keys?|attributes?)\b|\bfield names?\b|\battribute names?\b|\bparser\b|\bparsing\b|\bparses\b|\bregex\b|\bwhich ([\w-]+ )?(cli )?commands?\b|\bcli commands?\b|\bcommand (form|forms|format)\b/i;
+function isImplementationFact(text) {
+  return IMPL.test(String(text || ''));
+}
+// owner from the agent's field ("research" has no lane in this clarify: the user is asked),
+// else the fallback rule; an intent issue is always the user's.
+function classify(raw, kind) {
+  if (kind === 'intent') return 'user';
+  if (raw && raw.owner === 'design') return 'design';
+  if (raw && ['user', 'research'].includes(raw.owner)) return 'user';
+  if (isImplementationFact(`${(raw && (raw.text || raw.question)) || ''} ${(raw && raw.draft) || ''}`)) return 'design';
+  return 'user';
+}
+
+// ---------------------------------------------------------------- limits
+function liveLimits() {
+  try {
+    return readJson(pluginPath('policy', 'default-policy.json')).limits || {};
+  } catch {
+    return {};
+  }
+}
+// Pre-v2 policy snapshots (no clarify_no_progress_rounds) keep their old cap (max + 2) or the
+// new default ceiling, whichever is higher. The rounds such a job ran before clarify v2
+// (counters.clarify_v2_from, set by its first v2 round; until then all of them) do not count
+// against that ceiling: they are the rounds v2 exists to replace.
+function limits(state) {
+  const L = (state.policy && state.policy.limits) || {};
+  const live = liveLimits();
+  const v2 = L.clarify_no_progress_rounds !== undefined;
+  const base = Number(L.max_intent_rounds) || Number(live.max_intent_rounds) || 10;
+  const ceiling = v2 ? base : Math.max(base + 2, Number(live.max_intent_rounds) || 10);
+  const c = state.counters || {};
+  const before = c.clarify_v2_from !== undefined ? Number(c.clarify_v2_from) || 0 : v2 ? 0 : c.clarify_rounds || 0;
+  return {
+    ceiling: ceiling + (c.clarify_bonus_rounds || 0),
+    no_progress: Number(L.clarify_no_progress_rounds ?? live.clarify_no_progress_rounds ?? 2) || 2,
+    counted: Math.max(0, (c.clarify_rounds || 0) - (c.clarify_degraded_rounds || 0) - before),
+    before_v2: before,
+    legacy_snapshot: !v2,
+  };
+}
+
+// ---------------------------------------------------------------- issues
+const clip = (s, n) => String(s === undefined || s === null ? '' : s).slice(0, n);
+const num = (id) => Number(String(id || '').replace(/^[A-Z]-/, '')) || 0;
+const isNone = (d) => !d || /^none\b/i.test(String(d).trim()) || /^your call\.?:?\s*$/i.test(String(d).trim());
+// "Your call: keep coercion" → "keep coercion" (the default itself, not the label)
+const defaultValue = (d) => String(d || '').replace(/^your call\s*:\s*/i, '').trim();
+
+function event(u, round, ev, actor, text) {
+  u.history = u.history || [];
+  u.history.push({ round: round || null, event: ev, actor, ...(text ? { text: clip(text, 300) } : {}), at: nowIso() });
+}
+
+// A v2 issue from anything (a workflow item, an agent's raw output, a migrated question).
+function cleanIssue(u, { round = null } = {}) {
+  const kind = KINDS.includes(u.kind) ? u.kind : 'user';
+  const s = u.subject ? { subject: subjectKey(u.subject) || subjectOf(u).subject, explicit: u.subject_explicit !== false } : subjectOf(u);
+  const owner = OWNERS.includes(u.owner) ? (kind === 'intent' ? 'user' : u.owner) : classify(u, kind);
+  const status = STATUSES.includes(u.status) ? u.status : owner === 'design' ? 'deferred_to_design' : 'proposed';
+  return {
+    id: String(u.id),
+    subject: s.subject,
+    subject_explicit: Boolean(s.explicit),
+    text: clip(u.text || u.question, 400),
+    kind,
+    impact: ['high', 'medium', 'low'].includes(u.impact) ? u.impact : 'high',
+    owner,
+    status,
+    settled_by: SETTLED_BY.includes(u.settled_by) ? u.settled_by : status === 'deferred_to_design' ? 'design_deferral' : null,
+    draft: clip(u.draft || u.text || u.question, 400),
+    ...(Array.isArray(u.options) && u.options.length ? { options: u.options.slice(0, 5).map((o) => clip(o, 160)) } : {}),
+    default: isNone(u.default) ? null : clip(u.default, 300),
+    reason: u.reason ? clip(u.reason, 300) : null,
+    ...(u.why ? { why: clip(u.why, 300) } : {}),
+    question_id: u.question_id || null,
+    answer: u.answer || null,
+    ...(u.answered ? { answered: u.answered } : {}),
+    ...(u.dismissed ? { dismissed: true } : {}),
+    aliases: Array.isArray(u.aliases) ? u.aliases.map((a) => ({ id: String(a.id), text: clip(a.text, 300), ...(a.question_id ? { question_id: String(a.question_id) } : {}) })) : [],
+    notes: Array.isArray(u.notes) ? u.notes.slice(-20) : [],
+    history: Array.isArray(u.history) ? u.history.slice(-40) : [],
+    applied_round: u.applied_round || null,
+    edit_attempts: Number(u.edit_attempts) || 0,
+    note: u.note ? clip(u.note, 300) : null,
+    source: u.source || 'judge',
+    round: u.round || round || null,
+  };
+}
+
+function settle(u, by, round, actor, text) {
+  u.status = 'settled';
+  u.settled_by = by;
+  if (by === 'user') u.owner = 'user'; // the user's word settles it, whoever owned it
+  event(u, round, `settled:${by}`, actor, text);
+}
+
+// ---------------------------------------------------------------- the record
+function empty(state) {
+  return { version: 2, job: state.id, updated_at: null, issues: [], rounds: [], notes: [], sections: null };
+}
+
+// The sealed ledger file: the data, { tampered: true } when its seal fails, or null.
+function load(root, jobId) {
+  const d = readJson(jobPaths(root, jobId).clarifyLedger, null);
+  if (!d) return null;
+  if (!sealMod.valid(d)) return { tampered: true };
+  const { seal: _s, ...rest } = d;
+  return rest;
+}
+function save(root, jobId, data) {
+  const { seal: _s, tampered: _t, ...rest } = data;
+  writeJson(jobPaths(root, jobId).clarifyLedger, sealMod.seal({ ...rest, updated_at: nowIso() }));
+}
+
+// A job that ran clarify before v2: rounds recorded, or questions asked, and no ledger file.
+const ranV1 = (state) => (state.counters && state.counters.clarify_rounds) >= 1 || (state.question_log || []).length > 0;
+
+// ---------------------------------------------------------------- migration (v1 → v2)
+// v1 kept the questions in state.question_log (Q-n, round, category, question, default) and the
+// answers in answers.json (by Q-n, or free-form by question text). Each asked question becomes
+// an issue (U-n in the order asked): subjects derived, paraphrases folded into the earliest id
+// (the others become aliases, with their Q-n), answers settle by user (free-form ones matched
+// by overlap, reported; answers given after H1 are ground's and never matched), and open
+// implementation facts are deferred to design. Returns { data, report }; never touches files.
+function migrate(state, answers = []) {
+  const log = (state.question_log || []).slice().sort((a, b) => num(a.id) - num(b.id));
+  const L = limits(state);
+  const report = { from: 1, at: nowIso(), folded: [], matched_answers: [], unmatched_answers: [], deferred: [], settled: [], ceiling: L.ceiling, legacy_policy: L.legacy_snapshot, rounds_before: (state.counters && state.counters.clarify_rounds) || 0 };
+  const issues = [];
+  const into = {};
+  log.forEach((q, i) => {
+    const id = `U-${i + 1}`;
+    const s = subjectOf({ text: q.question });
+    const probe = { subject: s.subject, subject_explicit: false, text: q.question };
+    const hit = issues.find((x) => sameIssue(probe, x));
+    if (hit) {
+      hit.aliases.push({ id, text: clip(q.question, 300), question_id: q.id });
+      into[q.id] = hit.id;
+      report.folded.push({ id, question_id: q.id, into: hit.id, text: clip(q.question, 160) });
+      return;
+    }
+    const kind = KINDS.includes(q.category) ? q.category : 'scope';
+    const iss = cleanIssue({ id, text: q.question, kind, owner: 'user', status: 'proposed', question_id: q.id, default: q.default, ...(Array.isArray(q.options) ? { options: q.options } : {}), source: 'migration', round: q.round || null });
+    event(iss, q.round || null, 'asked', 'migration', q.id);
+    into[q.id] = id;
+    issues.push(iss);
+  });
+  // Answers: by Q-n, then by the exact question text, then free text by overlap. After H1 an
+  // answer without a Q-n belongs to ground (its blocking questions), never to a clarify issue.
+  const h1 = state.approvals && (state.approvals.H1 || state.approvals.EH1);
+  const h1At = h1 ? String(h1.at || '') : null;
+  const byQ = Object.fromEntries(log.map((q) => [q.id, q]));
+  const issueOf = (qid) => issues.find((x) => x.id === into[qid]) || null;
+  for (const a of answers) {
+    let hit = null;
+    let how = null;
+    const q = a.id ? byQ[a.id] : log.find((x) => String(x.question).toLowerCase().trim() === String(a.question || '').toLowerCase().trim());
+    if (q) {
+      hit = issueOf(q.id);
+      how = a.id ? `by ${a.id}` : 'by question text';
+    } else if (!a.id && (!h1At || String(a.at || '') < h1At)) {
+      hit = findSame(issues, { text: a.question || '' });
+      how = hit ? 'by overlap' : null;
+    }
+    if (!hit) {
+      if (!h1At || String(a.at || '') < h1At) report.unmatched_answers.push({ question: clip(a.question, 160), answer: clip(a.answer, 160) });
+      continue;
+    }
+    // an answer by id or exact text replaces an earlier one (the user corrected it); a match by
+    // overlap only fills an issue nobody answered yet
+    if (how === 'by overlap' && hit.status === 'settled') continue;
+    if (how === 'by overlap') report.matched_answers.push({ question: clip(a.question, 160), issue: hit.id, answer: clip(a.answer, 160) });
+    else report.matched_answers = report.matched_answers.filter((m) => m.issue !== hit.id); // replaced by the user's own answer to it
+    hit.answer = clip(a.answer, 400);
+    hit.answered = { via: 'migration', at: a.at || null, question_id: a.id || (q && q.id) || null };
+    if (hit.status !== 'settled') settle(hit, 'user', null, 'migration', `answer matched ${how}`);
+  }
+  // Implementation facts still open become design's.
+  for (const iss of issues) {
+    if (FINAL.has(iss.status) || iss.kind === 'intent') continue;
+    if (isImplementationFact(`${iss.text} ${(iss.aliases || []).map((x) => x.text).join(' ')}`)) {
+      iss.owner = 'design';
+      iss.status = 'deferred_to_design';
+      iss.settled_by = 'design_deferral';
+      event(iss, null, 'deferred_to_design', 'migration', 'implementation detail: settled in ground/decide');
+      report.deferred.push({ id: iss.id, text: clip(iss.text, 160) });
+    }
+  }
+  report.settled = issues.filter((x) => x.status === 'settled').map((x) => ({ id: x.id, by: x.settled_by }));
+  const data = { ...empty(state), issues, migration: report };
+  return { data, report };
+}
+
+// The ledger for this job: the file, or (a job that ran clarify before v2, or whose ledger
+// fails its seal) the v1 record migrated in memory, or null (clarify never ran).
+function ensure(root, state, raw) {
+  const d = raw === undefined ? load(root, state.id) : raw;
+  if (d && !d.tampered) return d;
+  if (!ranV1(state)) return null;
+  const answers = readJson(jobPaths(root, state.id).answers, []) || [];
+  const out = migrate(state, answers).data;
+  if (d && d.tampered) out.migration.tampered_ledger = true;
+  return out;
+}
+
+// v2 state machine for every issue that is not final (factory record re-applies what the
+// workflow did): design's are deferred, a low-impact issue nobody asked is assumed, an open
+// one is proposed to the user.
+function advance(data, round = null) {
+  for (const u of data.issues) {
+    if (FINAL.has(u.status)) continue;
+    if (u.owner === 'design') {
+      u.status = 'deferred_to_design';
+      u.settled_by = 'design_deferral';
+      event(u, round, 'deferred_to_design', 'cli', 'implementation detail: settled in ground/decide');
+    } else if (u.impact === 'low' && !u.question_id) {
+      u.note = u.note || 'low impact: assumed, not asked';
+      u.answer = u.answer || (isNone(u.default) ? null : defaultValue(u.default));
+      settle(u, 'assumption_accepted', round, 'cli', u.note);
+    } else if (u.status === 'open') u.status = 'proposed';
+  }
+  return data;
+}
+
+// The workflow's issues folded into the ledger. Settled is final: a settled, deferred or
+// dropped issue keeps the CLI's copy (only new notes and aliases come through); the rest take
+// the workflow's view, keeping what the human did (answers, notes) and the history.
+function mergeIssues(data, list, round) {
+  const key = (h) => `${h.round}|${h.event}|${h.actor}|${h.text || ''}`;
+  for (const raw of list || []) {
+    if (!raw || !/^U-\d+$/.test(raw.id || '')) continue;
+    const u = cleanIssue({ round, ...raw }, { round });
+    const i = data.issues.findIndex((x) => x.id === u.id);
+    if (i === -1) {
+      // an id the ledger knows as an alias is the same issue, never a second one
+      const host = data.issues.find((x) => (x.aliases || []).some((a) => a.id === u.id));
+      if (!host) data.issues.push(u);
+      continue;
+    }
+    const old = data.issues[i];
+    const seen = new Set((old.history || []).map(key));
+    const history = [...(old.history || []), ...(u.history || []).filter((h) => !seen.has(key(h)))].slice(-40);
+    const nseen = new Set((old.notes || []).map((n) => `${n.round}|${n.text}`));
+    const notes = [...(old.notes || []), ...(u.notes || []).filter((n) => !nseen.has(`${n.round}|${n.text}`))].slice(-20);
+    const aliases = [...(old.aliases || [])];
+    for (const a of u.aliases || []) if (!aliases.some((x) => x.id === a.id)) aliases.push(a);
+    if (FINAL.has(old.status)) {
+      data.issues[i] = { ...old, history, notes, aliases };
+      continue;
+    }
+    const human = old.answered && old.answer ? { answer: old.answer, answered: old.answered } : {};
+    data.issues[i] = { ...old, ...u, ...human, history, notes, aliases, question_id: old.question_id || u.question_id, applied_round: old.applied_round || u.applied_round || null, edit_attempts: old.edit_attempts || 0 };
+  }
+  return data;
+}
+
+// Questions asked in an earlier round and still unanswered take their default (the question
+// said so); questions without one (intent, "your call") stay open for the user.
+function acceptDefaults(data, state, round) {
+  const log = state.question_log || [];
+  const asked = Object.fromEntries(log.map((q) => [q.id, q]));
+  const out = [];
+  for (const u of data.issues) {
+    if (u.status !== 'proposed' || !u.question_id) continue;
+    const q = asked[u.question_id];
+    if (!q || (q.round || 0) >= round) continue;
+    const d = isNone(u.default) ? q.default : u.default;
+    if (isNone(d) || q.category === 'intent' || u.kind === 'intent') continue;
+    u.answer = clip(defaultValue(d), 400);
+    u.answered = { via: 'default', at: nowIso(), question_id: u.question_id, default_accepted: true };
+    settle(u, 'assumption_accepted', round, 'default', `unanswered: the default "${clip(d, 120)}" applies`);
+    out.push(u.id);
+  }
+  return out;
+}
+
+// ---------------------------------------------------------------- answers and notes
+// The questions the last clarify round showed, in the order shown (what "1", "2" … in a
+// numbered reply refer to): the ids factory record kept, else the last round's questions.
+function questionSet(state) {
+  const log = state.question_log || [];
+  if (!log.length) return [];
+  const byId = Object.fromEntries(log.map((q) => [q.id, q]));
+  if (Array.isArray(state.clarify_shown) && state.clarify_shown.length) {
+    const shown = state.clarify_shown.map((id) => byId[id]).filter(Boolean);
+    if (shown.length) return shown;
+  }
+  const last = Math.max(...log.map((q) => q.round || 0));
+  return log.filter((q) => (q.round || 0) === last);
+}
+
+// Find the issue an answer is for: U-n, Q-n, or free text.
+function resolveRef(data, state, ref, text) {
+  const list = data.issues;
+  const R = String(ref || '').trim().toUpperCase();
+  if (/^U-\d+$/.test(R)) return byRef(list, R);
+  if (/^Q-\d+$/.test(R)) {
+    const byQ = list.find((u) => u.question_id === R || (u.aliases || []).some((a) => a.question_id === R));
+    if (byQ) return byQ;
+    const q = (state.question_log || []).find((x) => x.id === R);
+    if (q && q.unknown) return byRef(list, String(q.unknown).toUpperCase());
+    return null;
+  }
+  if (text) {
+    const q = (state.question_log || []).find((x) => String(x.question).toLowerCase().trim() === String(text).toLowerCase().trim());
+    if (q) {
+      const hit = resolveRef(data, state, q.id);
+      if (hit) return hit;
+    }
+    return findSame(list.filter((u) => u.status !== 'dropped'), { text });
+  }
+  return null;
+}
+
+const ACCEPT = /^(default|accept|accepted|ok|okay|sure|fine|agreed|yes,? (use|take) the default|use the default|take the default|👍)$/i;
+
+// Settle one issue with the user's answer. via: cli | chat. Returns a row for the receipt.
+function applyAnswer(data, state, { issue, answer, acceptDefault = false, via = 'cli', round, questionId }) {
+  const u = issue;
+  let text = String(answer || '').replace(/\s+/g, ' ').trim();
+  const yes = /^(y|yes)$/i.test(text) && !(u.options || []).some((o) => /^yes\b/i.test(o));
+  const takeDefault = acceptDefault || ACCEPT.test(text) || (yes && !isNone(u.default));
+  if (takeDefault) {
+    if (isNone(u.default)) fail(`${u.id} has no proposed default to accept: answer it in words (factory answer ${u.question_id || u.id} "…").`, 'no_default');
+    text = defaultValue(u.default);
+  }
+  if (!text) fail('The answer is empty.', 'bad_input');
+  const was = { status: u.status, settled_by: u.settled_by, answer: u.answer };
+  u.answer = clip(text, 400);
+  u.answered = { via, at: nowIso(), question_id: questionId || u.question_id || null, ...(takeDefault ? { default_accepted: true } : {}) };
+  u.applied_round = null;
+  u.edit_attempts = 0;
+  settle(u, takeDefault ? 'assumption_accepted' : 'user', round, via === 'chat' ? 'user (chat)' : 'user', clip(text, 200));
+  if (was.status === 'deferred_to_design') u.owner = 'user';
+  return { issue: u.id, question: u.question_id || null, answer: u.answer, settled_by: u.settled_by, was: was.status === 'settled' ? `settled by ${was.settled_by}${was.answer ? `: ${clip(was.answer, 80)}` : ''}` : was.status };
+}
+
+function openIds(data) {
+  return data.issues.filter((u) => !FINAL.has(u.status)).map((u) => `${u.id}${u.question_id ? ` (${u.question_id})` : ''}`);
+}
+
+// In clarify: the contract is not approved yet and clarify has run at least once.
+function inClarify(state) {
+  const approved = state.approvals && (state.approvals.H1 || state.approvals.EH1);
+  return !approved && (state.counters && state.counters.clarify_rounds) >= 1;
+}
+
+// `factory answer`: U-n / Q-n / free text, during clarify (and U-n at any time). Writes the
+// ledger and answers.json. After H1 a clarify issue changes only through an amendment.
+function answer(root, { jobId, ref, text, question, acceptDefault = false, via = 'cli' }) {
+  const job = require('./job');
+  const state = job.resolve(root, jobId);
+  if (['closed', 'cancelled', 'abandoned'].includes(state.status)) fail(`${state.id} is ${state.status}; nothing to answer.`, 'not_active');
+  const data = ensure(root, state) || (inClarify(state) ? empty(state) : null);
+  const f = jobPaths(root, state.id).answers;
+  const list = readJson(f, []) || [];
+  const R = String(ref || '').trim().toUpperCase();
+  const round = (state.counters.clarify_rounds || 0) + 1;
+  // After H1 the ledger is what the approved contract rests on: a clarify issue changes only
+  // through an amendment, and a free-text answer is ground's (recorded, never matched to one).
+  const approved = Boolean(state.approvals && (state.approvals.H1 || state.approvals.EH1));
+  const issue = data && !(approved && !R) ? resolveRef(data, state, R, R ? null : question) : null;
+  if (issue && approved) fail(`${state.id}'s contract is approved, so clarify's ${issue.id} no longer changes by an answer. To change what the contract says, start an amendment (factory amend start --reason "…").`, 'approved');
+  const logged = /^Q-\d+$/.test(R) ? (state.question_log || []).find((q) => q.id === R) : issue && issue.question_id ? (state.question_log || []).find((q) => q.id === issue.question_id) : null;
+  if (R && !issue && !logged) fail(`${state.id} has no issue or question ${R}.${data ? ` Open: ${openIds(data).join(', ') || 'none'}.` : ''}`, 'bad_input');
+  if (!issue && data && inClarify(state)) {
+    fail(`No clarify issue matches "${clip(question || R, 120)}": nothing was recorded. Answer by id: factory answer <U-n|Q-n> "<answer>". Open: ${openIds(data).join(', ') || 'none'}.`, 'no_match');
+  }
+  if (!text && !acceptDefault) fail('Need the answer: factory answer <U-n|Q-n> "<answer>" (or --default to accept the proposed default).', 'bad_input');
+  let row = null;
+  if (issue) {
+    row = applyAnswer(data, state, { issue, answer: text, acceptDefault, via, round, questionId: logged ? logged.id : null });
+    save(root, state.id, data);
+  }
+  const q = logged ? logged.question : issue ? issue.text : question;
+  list.push({ ...(logged ? { id: logged.id, category: logged.category } : {}), ...(issue ? { issue: issue.id } : {}), question: q, answer: row ? row.answer : text, via, at: nowIso() });
+  writeJson(f, list);
+  return {
+    job: state.id,
+    ...(logged ? { id: logged.id } : {}),
+    ...(row ? { issue: row.issue, settled_by: row.settled_by, answer: row.answer, ...(row.was !== 'proposed' && row.was !== 'open' ? { was: row.was } : {}) } : {}),
+    answers: list.length,
+    message: row ? `${row.issue}${row.question ? ` (${row.question})` : ''} settled by ${row.settled_by === 'user' ? 'your answer' : 'the accepted default'}: ${clip(row.answer, 120)}` : `Recorded the answer to "${clip(q, 80)}".`,
+  };
+}
+
+// Numbered chat replies ("1 yes, 2 trunk ports too", one per line or comma-separated; "Q-4 no"
+// names the question itself) as answers to the current question set. null when the text is
+// not that shape. An item that ends in "?" is a question to Claude, not an answer: the whole
+// message is then left alone.
+function parseNumbered(text) {
+  const t = String(text || '').trim();
+  if (!t) return null;
+  if (/^(defaults|accept (all )?defaults|use (the )?defaults|all defaults)\.?$/i.test(t)) return { all_defaults: true, items: [] };
+  const parts = t.includes('\n') ? t.split('\n').map((x) => x.trim()).filter(Boolean) : t.split(/[,;]\s*(?=(?:q-?)?\d{1,2}\s*[.):\-]?\s+\S|skip\s+(?:q-?)?\d{1,2}\s*$|skip\s+(?:q-?)?\d{1,2}\s*[,;])/i).map((x) => x.trim());
+  const items = [];
+  for (const p of parts) {
+    // "skip 2": no answer, the question takes its default next round
+    const sk = p.match(/^skip\s+(q-?)?(\d{1,2})\.?$/i);
+    if (sk) {
+      items.push({ n: Number(sk[2]), ...(sk[1] ? { q: `Q-${Number(sk[2])}` } : {}), skip: true });
+      continue;
+    }
+    const m = p.match(/^(q-?)?(\d{1,2})\s*[.):\-]?\s+(.+)$/i);
+    if (!m) return null;
+    const answerText = m[3].trim();
+    if (/\?\s*$/.test(answerText)) return null;
+    items.push({ n: Number(m[2]), ...(m[1] ? { q: `Q-${Number(m[2])}` } : {}), text: answerText });
+  }
+  if (!items.length || items.every((it) => it.skip)) return null;
+  return { all_defaults: false, items };
+}
+
+// Apply a numbered reply to the job's current question set. Returns the receipt, or null when
+// the job has no open question set or no item names one of its questions (the hook leaves the
+// message alone then: it was just a numbered message). All or nothing: an item for a question
+// outside the set, the same question twice, a question already settled, or a default that does
+// not exist refuses the whole reply before anything is written. "defaults" accepts the defaults
+// there are and names the questions that still need words.
+function applyNumbered(root, parsed, { jobId, via = 'chat' } = {}) {
+  const job = require('./job');
+  let state;
+  try {
+    state = job.resolve(root, jobId);
+  } catch {
+    return null; // no current job (or one the CLI can't read): an ordinary message
+  }
+  if (state.status !== 'active' || !inClarify(state)) return null;
+  const set = questionSet(state);
+  if (!set.length) return null;
+  const data = ensure(root, state);
+  if (!data) return null;
+  const issueOf = (q) => resolveRef(data, state, q.id);
+  const open = set.filter((q) => {
+    const u = issueOf(q);
+    return u && u.status === 'proposed';
+  });
+  if (!open.length) return null;
+  const log = state.question_log || [];
+  const listed = () => set.map((q, i) => `${i + 1} = ${q.id}`).join(', ');
+  const noDefault = parsed.all_defaults ? open.filter((q) => isNone(issueOf(q).default)) : [];
+  if (parsed.all_defaults && noDefault.length === open.length) fail(`No open question has a proposed default (${open.map((q) => q.id).join(', ')}): answer them in words. Nothing was recorded.`, 'no_default');
+  const items = parsed.all_defaults
+    ? open.filter((q) => !noDefault.includes(q)).map((q) => ({ q, text: 'default' }))
+    : parsed.items.map((it) => ({ q: it.q ? log.find((x) => x.id === it.q) : set[it.n - 1], text: it.text, n: it.n, label: it.q || String(it.n), skip: Boolean(it.skip) }));
+  if (!parsed.all_defaults) {
+    // nothing in it names a question of this set: not an answer set at all
+    if (!items.some((it) => it.q && set.includes(it.q))) return null;
+    const seen = new Set();
+    for (const it of items) {
+      if (!it.q) fail(`There is no question ${it.label}: this round asked ${set.length} (${listed()}). Nothing was recorded.`, 'bad_input');
+      if (seen.has(it.q.id)) fail(`${it.q.id} is answered twice in that reply. Nothing was recorded.`, 'bad_input');
+      seen.add(it.q.id);
+      const u = issueOf(it.q);
+      if (!u) fail(`${it.q.id} is not a clarify question of ${state.id}. Nothing was recorded.`, 'bad_input');
+      if (it.skip) continue;
+      if (ACCEPT.test(String(it.text).trim()) && isNone(u.default)) fail(`${it.q.id} has no proposed default to accept: answer it in words. Nothing was recorded.`, 'no_default');
+      if (u.status !== 'proposed') fail(`${it.q.id} (${it.label}) is already settled (${u.status}${u.answer ? `: ${clip(u.answer, 60)}` : ''}), so this reply was not read as answers. To change an answer, say so and run factory answer ${it.q.id} "…". Nothing was recorded.`, 'already_settled');
+    }
+  }
+  const rows = [];
+  for (const it of items) if (!it.skip) rows.push(answer(root, { jobId: state.id, ref: it.q.id, text: it.text, via }));
+  const skipped = items.filter((it) => it.skip).map((it) => it.q.id);
+  const still = `${noDefault.length ? ` Still open (no default, answer in words): ${noDefault.map((q) => q.id).join(', ')}.` : ''}${skipped.length ? ` Skipped: ${skipped.join(', ')} (a skipped question takes its default next round; one without a default stays open).` : ''}`;
+  return { job: state.id, answered: rows.map((r) => ({ id: r.id, issue: r.issue, answer: r.answer, settled_by: r.settled_by })), message: `Recorded ${rows.length} answer(s): ${rows.map((r) => `${r.id || r.issue} → ${clip(r.answer, 60)}`).join('; ')}.${still}` };
+}
+
+// `factory clarify note U-n "…"`: context for the next round (the editor and the analysts read it).
+function note(root, { jobId, ref, text, via = 'cli' }) {
+  const job = require('./job');
+  const state = job.resolve(root, jobId);
+  const data = ensure(root, state);
+  if (!data) fail(`${state.id} has no clarify ledger yet: clarify has not run.`, 'no_ledger');
+  if (state.approvals && (state.approvals.H1 || state.approvals.EH1)) fail(`${state.id}'s contract is approved: clarify's issues no longer change (start an amendment instead).`, 'approved');
+  const t = String(text || '').replace(/\s+/g, ' ').trim();
+  if (!t) fail('Say the note: factory clarify note <U-n|contract> "<note>".', 'bad_input');
+  const R = String(ref || '').trim().toUpperCase();
+  const round = (state.counters.clarify_rounds || 0) + 1;
+  if (R && R !== 'CONTRACT') {
+    const u = resolveRef(data, state, R);
+    if (!u) fail(`${state.id} has no issue ${R}. Issues: ${data.issues.map((x) => x.id).join(', ') || 'none'}.`, 'bad_input');
+    u.notes.push({ round, actor: via === 'chat' ? 'user (chat)' : 'user', text: clip(t, 400), at: nowIso() });
+    u.applied_round = u.status === 'settled' ? null : u.applied_round;
+    event(u, round, 'note', 'user', t);
+  } else {
+    data.notes = data.notes || [];
+    data.notes.push({ round, actor: 'user', ref: 'contract', text: clip(t, 400), at: nowIso(), applied: false });
+  }
+  save(root, state.id, data);
+  return { job: state.id, ref: R || 'contract', message: `Noted for ${R || 'the contract'}; clarify takes it into account next round (run factory next).` };
+}
+
+// `factory clarify split U-n <alias>` (human-only: your terminal, or the chat reply "split U-n
+// <alias>"): undo a wrong fold. The alias becomes its own issue again, asked next round (or
+// deferred to design, as its parent was); the parent keeps its status.
+function split(root, { jobId, ref, alias, channel }) {
+  require('./human').requireHumanChannel(channel);
+  const job = require('./job');
+  const state = job.resolve(root, jobId);
+  if (state.approvals && (state.approvals.H1 || state.approvals.EH1)) fail(`${state.id}'s contract is approved: clarify's issues no longer change (start an amendment instead).`, 'approved');
+  const data = ensure(root, state);
+  if (!data) fail(`${state.id} has no clarify ledger yet: clarify has not run.`, 'no_ledger');
+  const R = String(ref || '').trim().toUpperCase();
+  const A = String(alias || '').trim().toUpperCase();
+  // "split U-7 U-19", or just "split U-19" (the alias names its parent)
+  const parent = data.issues.find((u) => (A ? u.id === R : (u.aliases || []).some((a) => a.id === R)));
+  const aliasId = A || R;
+  if (!parent) fail(`${state.id} has no issue ${A ? R : `with the alias ${R}`}.`, 'bad_input');
+  const a = (parent.aliases || []).find((x) => x.id === aliasId);
+  if (!a) fail(`${aliasId} is not folded into ${parent.id}${(parent.aliases || []).length ? ` (its aliases: ${parent.aliases.map((x) => x.id).join(', ')})` : ' (it has no aliases)'}.`, 'bad_input');
+  if (data.issues.some((u) => u.id === aliasId)) fail(`${aliasId} is already an issue of its own.`, 'bad_input');
+  const round = (state.counters.clarify_rounds || 0) + 1;
+  parent.aliases = parent.aliases.filter((x) => x.id !== aliasId);
+  event(parent, round, 'split', 'user', `${aliasId} is a different issue`);
+  const owner = parent.owner === 'design' ? 'design' : 'user';
+  // its own question id stays with it; a new question is asked if it never had one
+  const u = cleanIssue({ id: aliasId, text: a.text, kind: parent.kind, impact: parent.impact, owner, source: 'split', round, ...(a.question_id && owner === 'user' ? { question_id: a.question_id } : {}) }, { round });
+  event(u, round, 'split', 'user', `split from ${parent.id}: not the same issue`);
+  data.issues = [...data.issues, u].sort((x, y) => num(x.id) - num(y.id));
+  save(root, state.id, data);
+  require('./decisions').write(root, { job: state.id, action: 'human.split', chosen: 'split', rule: 'human', during: state.last_decision_id || null, issue: u.id, from: parent.id, via: channel });
+  return { job: state.id, issue: u.id, from: parent.id, status: u.status, owner: u.owner, message: `${u.id} is its own issue again (${u.status}, owner ${u.owner}); ${parent.id} keeps its status. Claude continues with factory next: clarify ${u.owner === 'user' ? 'asks about it' : 'hands it to design'}.` };
+}
+
+// ---------------------------------------------------------------- views
+function nextAction(u) {
+  if (u.status === 'settled' || u.status === 'dropped') return 'none';
+  if (u.status === 'deferred_to_design') return 'ground/decide settle it';
+  if (u.question_id) return `answer: factory answer ${u.question_id} "…"${isNone(u.default) ? '' : ` (or --default: ${clip(u.default, 60)})`}`;
+  return 'asked next round';
+}
+
+const OWNER_ORDER = { user: 0, design: 1 };
+const STATUS_ORDER = { proposed: 0, open: 1, deferred_to_design: 2, settled: 3, dropped: 4 };
+
+function rows(data) {
+  return data.issues
+    .slice()
+    .sort((a, b) => STATUS_ORDER[a.status] - STATUS_ORDER[b.status] || OWNER_ORDER[a.owner] - OWNER_ORDER[b.owner] || num(a.id) - num(b.id))
+    .map((u) => ({ id: u.id, subject: u.subject, title: clip(u.text, 140), kind: u.kind, impact: u.impact, status: u.status, owner: u.owner, settled_by: u.settled_by, question_id: u.question_id, default: u.default, answer: u.answer ? clip(u.answer, 140) : null, aliases: (u.aliases || []).map((a) => a.id), next: nextAction(u), ...(u.reason ? { reason: clip(u.reason, 160) } : {}) }));
+}
+
+function totals(data) {
+  const t = { issues: data.issues.length, open: 0, proposed: 0, settled: 0, deferred_to_design: 0, dropped: 0, by_owner: { user: 0, design: 0 } };
+  for (const u of data.issues) {
+    t[u.status] = (t[u.status] || 0) + 1;
+    if (!FINAL.has(u.status)) t.by_owner[u.owner] = (t.by_owner[u.owner] || 0) + 1;
+  }
+  t.closed = t.settled + t.deferred_to_design + t.dropped;
+  return t;
+}
+
+function trend(data) {
+  const r = (data.rounds || []).filter((x) => x.ledger);
+  const list = r.map((x) => ({ round: x.round, opened: x.ledger.opened, settled: x.ledger.settled, deferred: x.ledger.deferred, asked: x.ledger.asked, progress: x.ledger.progress, degraded: Boolean(x.ledger.degraded) }));
+  const last = list.slice(-2);
+  const word = !list.length ? (data.migration ? 'no v2 rounds yet (migrated)' : 'no rounds yet') : last.length === 2 && last.every((x) => !x.progress && !x.degraded) ? 'stalled' : last.some((x) => x.settled > x.opened) ? 'converging' : last.some((x) => x.opened > x.settled) ? 'growing' : 'steady';
+  return { rounds: list, trend: word };
+}
+
+function view(state, data) {
+  const t = totals(data);
+  const L = limits(state);
+  const tr = trend(data);
+  const logQ = Object.fromEntries((state.question_log || []).map((q) => [q.id, q]));
+  const questions = data.issues.filter((u) => u.status === 'proposed' && u.owner === 'user' && u.question_id).map((u) => ({ id: u.question_id, issue: u.id, question: (logQ[u.question_id] && logQ[u.question_id].question) || u.draft || u.text, default: isNone(u.default) ? null : u.default }));
+  return {
+    job: state.id,
+    version: data.version,
+    totals: t,
+    open_by_owner: t.by_owner,
+    questions,
+    answer_commands: questions.map((q) => `factory answer ${q.id} "<answer>"${q.default ? ` (or: factory answer ${q.id} --default)` : ''}`),
+    issues: rows(data),
+    deferred_to_design: data.issues.filter((u) => u.status === 'deferred_to_design').map((u) => ({ id: u.id, subject: u.subject, title: clip(u.text, 140) })),
+    rounds: tr.rounds,
+    trend: tr.trend,
+    limits: { ceiling: L.ceiling, no_progress_rounds: L.no_progress, rounds_counted: L.counted, ...(L.before_v2 ? { rounds_before_v2: L.before_v2 } : {}), no_progress_streak: (state.counters && state.counters.clarify_no_progress) || 0 },
+    notes: (data.notes || []).slice(-10),
+    ...(data.migration ? { migration: data.migration } : {}),
+  };
+}
+
+function statusText(v) {
+  const L = [];
+  L.push(`Clarify ledger — ${v.job}: ${v.totals.issues} issue(s), ${v.totals.closed} closed (${v.totals.settled} settled, ${v.totals.deferred_to_design} deferred to design, ${v.totals.dropped} dropped); open by owner: user ${v.open_by_owner.user}, design ${v.open_by_owner.design}`);
+  L.push(`Rounds counted ${v.limits.rounds_counted} of ${v.limits.ceiling} (ceiling${v.limits.rounds_before_v2 ? `; ${v.limits.rounds_before_v2} round(s) before clarify v2 not counted` : ''}); parks after ${v.limits.no_progress_rounds} rounds with no progress (now ${v.limits.no_progress_streak}). Trend: ${v.trend}.`);
+  L.push('');
+  const w = { id: 6, subject: 28, status: 18, owner: 7 };
+  const pad = (s, n) => (String(s).length > n ? `${String(s).slice(0, n - 1)}…` : String(s).padEnd(n));
+  L.push(`${pad('ID', w.id)} ${pad('SUBJECT', w.subject)} ${pad('STATUS', w.status)} ${pad('OWNER', w.owner)} NEXT`);
+  for (const r of v.issues) L.push(`${pad(r.id, w.id)} ${pad(r.subject || '—', w.subject)} ${pad(r.status === 'settled' ? `settled:${r.settled_by}` : r.status, w.status)} ${pad(r.owner, w.owner)} ${r.next}${r.aliases.length ? ` [aliases ${r.aliases.join(', ')}]` : ''}`);
+  if (!v.issues.length) L.push('(no issues)');
+  if (v.rounds.length) {
+    L.push('', 'Round  opened  settled  deferred  asked  progress');
+    for (const r of v.rounds) L.push(`${String(r.round).padEnd(6)} ${String(r.opened).padEnd(7)} ${String(r.settled).padEnd(8)} ${String(r.deferred).padEnd(9)} ${String(r.asked).padEnd(6)} ${r.degraded ? 'degraded (not counted)' : r.progress ? 'yes' : 'no'}`);
+  }
+  if (v.issues.some((r) => r.aliases.length)) L.push('', 'Two different issues folded into one? Reply "split <U-n> <alias>" in chat, or run factory clarify split <U-n> <alias> in your own terminal: the alias becomes its own issue again.');
+  if (v.questions.length) {
+    L.push('', 'Answer with:');
+    for (const c of v.answer_commands) L.push(`  ${c}`);
+  }
+  if (v.migration) {
+    const m = v.migration;
+    L.push('', `Migrated from v${m.from}: ${m.folded.length} duplicate(s) folded${m.folded.length ? ` (${m.folded.map((x) => `${x.id}→${x.into}`).join(', ')})` : ''}; ${m.matched_answers.length} free-form answer(s) matched${m.matched_answers.length ? ` (${m.matched_answers.map((x) => x.issue).join(', ')})` : ''}; ${m.deferred.length} deferred to design${m.deferred.length ? ` (${m.deferred.map((x) => x.id).join(', ')})` : ''}; ceiling ${m.ceiling} rounds.`);
+    if (m.matched_answers.length) {
+      L.push('  Free-form answers matched by word overlap (check them; factory answer U-n "…" corrects one):');
+      for (const x of m.matched_answers) L.push(`    "${x.question}" → ${x.issue}: ${x.answer}`);
+    }
+    if (m.unmatched_answers.length) L.push(`  Not matched: ${m.unmatched_answers.map((x) => `"${x.question}"`).join('; ')}`);
+    if (m.tampered_ledger) L.push('  The ledger file failed its seal (edited by hand?), so it was rebuilt from the question log.');
+  }
+  return L.join('\n');
+}
+
+// `factory clarify status`: read-only (a v1 job is shown migrated, not written).
+function status(root, { jobId, json = false } = {}) {
+  const job = require('./job');
+  const state = job.resolve(root, jobId);
+  const data = ensure(root, state);
+  if (!data) {
+    const msg = { job: state.id, ledger: false, message: 'No clarify ledger yet: it is created by the first clarify round.' };
+    return json ? msg : `${state.id}: ${msg.message}`;
+  }
+  const v = view(state, data);
+  return json ? v : statusText(v);
+}
+
+// For `factory next` while clarify is the step: a short ledger summary.
+function nextSummary(root, state) {
+  try {
+    const data = ensure(root, state);
+    if (!data) return null;
+    const v = view(state, data);
+    return { open_by_owner: v.open_by_owner, settled: v.totals.settled, deferred_to_design: v.totals.deferred_to_design, questions: v.questions, answer_commands: v.answer_commands, trend: v.trend, status_command: `factory clarify status --job ${state.id}` };
+  } catch {
+    return null;
+  }
+}
+
+// ---------------------------------------------------------------- the CLI-owned contract sections
+function clarificationLines(data) {
+  return data.issues
+    .filter((u) => u.status === 'settled' && ['user', 'assumption_accepted'].includes(u.settled_by) && u.answer)
+    .sort((a, b) => num(a.id) - num(b.id))
+    .map((u) => `- ${u.id}${u.question_id ? ` (${u.question_id})` : ''}: ${clip(u.text, 200).replace(/\s+/g, ' ')} → ${clip(u.answer, 300).replace(/\s+/g, ' ')} (${u.settled_by === 'user' ? 'answered by user' : 'default accepted'})`);
+}
+function deferredLines(data) {
+  return data.issues
+    .filter((u) => u.status === 'deferred_to_design')
+    .sort((a, b) => num(a.id) - num(b.id))
+    .map((u) => `- ${u.id}: ${clip(u.text, 240).replace(/\s+/g, ' ')} (settled in ground/decide)`);
+}
+// Rewrite the CLI-owned sections of the contract from the ledger. Returns true when it changed.
+function writeContract(root, state, data) {
+  const contract = require('./contract');
+  const f = jobPaths(root, state.id).contract;
+  if (!fs.existsSync(f)) return false;
+  const text = fs.readFileSync(f, 'utf8');
+  const next = contract.setDeferred(contract.setClarified(text, clarificationLines(data)), deferredLines(data));
+  if (next === text) return false;
+  fs.writeFileSync(f, next);
+  return true;
+}
+
+// For ground and decide: what clarify handed over.
+function deferredText(data) {
+  const d = (data && data.issues ? data.issues : []).filter((u) => u.status === 'deferred_to_design');
+  if (!d.length) return '';
+  return ['- Deferred to design by clarify (implementation detail: settle these here, cite your sources; they did not block H1):', ...d.map((u) => `  - ${u.id} [${u.kind}] ${clip(u.text, 200)}${u.aliases && u.aliases.length ? ` (also raised as ${u.aliases.map((a) => a.id).join(', ')})` : ''}`)].join('\n');
+}
+function deferredFor(root, state) {
+  try {
+    return deferredText(ensure(root, state));
+  } catch {
+    return '';
+  }
+}
+
+module.exports = {
+  KINDS, OWNERS, STATUSES, SETTLED_BY, FINAL,
+  tokens, subjectKey, subjectOf, sameIssue, findSame, isImplementationFact, classify, limits, cleanIssue, settle, event,
+  empty, load, save, migrate, ensure, advance, mergeIssues, acceptDefaults, questionSet, resolveRef, applyAnswer, answer, parseNumbered, applyNumbered, note, split, inClarify, isNone, defaultValue,
+  rows, totals, trend, view, statusText, status, nextSummary, clarificationLines, deferredLines, writeContract, deferredText, deferredFor, openIds,
+};

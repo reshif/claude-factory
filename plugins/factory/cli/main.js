@@ -8,7 +8,7 @@ const path = require('path');
 const { FactoryError, fail, readText, writeJson } = require('./lib/util');
 const { requireRoot, findRoot, PLUGIN_ROOT } = require('./lib/paths');
 
-const BOOL = new Set(['epic', 'local', 'check', 'json', 'plan-fields', 'help', 'threat-model', 'plan-critique', 'no-threat-model', 'accept-degraded', 'serve']);
+const BOOL = new Set(['epic', 'local', 'check', 'json', 'plan-fields', 'help', 'threat-model', 'plan-critique', 'no-threat-model', 'accept-degraded', 'serve', 'default']);
 
 function parseArgs(argv) {
   const pos = [];
@@ -50,7 +50,10 @@ const HELP = `factory — Software Factory CLI (plugin at ${PLUGIN_ROOT})
 Setup      init [--base <branch>] · doctor · ci install
 Jobs       job new --title "…" --type <work type> --risk low|medium|high [--epic] · job show · job list · use <job>
 Routing    next · why [--format md] · finalize [--mode before_ship|full] [--check]
-Contract   contract show · contract check [--plan-fields] · answer --id Q-n | --question "…" --answer "…"
+Contract   contract show · contract check [--plan-fields]
+           answer <U-n|Q-n> "<answer>" · answer <U-n|Q-n> --default · answer --id Q-n --answer "…" · answer --question "…" --answer "…"
+Clarify    clarify status [--json]   (the issue ledger: id, subject, status, owner, next action; per-round trend)
+           clarify note <U-n|contract> "<note>"   (context for the next clarify round)
 Workflows  wfargs <ground|fanout-judge|decompose|realize|reconcile> [--config clarify|decide|challenge] [--mode m] [--scope s] [--lanes a,b]
            [--threat-model | --no-threat-model] [--plan-critique] [--accept-degraded] [--out file]
            record --file <envelope.json | ->
@@ -69,6 +72,7 @@ Console    console [--out file.html] [--job J] [--label "…"] [--data data.json
 Human only (your terminal, or reply in chat):
            approve [gate] · deny --reason "…" · resume [step] · cancel · abandon · waive <floor> --reason "…"
            merged <commit> · confirm <AC> · lessons accept|reject <L> · lessons promote <L> --check "cmd" · reseal
+           clarify split <U-n> <alias U-n>   (undo a wrong fold: the alias becomes its own clarify issue again)
 Global     --root <repo> · --job <J-0001>`;
 
 const LONG_RUNNING = Symbol('long-running'); // the command reports for itself (console --serve)
@@ -146,8 +150,18 @@ function run(argv) {
       }
       return fail('contract show | check', 'bad_input');
     }
-    case 'answer':
-      return C('record').answer(R(), { jobId: J, id: opt.id, question: opt.question, answer: opt.answer });
+    case 'answer': {
+      // factory answer <U-n|Q-n> "<answer>" | <U-n|Q-n> --default | --id Q-n --answer "…" | --question "…" --answer "…"
+      const positional = sub && /^[UQ]-\d+$/i.test(sub);
+      const ref = positional ? sub : opt.id;
+      const text = opt.answer || (positional ? pos.slice(2).join(' ') : '') || '';
+      return C('record').answer(R(), { jobId: J, ref, question: opt.question, answer: text, acceptDefault: Boolean(opt.default) });
+    }
+    case 'clarify':
+      if (sub === 'status') return C('clarify').status(R(), { jobId: J, json: Boolean(opt.json) });
+      if (sub === 'note') return C('clarify').note(R(), { jobId: J, ref: pos[2], text: opt.text || pos.slice(3).join(' ') });
+      if (sub === 'split') return C('clarify').split(R(), { jobId: J, ref: pos[2], alias: pos[3], channel: tty });
+      return fail('clarify status [--json] | clarify note <U-n|contract> "<note>" | clarify split <U-n> [<alias U-n>]', 'bad_input');
     case 'wfargs': {
       const brief = C('wfargs').build(R(), {
         jobId: J,
@@ -359,6 +373,8 @@ function logCommand(argv, res, err) {
     const ctx = events.context(root, jobId);
     const args = {};
     for (const [k, v] of Object.entries(opt)) args[k] = PROSE.has(k) && typeof v === 'string' ? `${v.slice(0, 60)}${v.length > 60 ? '…' : ''}` : v;
+    // answers and notes are prose: their positional text is clipped like --answer
+    const proseArg = (pos[0] === 'answer' || (pos[0] === 'clarify' && pos[1] === 'note')) && pos.length > 2;
     const r = res && typeof res === 'object' ? res : {};
     const extra = {};
     if (pos[0] === 'wfargs') Object.assign(extra, { workflow: r.workflow || pos[1] || null, config: r.config || opt.config || null, mode: r.mode || null, brief_hash: r.input_hash || null });
@@ -368,7 +384,7 @@ function logCommand(argv, res, err) {
       event: 'cli',
       cmd: pos[0],
       sub: pos[1] || null,
-      arg: pos[2] || null,
+      arg: proseArg ? `${pos.slice(2).join(' ').slice(0, 60)}` : pos[2] || null,
       args,
       job: ctx.job,
       how: ctx.how,

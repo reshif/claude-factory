@@ -406,6 +406,9 @@ test('clarify: God Eye must confirm the intent; contract check names the Intent 
   let r = F.record(root, F.envelope(b, 'needs_user', { analysts: [], degraded: [], judge: { questions: [], dismissed: [] }, critique: { verdict: 'approve', intent_confirmed: false, restatement: { problem: 'p', outcome: 'o' }, items: [] } }));
   assert.equal(r.status, 'needs_user');
   assert.match(r.message, /could not confirm the intent/);
+  // clarify v2: God Eye's reading is an intent question (no default: the factory never guesses the intent); the user answers it
+  assert.equal(r.questions[0].category, 'intent');
+  F.cli(root, ['answer', r.questions[0].id, 'yes, that is the intent']);
   b = F.cli(root, ['wfargs', 'fanout-judge', '--config', 'clarify']);
   r = F.record(root, F.envelope(b, 'ok', { analysts: [], degraded: [], judge: { questions: [], dismissed: [] }, critique: { verdict: 'approve', intent_confirmed: true, restatement: { problem: 'p', outcome: 'o' }, items: [] } }));
   assert.equal(r.status, 'ok');
