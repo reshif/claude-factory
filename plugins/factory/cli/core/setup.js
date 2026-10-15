@@ -105,10 +105,55 @@ function doctor(cwd) {
       add('build environment', p.name === 'none', p.name === 'none' ? 'none needed (no dependency manifest)' : `none confirmed; proposed ${p.name}: ${(p.setup || []).join(' && ')}. Reply "confirm environment ${envMod.short(p)}" or run factory env set; until then worktrees are bare`, 'warning');
     }
   }
+  for (const c of hookNodeChecks()) add(c.name, c.ok, c.detail, 'warning');
   const rc = recipes.checkAll();
   for (const [id, errs] of Object.entries(rc)) add(`recipe ${id}`, errs.length === 0, errs.length ? errs.join('; ') : 'valid');
   const ready = checks.every((c) => c.ok || c.level !== 'error');
   return { ready, checks };
 }
 
-module.exports = { init, doctor, ensureExcludes, ensureGitSetup, EXCLUDES };
+// The Node the hooks would run under. Claude Code runs each hook command through a shell with
+// the environment it was started with, so the hooks get the first `node` on that PATH, which is
+// not always the doctor's own Node (run from your terminal, or a login shell's nvm while Claude
+// Code was started with the system PATH, where Ubuntu's apt nodejs 12.x sits at /usr/bin/node).
+// hooks/lib.js (and the CLI modules the hooks load) use ?. and ?? (Node 14+): an older Node
+// fails every hook with a SyntaxError, and then the guard allows everything (the launcher in
+// hooks/hooks.json names the too-old node on stderr). run(file, args) -> { status, stdout,
+// stderr, error } is for tests.
+const HOOK_NODE_MIN = 14;
+function nodeMajor(v) {
+  const m = /^v?(\d+)\./.exec(String(v || '').trim());
+  return m ? Number(m[1]) : null;
+}
+function hookNodeChecks(run = (file, args) => spawnSync(file, args, { encoding: 'utf8', timeout: 15000 })) {
+  if (process.platform === 'win32') return [];
+  const out = [];
+  const probe = (r) => {
+    const lines = String((r && r.stdout) || '').trim().split('\n').map((x) => x.trim()).filter(Boolean);
+    return { ok: Boolean(r && !r.error && lines.length), lines, where: lines.find((x) => x.startsWith('/')) || null, version: lines.find((x) => /^v\d+\./.test(x)) || null };
+  };
+  const tooOld = (who, where, version) => `${who}: ${where || 'node'} ${version} is too old for the factory hooks (they need Node ${HOOK_NODE_MIN}+; hooks/lib.js uses ?.): every hook fails and the guard allows everything. Put a newer Node first on the PATH Claude Code is started with`;
+  // this shell's PATH: what Claude Code gives its hooks when the doctor runs inside it
+  const here = probe(run('sh', ['-c', 'command -v node; node --version']));
+  const major = nodeMajor(here.version);
+  if (!here.ok) out.push({ name: 'hooks node', ok: false, detail: 'no node on this PATH: the factory hooks are off where Claude Code is started with it (install Node 14+ on that PATH)' });
+  else if (major === null) out.push({ name: 'hooks node', ok: false, detail: `could not read the Node version on this PATH (${here.lines.join(' ').slice(0, 120)})` });
+  else out.push({ name: 'hooks node', ok: major >= HOOK_NODE_MIN, detail: major >= HOOK_NODE_MIN ? `${here.where || 'node'} ${here.version} on this PATH (the hooks need ${HOOK_NODE_MIN}+)` : tooOld('this PATH', here.where, here.version) });
+  // a login shell's PATH (Claude Code started from a desktop launcher or another terminal), when it differs
+  const login = probe(run('bash', ['-lc', 'command -v node; node --version']));
+  const lm = nodeMajor(login.version);
+  if (login.ok && lm !== null && (login.where !== here.where || login.version !== here.version)) {
+    out.push({ name: 'hooks node (login shell)', ok: lm >= HOOK_NODE_MIN, detail: lm >= HOOK_NODE_MIN ? `bash -lc: ${login.where || 'node'} ${login.version}` : tooOld('bash -lc', login.where, login.version) });
+  }
+  // the system Node a bare PATH (no nvm) finds
+  const sys = run('/usr/bin/node', ['--version']);
+  if (sys && !sys.error && sys.status === 0 && here.where !== '/usr/bin/node') {
+    const v = String(sys.stdout || '').trim();
+    const mj = nodeMajor(v);
+    if (mj !== null && mj < HOOK_NODE_MIN) out.push({ name: 'hooks node (/usr/bin/node)', ok: false, detail: `/usr/bin/node is ${v}, too old for the factory hooks (they need Node ${HOOK_NODE_MIN}+). Claude Code started with the system PATH (no nvm) gives the hooks this one: remove it or install Node ${HOOK_NODE_MIN}+ there` });
+    else if (mj !== null) out.push({ name: 'hooks node (/usr/bin/node)', ok: true, detail: `/usr/bin/node ${v}` });
+  }
+  return out;
+}
+
+module.exports = { HOOK_NODE_MIN, hookNodeChecks, init, doctor, ensureExcludes, ensureGitSetup, EXCLUDES };
