@@ -110,6 +110,10 @@ function sh(cwd, cmd) {
 function hook(script, input) {
   return spawnSync('node', [path.join(PLUGIN, 'hooks', script)], { input: JSON.stringify(input), encoding: 'utf8', env: process.env });
 }
+// a Bash command an agent ran, as the PostToolUse hook logs it (the console reads a builder's task from it)
+function ran(agentId, agentType, command) {
+  hook('activity.js', { hook_event_name: 'PostToolUse', session_id: 'sample', cwd: root, agent_id: agentId, agent_type: agentType, tool_name: 'Bash', tool_input: { command } });
+}
 function use(J) {
   ok(cli(['use', J], { quick: true }), `use ${J}`);
 }
@@ -310,6 +314,7 @@ function crew(J, sc, st) {
       case 'builder': {
         const [, id, attempt] = label.match(/^build (T\d+) #(\d+)/);
         const s = ok(F.cli(root, ['task', 'start', id, '--job', J]), `task start ${id}`);
+        ran(agentId, 'factory:builder', `factory task start ${id} --job ${J}`);
         F.cli(root, ['task', 'show', id, '--job', J]);
         if (sc.beforeBuild) sc.beforeBuild(id, Number(attempt), s, agentId);
         const b = sc.build(id, Number(attempt), st);
@@ -320,6 +325,7 @@ function crew(J, sc, st) {
       case 'tester': {
         const id = label.split(' ')[1];
         const v = F.cli(root, ['task', 'verify', id, '--job', J]);
+        ran(agentId, 'factory:tester', `factory task verify ${id} --job ${J}`);
         return { pass: Boolean(v.pass), evidence_id: v.evidence_id, failures: (v.failures || []).map((f) => `${f.cmd} exited ${f.code}`), swept_checked: [] };
       }
       case 'integrator': {
@@ -393,9 +399,20 @@ async function drive(J, sc, st, { stopAt } = {}) {
       ok(reply(`merged ${sh(root, 'git rev-parse --short HEAD')}`), 'merged');
     } else if (n.action === 'skill' && n.skill === 'distill') {
       cli(['distill', 'context', '--job', J]);
-      wait(between(2, 5) * M);
-      if (sc.lesson) ok(cli(['lessons', 'add', '--job', J, '--text', sc.lesson[0], '--scope', sc.lesson[1]]), 'lesson');
-      ok(cli(['distill', 'done', '--job', J]), 'distill done');
+      if (sc.lesson) {
+        // the lesson-writer, started by the distill skill with the Agent tool: it records the lesson and replies
+        const lw = `agent-${String(++aid).padStart(4, '0')}`;
+        wait(between(20, 60) * S);
+        hook('activity.js', { hook_event_name: 'SubagentStart', session_id: 'sample', cwd: root, agent_id: lw, agent_type: 'factory:lesson-writer' });
+        wait(between(2, 5) * M);
+        const l = ok(cli(['lessons', 'add', '--job', J, '--text', sc.lesson[0], '--scope', sc.lesson[1]]), 'lesson');
+        wait(between(10, 30) * S);
+        hook('subagent-stop.js', { hook_event_name: 'SubagentStop', session_id: 'sample', cwd: root, agent_id: lw, agent_type: 'factory:lesson-writer' });
+        ok(cli(['distill', 'done', '--job', J, '--result', JSON.stringify({ lessons: [{ id: l.id, text: sc.lesson[0] }], nothing_to_learn: false })]), 'distill done');
+      } else {
+        wait(between(2, 5) * M);
+        ok(cli(['distill', 'done', '--job', J]), 'distill done');
+      }
       ok(cli(['ci', 'verify', '--job', J]), 'ci verify');
     } else if (n.action === 'parked' || n.action === 'done') {
       return n;

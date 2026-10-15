@@ -160,6 +160,7 @@ function run(argv) {
         planCritique: opt['plan-critique'] ? true : undefined,
         acceptDegraded: Boolean(opt['accept-degraded']),
       });
+      C('wfrun').start(R(), brief); // the run's start, for the console's step list (logged once the brief is made)
       if (opt.out) {
         writeJson(path.resolve(opt.out), brief);
         return { written: path.resolve(opt.out), workflow: brief.workflow, config: brief.config || null, bytes: fs.statSync(path.resolve(opt.out)).size };
@@ -259,11 +260,17 @@ function run(argv) {
       return fail('doc list | template <type> | check [<file>] | index', 'bad_input');
     }
     case 'distill':
-      if (sub === 'context') return C('lifecycle').distillContext(R(), { jobId: J });
+      if (sub === 'context') {
+        const ctx = C('lifecycle').distillContext(R(), { jobId: J });
+        C('wfrun').start(R(), { job: ctx.job, workflow: 'distill' }); // the lesson-writer's run, if the skill starts it
+        return ctx;
+      }
       if (sub === 'done') {
         // --result: the lesson writer's final message (a file, - for stdin, or inline JSON).
         const res = opt.result === undefined ? undefined : opt.result === '-' ? readStdin() : fs.existsSync(String(opt.result)) ? fs.readFileSync(String(opt.result), 'utf8') : String(opt.result);
-        return C('lifecycle').distillDone(R(), { jobId: J, result: res });
+        const done = C('lifecycle').distillDone(R(), { jobId: J, result: res });
+        C('wfrun').end(R(), { job: done.job, workflow: 'distill', outcome: 'ok', status: done.nothing_to_learn ? 'nothing_to_learn' : 'ok', roster: res === undefined ? [] : [{ agent_type: 'factory:lesson-writer', label: 'lesson-writer', outcome: 'ok' }] });
+        return done;
       }
       return fail('distill context | done', 'bad_input');
     case 'lessons': {
