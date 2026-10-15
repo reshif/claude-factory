@@ -309,12 +309,42 @@ plugins/factory-inspector/
 ## Develop / test
 
 ```bash
-cd plugins/factory && npm test             # 82 tests: end-to-end jobs, routing, caps, guard, seals, hooks, workflows, schemas, console, docs, job correctness
-cd plugins/factory-inspector && npm test   # 20 tests
+cd plugins/factory && npm test             # end-to-end jobs, routing, caps, guard, seals, hooks, workflows, schemas, console, docs, job correctness, quality lints
+cd plugins/factory-inspector && npm test
 node plugins/factory/console/dev/make-sample.js /tmp/sample   # a realistic nine-job sample to look at
 ```
 
 The tests drive the real CLI against throwaway git repos, play the agents and the human, and run the workflow scripts in a harness that emulates the Workflow runtime. Bump the version in both `plugin.json` and `package.json` with every change you ship, so installs can tell versions apart.
+
+## Quality and evals
+
+Prompt quality is measured, not assumed. Four tiers, cheapest first ([`.github/workflows/test.yml`](.github/workflows/test.yml), [`.github/workflows/evals.yml`](.github/workflows/evals.yml)):
+
+| Tier | What | Where | When |
+|---|---|---|---|
+| 0 · static lints | Skill descriptions are triggers (a "Use when / Used by" clause, a length budget, no step sequence, a "Not for…" scope on user-invocable skills); every `factory …` / `factory-inspect …` command, subcommand and flag a skill names exists in that CLI's help; `factory:<name>` references and `references/` files resolve, each with a load condition; no hard-coded component counts or rule-id ranges in skills or docs; the eval cases keep the eval floor and match their sets; `claude plugin validate --strict` | `plugins/factory/tests/quality-lint.test.js`, `tests/evals.test.js`; the `validate` job | every push and PR, no model cost |
+| 1 · contracts | Golden outputs per agent validated against the output schemas; agent bodies name every schema field; brief tools match `tools:` | `tests/contracts.test.js`, `tests/agents-packaging.test.js` | every push and PR |
+| 2 · triggering | ~8 should-load and ~8 near-miss prompts each for start, console, review, why and inspect (plus amend); must-not-fire cases (a direct "review this code" must not start `factory:code-reviewer` or any other factory agent); dispatch cases (a mocked `factory next` result must load the right step skill) | `plugins/*/evals/{trigger,agents,dispatch}/` | nightly; changed components on PRs |
+| 3 · outcomes | Fixture repos with planted defects — SQL injection, a test that mocks away the code under test, a missing loading state, an off-by-one, an ambiguous contract, a clean control — and a prompt-injection comment in every reviewed change; graded on what the agent found | `plugins/factory/evals/outcome/`, `evals/fixtures/` | nightly |
+| 4 · telemetry | `factory telemetry report` adds **Quality signals**: null-result and degraded rate per role (from the sealed agent rosters), finding-verifier refute and unverifiable rate per lane, park reasons, God Eye's revise rate; `/factory:review` walks through them | `cli/core/telemetry.js`, `skills/review` | monthly review |
+
+Tiers 2 and 3 use Claude Code's `claude plugin eval` (CLI pinned to 2.1.299; the case format sits under `experimental.evals` in each `plugin.json`). Every case runs 3 times, with and without the plugin (ablation), so the report shows the plugin's uplift (Δ) as well as its score. The cases are generated from hand-written sets — edit `evals/sets/*.json`, then regenerate:
+
+```bash
+node plugins/factory/evals/tools/generate.js plugins/factory            # trigger, agents, dispatch, outcome cases
+node plugins/factory/evals/tools/generate.js plugins/factory-inspector
+```
+
+Run them yourself (this costs model usage; results go to `evals/results/`, which git ignores):
+
+```bash
+claude plugin eval plugins/factory --tag skill:start --runs 1 --no-publish          # pilot one skill
+claude plugin eval plugins/factory --runs 3 --threshold 0.67 --max-cost-usd 40 \
+  --judge-model sonnet --scaffold --trust-plugin --no-publish                        # what the nightly job runs
+claude plugin eval plugins/factory-inspector --runs 3 --no-publish
+```
+
+`--scaffold` is needed for Tier 3: each outcome case stages its fixture (base commit + the change under review, with the diff in `CHANGE.diff`) through `evals/fixtures/stage.sh`. The eval jobs run only when the repository has an `ANTHROPIC_API_KEY` secret; pull requests smoke-run (`--runs 1 --max-cost-usd 5`) just the skills and agents they change. The thresholds are a starting point to ratify after a month of nightly runs; when the judge model changes, re-check the llm graders against a hand-labelled sample.
 
 ## Troubleshooting
 

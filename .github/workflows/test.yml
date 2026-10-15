@@ -1,0 +1,60 @@
+name: test
+
+# Tier 0 + Tier 1 on every push and PR, at no model cost: both plugins' test suites
+# (including tests/quality-lint.test.js and tests/evals.test.js) on every supported Node,
+# and `claude plugin validate --strict` with the Claude Code CLI pinned to the version the
+# eval case format was written against.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: [18, 20, 22]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+      - name: Git identity for the test fixtures
+        run: |
+          git config --global user.email ci@example.com
+          git config --global user.name CI
+          git config --global init.defaultBranch main
+      - name: factory
+        working-directory: plugins/factory
+        run: npm test
+      - name: factory-inspector
+        working-directory: plugins/factory-inspector
+        run: npm test
+
+  validate:
+    runs-on: ubuntu-latest
+    env:
+      CLAUDE_CODE_VERSION: 2.1.299 # the eval case format (experimental.evals) is pinned to this CLI
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm install -g @anthropic-ai/claude-code@${{ env.CLAUDE_CODE_VERSION }}
+      - run: claude --version
+      - name: Validate plugins (strict)
+        run: |
+          claude plugin validate plugins/factory --strict
+          claude plugin validate plugins/factory-inspector --strict
+      - name: Validate marketplace
+        run: claude plugin validate .
+      - name: Eval cases match their sets
+        run: |
+          node plugins/factory/evals/tools/generate.js plugins/factory --check
+          node plugins/factory/evals/tools/generate.js plugins/factory-inspector --check
