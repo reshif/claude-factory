@@ -292,6 +292,15 @@ function say(root, text) {
   return { status, code, text: ctx };
 }
 
+// What the tester relays (agents/tester.md): the task's `task verify` run once, its result
+// mapped onto the tester schema. `label` is the agent's label ("test T1", "test T1 (retry)").
+function relayVerify(root, label, { job } = {}) {
+  const id = /^test (\S+)/.exec(label)[1];
+  const v = cli(root, ['task', 'verify', id, ...(job ? ['--job', job] : [])]);
+  if (v.error) return { pass: false, refused: v.code, failures: [v.message] };
+  return { pass: Boolean(v.pass), evidence_id: v.evidence_id, failures: [...(v.failures || []).map((f) => `\`${f.cmd}\` exited ${f.code}:\n${String(f.output || '').slice(-400)}`), ...(v.scope_violations || []).map((p) => `${p} is outside the task's allowed paths`), ...(v.no_changes ? ['no changes'] : [])], swept_checked: [] };
+}
+
 // What the integrator relays for a wave integration (agents/integrator.md): the brief's
 // `reconcile wave` command run once, its JSON mapped onto the integrate-wave schema.
 function relayWave(root, text) {
@@ -306,4 +315,4 @@ function jobDir(root, id) {
   return path.join(root, '.factory', 'jobs', id);
 }
 
-module.exports = { PLUGIN, BIN, sh, write, makeRepo, cli, reply, say, built, relayWave, contractText, envelope, record, jobDir, adrText, noAdrText, threatModelText, recommendationText, contractsDocText, DIAGRAM };
+module.exports = { PLUGIN, BIN, sh, write, makeRepo, cli, reply, say, built, relayVerify, relayWave, contractText, envelope, record, jobDir, adrText, noAdrText, threatModelText, recommendationText, contractsDocText, DIAGRAM };

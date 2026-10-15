@@ -16,6 +16,11 @@
 //     "prefix": "",                                put before each verify command (e.g. "poetry run")
 //     "services": { "up": "…", "health": "…", "down": "…" },
 //                                                  once per job, from the project root
+//     "teardown": "invoke destroy",                run in each worktree setup ran in, before
+//                                                  the worktree is removed (job close, the
+//                                                  scratch worktrees of env check and ci verify):
+//                                                  what setup or the tests started there, e.g.
+//                                                  a compose project per worktree
 //     "ignore": [".venv/"],                        what setup creates: kept out of git status
 //     "timeout_seconds": 1200
 //   }
@@ -38,7 +43,7 @@ const git = require('../lib/git');
 
 const FILE = (root) => path.join(root, '.factory', 'environment.json');
 const PROPOSED = (root) => path.join(root, '.factory', 'environment.proposed.json');
-const KEYS = ['version', 'name', 'setup', 'cache_key', 'env', 'prefix', 'services', 'ignore', 'timeout_seconds', 'notes'];
+const KEYS = ['version', 'name', 'setup', 'cache_key', 'env', 'prefix', 'services', 'teardown', 'ignore', 'timeout_seconds', 'notes'];
 
 // The schema check: the smallest set that covers a plain venv repo and a compose-based one.
 function problems(e) {
@@ -55,6 +60,7 @@ function problems(e) {
   strs(e.ignore, 'ignore');
   if (e.env !== undefined && (typeof e.env !== 'object' || Array.isArray(e.env) || Object.entries(e.env).some(([k, v]) => !/^[A-Za-z_][A-Za-z0-9_]*$/.test(k) || typeof v !== 'string'))) out.push('env must map variable names to strings');
   if (e.prefix !== undefined && typeof e.prefix !== 'string') out.push('prefix must be a string');
+  if (e.teardown !== undefined && (typeof e.teardown !== 'string' || !e.teardown.trim())) out.push('teardown must be a command');
   if (e.services !== undefined) {
     const s = e.services;
     if (!s || typeof s !== 'object' || Array.isArray(s)) out.push('services must be an object {up, health, down}');
@@ -107,7 +113,8 @@ const has = (root, f) => exists(path.join(root, f));
 // or edits it; nothing runs until then.
 function detect(root) {
   const py = read(root, 'pyproject.toml');
-  const reqs = fs.existsSync(root) ? fs.readdirSync(root).filter((f) => /^requirements.*\.txt$/.test(f)) : [];
+  // file names go into shell commands: only plain ones (requirements-dev.txt), never shell syntax
+  const reqs = fs.existsSync(root) ? fs.readdirSync(root).filter((f) => /^requirements[\w.-]*\.txt$/.test(f)) : [];
   const tasksPy = read(root, 'tasks.py');
   const pkg = read(root, 'package.json');
   const evidence = [];
@@ -126,9 +133,11 @@ function detect(root) {
       cache_key: ['poetry.lock', 'pyproject.toml', 'development/Dockerfile', 'development/*.yml', 'development/*.env'],
       env: { [`${V}_PROJECT_NAME`]: 'factory-{slug}', [`${V}_LOCAL`]: 'false' },
       prefix: '',
+      // invoke unittest leaves the project's database and redis containers running
+      teardown: 'invoke destroy',
       ignore: [],
       timeout_seconds: 1800,
-      notes: `Each worktree gets its own compose project (${V}_PROJECT_NAME=factory-{slug}): its own Postgres, Redis and Nautobot containers, with that worktree's code mounted. Verify commands look like "invoke unittest --failfast --label ${ns}.tests.test_x". Remove a project with "invoke destroy" in its worktree. For a shared Postgres/Redis stack and one test database per task instead, see the README recipe.`,
+      notes: `Each worktree gets its own compose project (${V}_PROJECT_NAME=factory-{slug}): its own Postgres, Redis and Nautobot containers, with that worktree's code mounted. Verify commands look like "invoke unittest --failfast --label ${ns}.tests.test_x". Each project is removed with "invoke destroy" (teardown) when the job closes; for a cancelled job, run it in each .factory/worktrees/<job>-<task> yourself. For a shared Postgres/Redis stack and one test database per task instead, see the README recipe.`,
       evidence,
     };
   }
@@ -207,7 +216,7 @@ function wrap(e, v, cmd) {
   return `${preamble(e, v)}${e.prefix ? `${expand(e.prefix, v)} ` : ''}${cmd}`;
 }
 
-// The env for a process the runner starts (a builder): values expanded, $VAR from this env.
+// The env for a process started inside the environment: values expanded, $VAR from this env.
 function processEnv(e, v, base = process.env) {
   const out = {};
   for (const [k, val] of Object.entries((e && e.env) || {})) out[k] = expand(val, v).replace(/\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?/g, (_, n) => (n in out ? out[n] : base[n] || ''));
@@ -273,24 +282,50 @@ function ensureIgnored(root, e) {
 }
 
 // Job-level services: up once per job (recorded in the job state), health checked every time.
+// A wave's tasks are prepared in parallel: the first brings the services up while the others
+// wait for it (two `docker compose up` on one project at once fail), then each checks health.
 function ensureServices(root, state, e, v) {
   const s = e.services;
   if (!s || !s.up) return { ok: true };
+  if (!state) return servicesUp(root, null, e, v);
+  const T = e.timeout_seconds || 1200;
+  const file = path.join(require('../lib/paths').jobPaths(root, state.id).dir, 'services.lock');
+  return require('./job').withLock(file, () => servicesUp(root, state, e, v), { waitMs: (2 * T + 360) * 1000, staleMs: (2 * T + 360) * 1000, what: `${state.id}'s services` });
+}
+
+function servicesUp(root, state, e, v) {
+  const s = e.services;
   const T = e.timeout_seconds || 1200;
   const job = require('./job');
   const key = hash({ up: s.up, env: e.env || {} });
   const fresh = state ? job.load(root, state.id) : null;
   const jv = { ...v, worktree: root, task: 'job', slug: `${v.job}`.toLowerCase(), db: `factory_${String(v.job).toLowerCase().replace(/[^a-z0-9]/g, '')}` };
   const env = processEnv(e, jv);
-  if (!fresh || !fresh.environment_services || fresh.environment_services.key !== key) {
+  const up = () => {
     const r = sh(expand(s.up, jv), root, T, env);
-    if (r.code !== 0) return { ok: false, broken: broken('services.up', expand(s.up, jv), r) };
+    if (r.code !== 0) return broken('services.up', expand(s.up, jv), r);
     if (fresh) job.mutate(root, fresh.id, (st) => { st.environment_services = { key, up_at: nowIso() }; });
-  }
-  if (s.health) {
+    return null;
+  };
+  const healthy = () => {
+    if (!s.health) return null;
     const r = sh(expand(s.health, jv), root, Math.min(T, 300), env);
-    if (r.code !== 0) return { ok: false, broken: broken('services.health', expand(s.health, jv), r) };
+    return r.code === 0 ? null : broken('services.health', expand(s.health, jv), r);
+  };
+  const wasUp = Boolean(fresh && fresh.environment_services && fresh.environment_services.key === key);
+  if (!wasUp) {
+    const b = up();
+    if (b) return { ok: false, broken: b };
   }
+  let h = healthy();
+  // Brought up earlier in this job but unhealthy now (the machine rebooted, docker restarted):
+  // up once more before calling the environment broken, or every resume would park again.
+  if (h && wasUp) {
+    const b = up();
+    if (b) return { ok: false, broken: b };
+    h = healthy();
+  }
+  if (h) return { ok: false, broken: h };
   return { ok: true };
 }
 
@@ -401,12 +436,39 @@ function check(root, { proposed = false } = {}) {
   try {
     const { evidence: _e, notes: _n, source: _s, ...run } = e;
     const r = ensure(root, null, { taskId: 'envcheck', wt, env: run });
+    const torn = teardown(root, null, { taskId: 'envcheck', wt, env: run });
     let down = null;
     if (e.services && e.services.down) down = sh(expand(e.services.down, vars(root, null, 'envcheck', wt)), root, 600).code;
-    return { ok: r.ok, which, name: e.name || null, ran: r.ran || [], ...(r.ok ? {} : { broken: r.broken, message: r.broken.reason }), ...(down !== null ? { services_down_exit: down } : {}) };
+    return { ok: r.ok, which, name: e.name || null, ran: r.ran || [], ...(r.ok ? {} : { broken: r.broken, message: r.broken.reason }), ...(torn ? { teardown_exit: torn.code } : {}), ...(down !== null ? { services_down_exit: down } : {}) };
   } finally {
     git.run(root, ['worktree', 'remove', '--force', wt], { allowFail: true });
   }
+}
+
+// Undo what setup (or the tests) started for one worktree: the environment's teardown, run in
+// that worktree before it is removed. Only where setup ran (its marker is there). Best effort:
+// { cmd, code } or null.
+function teardown(root, state, { taskId = null, wt, env: given } = {}) {
+  let e = given;
+  if (e === undefined) {
+    try {
+      e = load(root);
+    } catch {
+      return null;
+    }
+  }
+  if (!e || !e.teardown || !wt || !exists(wt)) return null;
+  let marker = null;
+  try {
+    marker = readJson(markerFile(wt), null);
+  } catch {
+    marker = null;
+  }
+  if (!marker) return null;
+  const v = vars(root, state, taskId, wt);
+  const cmd = expand(e.teardown, v);
+  const r = sh(`${preamble(e, v)}${cmd}`, wt, 600, processEnv(e, v));
+  return { cmd, code: r.code, ...(r.code === 0 ? {} : { tail: String(r.output || '').trim().split('\n').slice(-5).join('\n') }) };
 }
 
 // The job's services down (job close): best effort, logged by the caller.
@@ -444,4 +506,4 @@ function notice(root) {
   };
 }
 
-module.exports = { servicesDown, load, loadSafe, detect, proposal, problems, show, propose, confirm, check, ensure, wrap, preamble, processEnv, vars, expand, notice, cacheKey, short, FILE, PROPOSED };
+module.exports = { teardown, servicesDown, load, loadSafe, detect, proposal, problems, show, propose, confirm, check, ensure, wrap, preamble, processEnv, vars, expand, notice, cacheKey, short, FILE, PROPOSED };

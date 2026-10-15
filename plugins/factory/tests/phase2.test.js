@@ -471,7 +471,7 @@ test('P2.3: a task whose branch only points into the job branch (blocked, restar
   assert.deepEqual(rec.detail.commands.map((c) => c.cmd), ['node tests/add.test.js'], 'T2 is not integrated: its command does not run');
 });
 
-test('parallel task updates (builders\' task start, the runner\'s verify for several tasks) never lose each other: state writes are locked', async () => {
+test('parallel task updates (builders\' task start, the testers\' verify for several tasks) never lose each other: state writes are locked', async () => {
   const root = F.makeRepo();
   const J = grounded(root);
   const ids = Array.from({ length: 24 }, (_, i) => `T${i + 1}`);

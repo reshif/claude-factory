@@ -456,6 +456,11 @@ test('outcome integrity: a serious finding left unverified and never settled, an
   assert.ok(!rules.evidenceChain(carried).some((x) => x.rule === 'R5.unverified_finding_lost'));
   const settled = { ...lostJob, ledger: [lostJob.ledger[0], { ...lostJob.ledger[1], detail: { round: 1, findings: [{ ...code1, status: 'refuted' }] } }, lostJob.ledger[2]] };
   assert.ok(!rules.evidenceChain(settled).some((x) => x.rule === 'R5.unverified_finding_lost'));
+  // settled by the human (factory finding dismiss|accept): not lost either
+  for (const status of ['dismissed', 'accepted']) {
+    const byYou = { ...lostJob, ledger: [lostJob.ledger[0], { ...lostJob.ledger[1], detail: { round: 1, findings: [{ ...code1, status, settled: { by: 'human', reason: 'known' } }] } }, lostJob.ledger[2]] };
+    assert.ok(!rules.evidenceChain(byYou).some((x) => x.rule === 'R5.unverified_finding_lost'), status);
+  }
   // T2's builder crashed, its tester passed the stale branch
   const roster = { kind: 'agents', workflow: 'realize', at: '2026-01-01T00:00:05Z', agents: [
     { label: 'build T1 #1', outcome: 'done' }, { label: 'build T2 #1', outcome: 'no_result' }, { label: 'test T1', outcome: 'pass' }, { label: 'test T2', outcome: 'pass' },
@@ -464,4 +469,38 @@ test('outcome integrity: a serious finding left unverified and never settled, an
   assert.ok(done, 'flagged');
   assert.deepEqual(done.evidence, ['T2', 'T3']);
   assert.ok(!rules.evidenceChain({ ...base, ledger: [{ ...roster, agents: roster.agents.filter((a) => !/T2/.test(a.label)) }] }).some((x) => x.rule === 'R5.done_without_builder'));
+});
+
+test('R5.unverified_finding_lost matches a finding by what it is, not by its id: ids restart each round, and a carried one may be renamed', () => {
+  const base = { id: 'J-0001', state: { status: 'active', tasks: {} }, lock: null, ledgerLines: [], decisionLines: [], eventLines: [], events: [], decisions: [] };
+  const at = (s) => `2026-01-01T00:00:0${s}Z`;
+  const lostOne = { id: 'code-1', lane: 'code', severity: 'major', file: 'src/a.js', line: 3, summary: 'a.js drops the last row', status: 'unverified' };
+  // round 2's code-1 is another finding (another file), confirmed and fixed; round 3 passes; a.js's was never settled
+  const other = { id: 'code-1', lane: 'code', severity: 'major', file: 'src/b.js', line: 40, summary: 'b.js leaks a handle', status: 'confirmed' };
+  const job = { ...base, ledger: [
+    { kind: 'step', step: 'challenge', ok: false, at: at(1), detail: { round: 1, findings: [lostOne] } },
+    { kind: 'step', step: 'challenge', ok: false, at: at(2), detail: { round: 2, findings: [other] } },
+    { kind: 'step', step: 'challenge', ok: true, at: at(3), detail: { round: 3, findings: [] } },
+  ] };
+  assert.ok(rules.evidenceChain(job).some((x) => x.rule === 'R5.unverified_finding_lost'), 'another finding that reuses the id does not settle it');
+  // a carried finding renamed because a new one took its id (code-1@r1), still open: not lost
+  const noFile = { id: 'code-1', lane: 'code', severity: 'major', file: null, line: null, summary: 'no input validation anywhere', status: 'unverified' };
+  const carried = { ...base, ledger: [
+    { kind: 'step', step: 'challenge', ok: false, at: at(1), detail: { round: 1, findings: [noFile] } },
+    { kind: 'step', step: 'challenge', ok: false, at: at(2), detail: { round: 2, findings: [{ ...other, status: 'refuted' }, { ...noFile, id: 'code-1@r1', carried: { from_round: 1, times: 1 } }] } },
+  ] };
+  assert.ok(!rules.evidenceChain(carried).some((x) => x.rule === 'R5.unverified_finding_lost'), 'carried under a new id');
+});
+
+test('R7: the build environment and finding commands at a gate, and what realize\'s agents run (task built, task verify, env prepare, reconcile wave), are no deviation', () => {
+  const at = (h) => new Date(Date.UTC(2026, 0, 1) + h * 36e5).toISOString();
+  const cli = (h, d, extra) => ({ event: 'cli', ts: at(h), job: 'J-0002', decision_id: d, ok: true, ...extra });
+  const job = { id: 'J-0002', state: {}, lock: null, ledger: [], decisions: [{ id: 'J-0002-D0001', ts: at(1), action: 'gate', step: 'H1' }, { id: 'J-0002-D0002', ts: at(3), action: 'workflow', workflow: 'realize', step: 'realize' }, { id: 'J-0002-D0003', ts: at(5), action: 'gate', step: 'H3' }], events: [
+    cli(1.1, 'J-0002-D0001', { cmd: 'env', sub: 'show' }), cli(1.2, 'J-0002-D0001', { cmd: 'env', sub: 'check' }), cli(1.3, 'J-0002-D0001', { cmd: 'env', sub: 'set' }), cli(1.4, 'J-0002-D0001', { cmd: 'finding', sub: 'dismiss', arg: 'code-1' }),
+    cli(3.1, 'J-0002-D0002', { cmd: 'wfargs', workflow: 'realize' }), cli(3.2, 'J-0002-D0002', { cmd: 'task', sub: 'start', arg: 'T1' }), cli(3.3, 'J-0002-D0002', { cmd: 'task', sub: 'built', arg: 'T1' }), cli(3.4, 'J-0002-D0002', { cmd: 'task', sub: 'verify', arg: 'T1' }), cli(3.5, 'J-0002-D0002', { cmd: 'env', sub: 'prepare', arg: 'T1' }), cli(3.6, 'J-0002-D0002', { cmd: 'reconcile', sub: 'wave' }), cli(3.7, 'J-0002-D0002', { cmd: 'record', workflow: 'realize' }),
+  ] };
+  assert.deepEqual(rules.driverFidelity(job).filter((x) => x.rule !== 'R7.not_done'), []);
+  // …but a task marked built while waiting at a gate is
+  const late = { ...job, events: [...job.events, cli(5.1, 'J-0002-D0003', { cmd: 'task', sub: 'built', arg: 'T1' })] };
+  assert.ok(rules.driverFidelity(late).some((x) => x.rule === 'R7.acted_while_waiting' && /task built/.test(x.summary) && x.severity === 'high'));
 });
