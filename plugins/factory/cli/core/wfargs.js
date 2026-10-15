@@ -524,7 +524,7 @@ function realize(root, state, ctx, action) {
       tester: agentSpec(state, 'tester'),
       builder_prompt: prompt(
         'builder',
-        `${jc}\n- Task: **${t.id}** — ${t.objective}\n- Start: \`${cli(root)} task start ${t.id} --job ${state.id}\`\n- Show: \`${cli(root)} task show ${t.id} --job ${state.id}\`\n- Worktree: ${wt}\n- Allowed paths: ${t.allowed_paths.join(', ')}${fixNote ? `\n${fixNote}` : ''}`,
+        `${jc}\n- Task: **${t.id}** — ${t.objective}\n- Start: \`${cli(root)} task start ${t.id} --job ${state.id}\`\n- Show: \`${cli(root)} task show ${t.id} --job ${state.id}\`\n- Built (your last step): \`${cli(root)} task built ${t.id} --job ${state.id} --status done\` (or \`--status blocked --reason needs_paths|dependency_conflict\`)\n- Worktree: ${wt}\n- Allowed paths: ${t.allowed_paths.join(', ')}${fixNote ? `\n${fixNote}` : ''}`,
         'builder',
         'Attempt {{attempt}}. Previous tester failures, if any:\n{{failures}}',
       ),

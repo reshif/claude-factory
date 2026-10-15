@@ -58,7 +58,8 @@ Workflows  wfargs <ground|fanout-judge|decompose|realize|reconcile> [--config cl
            [--threat-model | --no-threat-model] [--plan-critique] [--accept-degraded] [--out file]
            record --file <envelope.json | ->
 Plan       plan validate · plan from-contract
-Tasks      task start <T> · task show <T> · task verify <T> · task state <T> blocked|exhausted [--reason]
+Tasks      task start <T> · task show <T> · task verify <T> · task built <T> --status done|blocked [--reason r]   (the builder's last step)
+           task state <T> blocked|exhausted [--reason]
 Build      reconcile run|continue|abort · verify run · evidence add <AC> --type diff|doc [--path p] [--note n]
 Ship       report · ship [--local] · pr sync · ci verify [--manifest-dir d | --commit sha] · close
 Change     amend start --reason "…" [--by who] · amend submit · park --reason "…" · followup
@@ -201,7 +202,7 @@ function run(argv) {
     case 'task': {
       const t = C('tasks');
       const id = pos[2];
-      if (!id) fail('task <start|show|verify|state> <T1>', 'bad_input');
+      if (!id) fail('task <start|show|verify|built|state> <T1>', 'bad_input');
       if (sub === 'start') return t.start(R(), J, id);
       if (sub === 'show') return t.show(R(), J, id);
       if (sub === 'verify') {
@@ -210,7 +211,17 @@ function run(argv) {
         return r;
       }
       if (sub === 'state') return t.setState(R(), J, id, pos[3], opt.reason);
-      return fail('task start | show | verify | state', 'bad_input');
+      if (sub === 'built') {
+        // The builder's last step: what this attempt's builder replies (the guard lets only a
+        // factory:builder agent run it). task verify counts only an attempt recorded done.
+        const status = String(opt.status || '');
+        if (!['done', 'blocked'].includes(status)) fail('task built <T1> --status done|blocked [--reason needs_paths|dependency_conflict|environment_broken] [--summary "…"]', 'bad_input');
+        if (opt.reason && !['needs_paths', 'dependency_conflict', 'environment_broken'].includes(opt.reason)) fail('--reason is needs_paths, dependency_conflict or environment_broken', 'bad_input');
+        const jid = C('job').resolve(R(), J).id;
+        t.afterBuilder(R(), jid, id, { status, summary: opt.summary || '', ...(status === 'blocked' && opt.reason ? { blocked_reason: opt.reason } : {}) }, { label: `build ${id}` });
+        return { job: jid, task: id, recorded: (C('job').load(R(), jid).tasks[id] || {}).builder || null };
+      }
+      return fail('task start | show | verify | built | state', 'bad_input');
     }
     case 'reconcile': {
       const r = C('reconcile');

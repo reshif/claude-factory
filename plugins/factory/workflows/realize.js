@@ -94,10 +94,26 @@ for (let w = 0; w < brief.waves.length; w++) {
       const s = st[id]
       if (b && b.status === 'blocked') {
         s.outcome = 'blocked'
-        s.summary = `Blocked: needs ${(b.needs_paths || []).join(', ') || 'paths outside its scope'}. ${b.summary || ''}`
+        // dependency_conflict is typed: the task's dependencies don't merge, a plan change
+        // fixes it, and retrying the same merge would only fail again.
+        s.summary = b.blocked_reason === 'dependency_conflict'
+          ? `Blocked (dependency_conflict): ${b.summary || 'its dependencies do not merge'}`
+          : `Blocked: needs ${(b.needs_paths || []).join(', ') || 'paths outside its scope'}. ${b.summary || ''}`
         continue
       }
-      if (b) { s.swept = b.swept || []; s.summary = b.summary || '' }
+      // A builder that returned nothing (crashed, timed out, no valid reply) built nothing this
+      // attempt: testing the branch would only re-test an older state. The attempt is spent.
+      if (!b) {
+        s.attempts += 1
+        s.failures = [`Attempt ${s.attempts}: the builder returned no result (crashed, timed out or replied without the JSON); nothing was tested. Check the worktree for its unfinished work.`]
+        if (s.attempts >= (T[id].retry_limit || 3)) {
+          s.outcome = 'exhausted'
+          s.summary = `Exhausted after ${s.attempts} attempt(s): ${s.failures[0]}`
+        }
+        continue
+      }
+      s.swept = b.swept || []
+      s.summary = b.summary || ''
       toTest.push(id)
     }
     const tested = await runAll(toTest, (id) => call(T[id].tester_prompt.replace('{{swept}}', st[id].swept.join(', ') || '(none listed)'), opts({ ...T[id].tester, schema: brief.tester_schema }, `test ${id}`)))

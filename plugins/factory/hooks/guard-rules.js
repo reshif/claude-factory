@@ -656,6 +656,9 @@ function checkCommand(cmd, pipeline, ctx, depth, collect) {
         }
       }
       if (a && isHumanOnly(a, b)) return humanMessage(a, b);
+      // `task built` is a builder's own last step (its reply for this attempt): nobody else may
+      // vouch that a builder finished, not the main session and not another agent.
+      if (a === 'task' && b === 'built' && ctx.agentType !== 'factory:builder') return '"factory task built" records a task builder\'s own reply; only that builder (factory:builder) runs it. Builds happen through the realize workflow.';
       if (a && ctx.agent && isUserRelay(a, b)) return `"factory ${a}${a === 'clarify' ? ` ${b}` : ''}" records what the user said; it is the main session's, never a factory agent's. Return what you found in your final message instead.`;
     } else if (!collect) {
       const why = unknownExpansionHuman(head, ctx);
@@ -726,7 +729,7 @@ function ownJobDir(jobId) {
 }
 
 function checkBash(root, cmd, policy, opts = {}) {
-  const ctx = { root, policy: policy || require('../cli/core/policy').defaults(), job: opts.job || null, agent: Boolean(opts.agent), names: new Set(), vars: new Map(), found: [] };
+  const ctx = { root, policy: policy || require('../cli/core/policy').defaults(), job: opts.job || null, agent: Boolean(opts.agent), agentType: opts.agentType || null, names: new Set(), vars: new Map(), found: [] };
   try {
     return walk(String(cmd || ''), ctx, 0);
   } catch {
