@@ -64,8 +64,9 @@ function shape(list, { budget: max = Infinity, asked = [], startId = 0 } = {}) {
 // found by same_as / U-n, then by subject and wording; a question about a settled, dropped or
 // deferred issue is not asked, nor one already asked and waiting for its answer; a new one
 // becomes an issue with an owner (an implementation detail is deferred to design, not asked).
-// data: the ledger (cli/core/clarify.js). -> { questions, created, skipped }
-function ground(list, data, round = null, source = 'judge') {
+// data: the ledger (cli/core/clarify.js); bg: the job's vocabulary (clarify.vocabulary(title)),
+// for the dedup rule. -> { questions, created, skipped }
+function ground(list, data, round = null, source = 'judge', bg = null) {
   const clarify = require('./clarify');
   let n = data.issues.reduce((m, u) => Math.max(m, Number(String(u.id).replace('U-', '')) || 0, ...(u.aliases || []).map((a) => Number(String(a.id).replace('U-', '')) || 0)), 0);
   const out = [];
@@ -73,7 +74,7 @@ function ground(list, data, round = null, source = 'judge') {
   const skipped = [];
   for (const q of list || []) {
     if (!q || !q.question) continue;
-    let u = clarify.findSame([...data.issues, ...created], { ...q, text: q.question });
+    let u = clarify.findSame([...data.issues, ...created], { ...q, text: q.question }, bg);
     if (!u) {
       const kind = clarify.KINDS.includes(q.kind) ? q.kind : category(q);
       n += 1;

@@ -81,6 +81,8 @@ function resultText(step, ok, d) {
   d = d || {};
   switch (step) {
     case 'clarify': {
+      // God Eye objects (0.15.1): the round is over, but God Eye did not approve; H1 shows why
+      if (ok && d.approved === false) return `Clarify can do no more; God Eye did not approve: ${num(d.god_eye_objects)} objection(s), shown at H1`;
       if (ok) return d.approved_with_notes ? 'Contract judged clear; God Eye approved with notes' : 'Contract judged clear; God Eye approved the intent';
       const cats = [...new Set(Array.isArray(d.categories) ? d.categories : [])];
       const held = num(d.held);
@@ -374,6 +376,8 @@ function jobData(root, id, all, checker, nowMs = Date.now()) {
     tasks,
     lessons,
     clarify: clarifyBlock(root, state),
+    // what H1 shows besides the contract (factory next's `clarify` at the gate): God Eye's objections, drops, angles gone on without
+    h1: state.pending_gate && ['H1', 'EH1'].includes(state.pending_gate.id) ? require('./clarify').h1Summary(root, state) : null,
   };
   // A cheap revision: the page re-renders only the jobs whose rev changed.
   job.rev = crypto.createHash('sha1').update(JSON.stringify(job)).digest('hex').slice(0, 12);

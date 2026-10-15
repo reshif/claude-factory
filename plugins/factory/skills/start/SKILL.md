@@ -43,7 +43,7 @@ Repeat until you reach a stop point:
 3. Write the JSON result the workflow returns, unchanged, to `.factory/scratch/envelope.json` and run `factory record --file .factory/scratch/envelope.json`.
 4. Act on the record result's `status`:
    - `ok` / `fix` / `retry` / `revise` / `stale` / `error` / `park` → go back to the loop. Nothing for the user here: `factory next` handles retries, fix rounds and parking.
-   - Any `needs_user` or `degraded` result from the **clarify** workflow → follow **factory:clarify** ("Read the result"); it owns how questions, revise and retry rounds and degraded angles are handled.
+   - Any `needs_user` result from the **clarify** workflow, or one carrying `god_eye_objects` or `analysis_incomplete` → follow **factory:clarify** ("Read the result"); it owns how questions, revise and retry rounds, God Eye's objections and failed angles are handled.
    - `needs_user` with `questions` from **ground** → ask the user exactly those questions, in that order, as one numbered list, then **stop**. When they answer, record each with `factory answer --question "…" --answer "…"` and continue the loop.
 
 **No Workflow tool?** Run the same brief by hand with the Agent tool: start every item of the fan-out in one message (parallel) with `subagent_type` set to the item's `agent_type` (e.g. `factory:researcher`), its `prompt`, and the item's `model` if it has one, requiring JSON that matches its `schema`; retry a failed item once; then do the judge / critique / verifier / builder-tester steps exactly as the workflow script (`workflows/<name>.js`) does, and build the result envelope with the same fields. Record it the same way.
