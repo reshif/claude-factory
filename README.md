@@ -4,8 +4,8 @@ Turns a request into a verified, merged change. Claude does the work through spe
 
 | Plugin | Version | What it is |
 |---|---|---|
-| `factory` | 0.10.1 | The orchestrator: skills, hooks, the `factory` CLI, workflows, agents, recipes, templates and the console |
-| `factory-inspector` | 0.2.1 | An independent auditor: checks each job against the rulebook it declared and the factory's health |
+| `factory` | 0.11.0 | The orchestrator: skills, hooks, the `factory` CLI, workflows, agents, recipes, templates and the console |
+| `factory-inspector` | 0.3.0 | An independent auditor: checks each job against the rulebook it declared and the factory's health |
 
 ## How it fits together
 
