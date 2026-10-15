@@ -74,6 +74,7 @@ Human only (your terminal, or reply in chat):
            approve [gate] · deny --reason "…" · resume [step] · cancel · abandon · waive <floor> --reason "…"
            merged <commit> · confirm <AC> · lessons accept|reject <L> · lessons promote <L> --check "cmd" · reseal
            clarify split <U-n> <alias U-n>   (undo a wrong fold: the alias becomes its own clarify issue again)
+           finding accept|dismiss <id> --reason "…"   (a serious finding no verifier settled; chat: dismiss finding code-1 <reason>)
 Global     --root <repo> · --job <J-0001>`;
 
 const LONG_RUNNING = Symbol('long-running'); // the command reports for itself (console --serve)
@@ -361,6 +362,9 @@ function run(argv) {
       return C('human').merged(R(), { jobId: J, commit: sub, channel: tty });
     case 'confirm':
       return C('human').confirmAc(R(), { jobId: J, ac: sub, channel: tty });
+    case 'finding':
+      if (!['accept', 'dismiss'].includes(sub) || !pos[2]) fail('finding accept|dismiss <id> --reason "…"', 'bad_input');
+      return C('human').settleFinding(R(), { jobId: J, id: pos[2], decision: sub, reason: opt.reason || pos.slice(3).join(' '), channel: tty });
     case 'reseal':
       C('human').requireHumanChannel(tty);
       if (J || C('job').current(R())) C('human').confirmTyped(tty, J || C('job').current(R()), 'reseal it');

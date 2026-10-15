@@ -175,7 +175,8 @@ function lostFindings(job) {
     for (const x of r.detail.findings.filter((y) => SERIOUS.has(y.severity) && y.status === 'unverified')) {
       const later = rounds.slice(i + 1);
       if (!later.length) continue;
-      const settled = later.some((e) => e.detail.findings.some((y) => (y.id === x.id || sameIssue(x, y, false)) && ['confirmed', 'refuted'].includes(y.status)));
+      // settled by a verifier, or by the human (factory finding accept|dismiss, with a reason)
+      const settled = later.some((e) => e.detail.findings.some((y) => (y.id === x.id || sameIssue(x, y, false)) && ['confirmed', 'refuted', 'accepted', 'dismissed'].includes(y.status)));
       const carried = later[later.length - 1].detail.findings.some((y) => (y.id === x.id || (y.carried && sameIssue(x, y, false))) && y.status === 'unverified');
       if (settled || carried) continue;
       const passedAfter = later.find((e) => e.ok);
@@ -244,7 +245,7 @@ function loops(job) {
 const READ_ONLY = new Set(['next', 'doc', 'why', 'job', 'contract', 'help', 'doctor', 'finalize', 'recipe', 'telemetry', 'use', 'lessons:list', 'task:show', 'distill:context', 'plan:validate', 'report', 'init', 'clarify:status']);
 // Human-only commands that went through (the CLI accepted your terminal): you acting, judged by
 // their human.* decision, not a driver deviation. A refused attempt is still judged.
-const HUMAN_CMDS = new Set(['clarify:split']);
+const HUMAN_CMDS = new Set(['clarify:split', 'finding']);
 const MUTATING_IN_WAIT = new Set(['record', 'ship', 'task:start', 'task:verify', 'task:state', 'reconcile', 'verify', 'evidence', 'plan:from-contract', 'close', 'epic', 'amend', 'followup', 'distill:done', 'wfargs']);
 
 function cmdKey(e) {

@@ -34,8 +34,8 @@ function makeRepo() {
   return root;
 }
 
-function cli(root, args, { allowFail = true } = {}) {
-  const r = spawnSync('node', [BIN, ...args], { cwd: root, encoding: 'utf8', env: { ...process.env, FACTORY_ROOT: '' } });
+function cli(root, args, { allowFail = true, env = {} } = {}) {
+  const r = spawnSync('node', [BIN, ...args], { cwd: root, encoding: 'utf8', env: { ...process.env, FACTORY_ROOT: '', ...env } });
   let json;
   try {
     json = JSON.parse(r.stdout);
@@ -272,8 +272,28 @@ function built(root, taskId, { job, result = { status: 'done', summary: 'built b
   return require('../../cli/core/tasks').afterBuilder(root, jobId, taskId, result, { startedAt: new Date().toISOString(), label: `build ${taskId}` });
 }
 
+// The user's chat reply through the real UserPromptSubmit hook: { status: applied|refused|ignored,
+// code (a refusal's, from the log), text (what the hook told Claude) }.
+function say(root, text) {
+  const r = spawnSync('node', [path.join(PLUGIN, 'hooks', 'prompt.js')], { cwd: root, input: JSON.stringify({ prompt: text, cwd: root, session_id: 'human', hook_event_name: 'UserPromptSubmit' }), encoding: 'utf8', env: { ...process.env, FACTORY_ROOT: '' } });
+  let ctx = '';
+  try {
+    ctx = JSON.parse(r.stdout).hookSpecificOutput.additionalContext || '';
+  } catch {
+    ctx = '';
+  }
+  const status = /Applied your reply/.test(ctx) ? 'applied' : /NOT applied/.test(ctx) ? 'refused' : 'ignored';
+  let code = null;
+  if (status === 'refused') {
+    const lines = fs.readFileSync(path.join(root, '.factory', 'log', 'events.jsonl'), 'utf8').trim().split('\n').map((l) => JSON.parse(l));
+    const e = lines.reverse().find((x) => x.event === 'reply_refused');
+    code = e ? e.code : null;
+  }
+  return { status, code, text: ctx };
+}
+
 function jobDir(root, id) {
   return path.join(root, '.factory', 'jobs', id);
 }
 
-module.exports = { PLUGIN, BIN, sh, write, makeRepo, cli, reply, built, contractText, envelope, record, jobDir, adrText, noAdrText, threatModelText, recommendationText, contractsDocText, DIAGRAM };
+module.exports = { PLUGIN, BIN, sh, write, makeRepo, cli, reply, say, built, contractText, envelope, record, jobDir, adrText, noAdrText, threatModelText, recommendationText, contractsDocText, DIAGRAM };
