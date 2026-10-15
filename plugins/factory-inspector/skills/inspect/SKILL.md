@@ -1,6 +1,6 @@
 ---
 name: inspect
-description: Audit the Software Factory — check whether jobs ran the recipe they were meant to, in the declared order, with valid gates and evidence, and whether Claude did what the router said; check the factory's health (hook errors, guard denials, blocked done claims, refused replies, CLI failures, stale or degraded workflows, agent failures, parks, idle jobs); then walk the user through open findings (deviations, ambiguities, gaps). Use when the user types /factory-inspector:inspect, asks if the factory is behaving, or asks about inspector findings, modes or streaks.
+description: Audits the Software Factory against each job's declared recipe and its own health, and explains open findings. Use when the user types /factory-inspector:inspect, asks if the factory is behaving, or asks about inspector findings. Not for code review.
 argument-hint: "[job id | all | active | health | status]"
 ---
 # Inspect the factory
@@ -18,14 +18,9 @@ The inspector is an independent auditor. It reads the factory's sealed records a
 Then show `factory-inspect report --format md` (open findings, then a **Factory health** section).
 
 ## Explain the findings
-Group them by class, highest severity first, in plain words:
-- **deviation** — the factory did something its declared rulebook doesn't allow (wrong recipe, skipped step, approval for a document that wasn't presented, review on an unproven build, Claude doing something other than what `factory next` said, records written outside the CLI).
-- **ambiguity** — the rules left room and someone improvised (same situation routed differently, caps you keep resuming past, guard denials agents keep hitting, the same step repeating).
-- **gap** — something the audit needs is missing or broken (no rulebook snapshot, a recipe edited without a version bump, a hook that failed and so enforced nothing, torn log lines, a CLI crash, agents that never stopped, a job left idle).
+Group them by class (**deviation**, **ambiguity**, **gap**), highest severity first, in plain words. For each, give the evidence (decision ids, job) and the inspector's question, and say what you think the likely cause is when the records support it and what would fix it (a skill wording, a recipe version bump, a cap change) — but **don't change recipes, floors, policy or skills**; those are the user's.
 
-The health rules (R10–R19) count what the factory reports about itself against limits in `.factory/inspect/config.json` (`limits`, `rules_off`). A **hook error** on the guard, Stop or prompt hook is high severity: while it failed, that hook allowed everything — say what could have slipped through in that window. For repeated guard denials, refused or look-alike replies, CLI failures, stale results, degraded steps, agent retries/failures/escalations, parks and resumes, explain the pattern and the likely cause from the evidence. For intent parks and dropped clarify questions (R19), say whether the request or the judge looks at fault.
-
-For each, give the evidence (decision ids, job) and the inspector's question. Say what you think the likely cause is when the records support it, and what would fix it (a skill wording, a recipe version bump, a cap change) — but **don't change recipes, floors, policy or skills**; those are the user's.
+Before explaining any finding, read `${CLAUDE_SKILL_DIR}/references/findings-guide.md`: what each class covers, how to weigh the health rules (a failed guard, Stop or prompt hook is high severity), and what to say about intent parks and dropped questions. Skip it when the report has no open findings.
 
 ## The user decides
 They reply, and the inspector's hook applies it:

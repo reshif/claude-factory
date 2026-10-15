@@ -1,6 +1,6 @@
 ---
 name: gate
-description: Present a factory human gate (H1 contract, H2 design, H3 plan, HF findings, HS ship sign-off, EH1–EH3 epic, A amendment) with its documents and hash, then wait for the user's reply. Used by factory:start when `factory next` returns a gate.
+description: Presents a factory human gate (contract, design, plan, findings, ship sign-off or amendment) with its documents and hash, and waits for the user's exact reply. Used by factory:start when `factory next` returns action gate, and by factory:amend for gate A.
 user-invocable: false
 ---
 # Human gate
@@ -24,7 +24,21 @@ End with exactly this, and **stop**:
 
 > **Gate {id}** · hash `{first 12 chars}` — reply **`approve`** to continue, or **`deny <what must change>`**.
 
-Rules:
+## Example
+For `gate: { id: "H3", hash: "9f2c41ab07de55…", docs: ["…/plan.json"] }` on a two-task plan:
+
+> **Plan for J-0004** — two tasks in one wave.
+>
+> | Task | Objective | Allowed paths | Depends on | Criteria |
+> |---|---|---|---|---|
+> | T1 | Apply the discount before tax in `cartTotal` | `src/cart/**` | — | AC-1, AC-2 |
+> | T2 | Add regression tests for discounted carts | `tests/cart/**` | — | AC-1 |
+>
+> God Eye approved the plan; no open items.
+>
+> **Gate H3** · hash `9f2c41ab07de` — reply **`approve`** to continue, or **`deny <what must change>`**.
+
+## Rules
 - Only the user's own reply counts. Never approve on their behalf and never run `factory approve` (the guard blocks it).
 - If they answer with other words ("looks good", "yes"), ask them to reply exactly `approve` — the hook only applies the exact reply.
 - After they reply, the hook applies it before you see the message and adds a `[factory]` note. If it says *Applied*, continue the loop with `factory next`. If it says *NOT applied* (e.g. the document changed), present the gate again.

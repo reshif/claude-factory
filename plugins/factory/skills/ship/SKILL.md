@@ -1,6 +1,6 @@
 ---
 name: ship
-description: Factory ship — check pre-ship floors, write the completion report, commit the ship manifest, push and open the PR (or prepare a local merge), then wait for the human merge. Used by factory:start when `factory next` returns skill ship.
+description: Ships a factory job whose pre-ship floors are met, as a pull request on GitHub or a prepared local merge, and waits for the human merge. Used by factory:start when `factory next` returns skill ship.
 user-invocable: false
 ---
 # Ship

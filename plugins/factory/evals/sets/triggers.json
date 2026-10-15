@@ -1,0 +1,112 @@
+{
+  "about": "Tier 2 trigger sets: for each user-facing skill, prompts that should load it and realistic near-misses that should not. Source of truth for evals/trigger/**; regenerate with `node evals/tools/generate.js`.",
+  "skills": {
+    "start": {
+      "fires": "The reply moves the request into the Software Factory: it loads the factory driver and starts its loop (for example says it will run `factory doctor` / `factory next`, or restates the intent and proposes a work type and risk for a new job) instead of editing code directly.",
+      "positive": [
+        "Have the factory fix the discount rounding bug in the cart total.",
+        "Run this through the software factory: finance wants a CSV export of invoices from the billing page.",
+        "Continue the current factory job.",
+        "Let the factory build the password reset flow, with the usual gates and reviews.",
+        "Use the factory to migrate our data layer from knex to prisma.",
+        "I'd like the factory to take this one: the search results page is slow on mobile and support keeps getting tickets.",
+        "Pick up where the factory left off on J-0007.",
+        "Can the software factory add rate limiting to the login endpoint? Treat it as security-sensitive."
+      ],
+      "negative": [
+        { "prompt": "Fix the failing test in tests/cart.test.js — it expects 9.99 but gets 10.", "expect": "Works on the failing test directly (reads the test or asks for it)." },
+        { "prompt": "Add a dark mode toggle to the settings page.", "expect": "Helps with the toggle directly (looks for the settings page or asks where it is)." },
+        { "prompt": "Refactor src/utils/date.js to use async/await instead of callbacks.", "expect": "Helps with the refactor directly." },
+        { "prompt": "Write a unit test for parseDate that covers leap years.", "expect": "Helps write the test directly." },
+        { "prompt": "What does the factory pattern mean in object-oriented design?", "expect": "Explains the factory design pattern." },
+        { "prompt": "Create a factory function that builds User objects with default roles.", "expect": "Writes or sketches a factory function for User objects." },
+        { "prompt": "Explain how our CI pipeline in .github/workflows decides which jobs to run.", "expect": "Looks at or explains the CI configuration." },
+        { "prompt": "Rename the variable `tmp` to `cartTotal` everywhere in src/cart.js.", "expect": "Helps with the rename directly." }
+      ]
+    },
+    "console": {
+      "fires": "The reply opens or offers the Factory Console page (mentions `factory console`, the console page or its path/URL), not a generic dashboard or terminal output.",
+      "positive": [
+        "Show me the factory console.",
+        "I want to watch the factory work on J-0003 live.",
+        "Can I see a board of all the factory jobs and which ones wait for me?",
+        "Visualise what the factory agents did on the last job.",
+        "Open the factory's operations page.",
+        "Which factory jobs are waiting on me? Show me the console.",
+        "Show the factory's line map of all jobs over time.",
+        "Give me a live view of the factory while it builds."
+      ],
+      "negative": [
+        { "prompt": "Why did the factory park J-0004?", "expect": "Answers why the job was parked rather than opening a dashboard." },
+        { "prompt": "How has the factory been doing this month — cost and escaped defects?", "expect": "Talks about the factory's metrics or review rather than opening the console." },
+        { "prompt": "Show me the console output of `npm test` from the last run.", "expect": "Deals with test output, not the factory console." },
+        { "prompt": "Are there any open inspector findings on the factory?", "expect": "Deals with inspector findings, not the console page." },
+        { "prompt": "Add a console.log in cartTotal so I can debug the discount.", "expect": "Helps add the log statement." },
+        { "prompt": "Build an admin dashboard page for our app that lists orders.", "expect": "Helps design or build the app's own dashboard." },
+        { "prompt": "Show me the git log for the last week.", "expect": "Deals with git history." },
+        { "prompt": "Open the AWS console link from the README.", "expect": "Deals with the README link." }
+      ]
+    },
+    "review": {
+      "fires": "The reply starts the factory's own periodic review: it reads or offers to read factory telemetry (`factory telemetry report`) and talks about recipes, lanes, floors or cost — not a code review.",
+      "positive": [
+        "How is the factory doing?",
+        "Let's do the monthly factory review.",
+        "Which factory review lanes raise mostly refuted findings?",
+        "Is the factory's security lane worth what it costs? Look at the telemetry.",
+        "Run the factory retro for the last 60 days.",
+        "Which factory recipe costs the most agent runs per job?",
+        "Should we change any factory floors based on last month's jobs?",
+        "Give me the factory's telemetry and what you'd change in the recipes."
+      ],
+      "negative": [
+        { "prompt": "Review my PR.", "expect": "Offers a code review of the pull request (asks which PR or looks for it)." },
+        { "prompt": "Review this diff for bugs:\n```diff\n-  return a + b\n+  return a - b\n```", "expect": "Reviews the diff and notices the operator change." },
+        { "prompt": "Do a code review of src/auth.js.", "expect": "Reviews or offers to review the file." },
+        { "prompt": "Can you review the README for typos?", "expect": "Reviews the README text." },
+        { "prompt": "Why did the factory send J-0004 back for another review round?", "expect": "Explains a routing decision rather than reviewing telemetry." },
+        { "prompt": "Is the factory behaving? Any inspector findings?", "expect": "Deals with inspector findings." },
+        { "prompt": "Write a performance review summary for my team lead.", "expect": "Helps write a performance review." },
+        { "prompt": "Review the test coverage of the cart module.", "expect": "Looks at test coverage of the cart module." }
+      ]
+    },
+    "why": {
+      "fires": "The reply explains a factory routing decision from the job's decision records (runs or offers `factory why`, names rules or decisions), not a generic debugging answer.",
+      "positive": [
+        "Why did the factory park my job?",
+        "Why did the factory skip the design step on J-0002?",
+        "Why did the factory send my change back for another review round?",
+        "Why is the factory asking me for a CI re-verify?",
+        "Explain the factory's routing decisions for J-0002.",
+        "Why did the factory pick the bug@low recipe for this job?",
+        "What rule made the factory open a fix round?",
+        "The factory went back to clarify after I approved H1 — why?"
+      ],
+      "negative": [
+        { "prompt": "Why did my test fail? `expected 5, got -1` in tests/add.test.js.", "expect": "Debugs the test failure." },
+        { "prompt": "Why did CI fail on main this morning?", "expect": "Looks into the CI failure." },
+        { "prompt": "Why is npm install so slow in this repo?", "expect": "Discusses npm install performance." },
+        { "prompt": "Why does this function return undefined?\n```js\nfunction total(items) { items.reduce((s, i) => s + i.price, 0) }\n```", "expect": "Points out the missing return." },
+        { "prompt": "Why did the build break after I merged the feature branch?", "expect": "Investigates the build break." },
+        { "prompt": "Show me the factory console.", "expect": "Deals with the console, not a routing explanation." },
+        { "prompt": "How is the factory doing this month?", "expect": "Deals with the factory's periodic review." },
+        { "prompt": "Why does git say my branch has diverged?", "expect": "Explains diverged branches." }
+      ]
+    },
+    "amend": {
+      "fires": "The reply treats this as a change to an approved factory contract or plan (an amendment with the user's approval; mentions `factory amend` or gate A) rather than editing code directly.",
+      "positive": [
+        "The requirements changed for the current factory job: the discount must apply after tax, not before.",
+        "Product says J-0005 should also cover gift cards now — update the factory job.",
+        "AC-2 in the approved factory contract is wrong; we need to change it.",
+        "Mid-job change for the factory: the export must also include refunds."
+      ],
+      "negative": [
+        { "prompt": "Change the primary button colour to blue.", "expect": "Helps change the colour directly." },
+        { "prompt": "Amend my last git commit message to say 'fix cart total'.", "expect": "Explains or runs git commit --amend." },
+        { "prompt": "Update the requirements doc in docs/requirements.md with the new export fields.", "expect": "Helps edit the document." },
+        { "prompt": "Fix the typo in the README heading.", "expect": "Fixes the typo." }
+      ]
+    }
+  }
+}

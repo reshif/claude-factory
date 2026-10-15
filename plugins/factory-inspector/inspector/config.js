@@ -7,7 +7,7 @@
 
 const { readJson, writeJson, layout } = require('./io');
 
-// Thresholds for the factory-wide and per-job health rules (R10–R19). Edit them in
+// Thresholds for the factory-wide and per-job health rules (see rules.js). Edit them in
 // .factory/inspect/config.json under "limits"; switch rules off with "rules_off"
 // (a rule id like "R18.slow_reply" or a family like "R18").
 const LIMITS = {
