@@ -237,7 +237,8 @@ test('console: a workflow run step by step, from the brief (wfargs), the agent h
     assert.equal(e.decision_id, D, 'tied to the routing decision in force, as the agent lines are');
     assert.equal(require('../cli/lib/seal').valid(e), true, 'sealed like every log line');
   }
-  assert.deepEqual(wf[1].plan, { steps: { gate: 1, fanout: 3, judge: 1, 'god-eye': 1 } }, 'what the brief will run');
+  // clarify v2: the contract editor's two steps (nothing to apply in round 1; its revision only if God Eye asks)
+  assert.deepEqual(wf[1].plan, { steps: { edit: 0, gate: 1, fanout: 3, judge: 1, 'god-eye': 1, revise: null } }, 'what the brief will run');
   assert.equal(wf[2].wf_run, wf[1].wf_run, 'the record ends the run its brief started');
   assert.equal(wf[2].roster.length, 8);
   assert.ok(logLines(root).filter((e) => /^Subagent/.test(e.event)).every((e) => e.job === J && e.decision_id === D), 'every agent line names the job and the decision');
@@ -715,10 +716,11 @@ test('console blueprint: agent banks are this factory\'s agents and workflows', 
   const roles = [...banks.matchAll(/\["([a-z-]+)", "/g)].map((m) => m[1]);
   assert.ok(roles.length > 5);
   for (const r of roles) assert.ok(agents.has(r), `bank member ${r} is an agent in agents/`);
-  // clarify's bank is its fan-out: the intent analysts (×N as config/workflows/clarify.json runs them), the judge, God Eye
+  // clarify's bank is its fan-out: the intent analysts (×N as config/workflows/clarify.json runs them), the judge, the
+  // contract editor (clarify v2: the one writer of the contract), God Eye
   const clarify = require('../config/workflows/clarify.json');
   const n = clarify.fanout.filter((f) => f.role === 'intent-analyst').length;
-  assert.match(banks, new RegExp(`intent: \\{ name: "Clarify agents", members: \\[\\["intent-analyst", "analysts ×${n}"\\], \\["${clarify.judge.role}", "judge"\\], \\["${clarify.critique.role}", "God Eye"\\]\\] \\}`));
+  assert.match(banks, new RegExp(`intent: \\{ name: "Clarify agents", members: \\[\\["intent-analyst", "analysts ×${n}"\\], \\["${clarify.judge.role}", "judge"\\], \\["${clarify.editor.role}", "contract editor"\\], \\["${clarify.critique.role}", "God Eye"\\]\\] \\}`));
   assert.ok(!/scout/i.test(banks), 'clarify has no scouts in this factory');
   // the page: no Copilot Autopilot, no claude-software-factory replies, the 0.4.1 fixes in their form here
   const html = fs.readFileSync(path.join(F.PLUGIN, 'console', 'console.html'), 'utf8');

@@ -3,16 +3,44 @@
 // is applied by the CLI before the model sees it. Subagent prompts never pass through here.
 // A short message that only looks like a reply ("aprove", "approve the plan please") is
 // never applied; Claude is told so, with the exact forms.
+// Clarify v2: while the current job waits on clarify questions, a numbered reply ("1 yes,
+// 2 trunk ports too", one per line or comma-separated, "Q-4 no", or "defaults") is recorded as
+// the answers to the question set the last round showed, through the same path as
+// `factory answer`. All or nothing; a message that is not that shape is left alone.
 
 const { safe, emit, findRoot } = require('./lib');
+
+const say = (msg) => emit({ hookSpecificOutput: { hookEventName: 'UserPromptSubmit', additionalContext: msg } });
+
+// A numbered reply to the current clarify questions: recorded as answers, or left alone when
+// the current job has no open question set (it was just a numbered message).
+function answers(root, input, numbered) {
+  const events = require('../cli/core/events');
+  const ctx = events.context(root, null);
+  let r;
+  try {
+    r = require('../cli/core/clarify').applyNumbered(root, numbered, { jobId: ctx.job || undefined, via: 'chat' });
+  } catch (e) {
+    events.append(root, { event: 'reply_refused', reply: 'answers', code: e.code || null, reason: e.message.slice(0, 200), ...ctx });
+    say(`[factory] Your answers were NOT recorded: ${e.message} Tell the user this in one line; do not record them yourself.`);
+    return;
+  }
+  if (!r) return;
+  events.append(root, { event: 'reply_applied', reply: 'answers', answered: r.answered.map((a) => a.id || a.issue), ...ctx });
+  say(`[factory] ${r.message} Continue with \`factory next\` (skill factory:start); do not record them again.`);
+}
 
 safe((input) => {
   const human = require('../cli/core/human');
   const parsed = human.parseReply(input.prompt);
   const miss = parsed ? null : human.nearMiss(input.prompt);
-  if (!parsed && !miss) return;
   const root = findRoot(input.cwd || process.cwd());
   if (!root) return;
+  if (!parsed && !miss) {
+    const numbered = require('../cli/core/clarify').parseNumbered(input.prompt);
+    if (numbered) answers(root, input, numbered);
+    return;
+  }
   const events = require('../cli/core/events');
   let msg;
   if (miss) {
@@ -27,5 +55,5 @@ safe((input) => {
       events.append(root, { event: 'reply_refused', reply: parsed.cmd, gate: parsed.gate || null, code: e.code || null, reason: e.message.slice(0, 200), ...events.context(root, parsed.jobId) });
     }
   }
-  emit({ hookSpecificOutput: { hookEventName: 'UserPromptSubmit', additionalContext: msg } });
+  say(msg);
 });

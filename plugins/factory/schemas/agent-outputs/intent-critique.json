@@ -3,5 +3,11 @@
   "intent_confirmed": { "type": "boolean" },
   "restatement": { "type": "object", "required": ["problem", "outcome"], "properties": {
     "problem": { "type": "string" }, "who": { "type": "string" }, "outcome": { "type": "string" }, "success": { "type": "string" } } },
+  "checklist": { "type": "object", "properties": {
+    "intent_clear": { "type": "boolean" }, "scope_bounded": { "type": "boolean" }, "acs_testable": { "type": "boolean" },
+    "no_open_blockers": { "type": "boolean" }, "constraints_consistent": { "type": "boolean" } } },
   "items": { "type": "array", "items": { "type": "object", "required": ["issue", "severity"], "properties": {
-    "issue": { "type": "string" }, "severity": { "enum": ["blocker", "major", "minor"] }, "suggestion": { "type": "string" } } } } } }
+    "issue": { "type": "string" }, "severity": { "enum": ["blocker", "major", "minor"] }, "suggestion": { "type": "string" },
+    "ref": { "type": "string" },
+    "same_as": { "type": "string", "pattern": "^(U-\\d+|new)$" },
+    "subject": { "type": "string" } } } } } }

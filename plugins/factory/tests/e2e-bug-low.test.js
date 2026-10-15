@@ -36,6 +36,8 @@ test('bug@low: request to closed job, with a fix round and a local merge', () =>
   assert.ok(fs.existsSync(brief.fanout[0].prompt.split('\n')[1].trim()), 'instruction file exists');
   let r = F.record(root, F.envelope(brief, 'needs_user', { analysts: [], degraded: [], judge: { questions: [{ question: 'Floats too?', why: 'scope' }], dismissed: [] }, critique: null }));
   assert.equal(r.status, 'needs_user');
+  // clarify v2: a question without a default stays the user's until answered (it would be asked again, as waiting)
+  assert.equal(F.cli(root, ['answer', r.questions[0].id, 'no, integers only']).settled_by, 'user');
   // second round: no questions, God Eye approves
   n = next(root);
   assert.equal(n.skill, 'clarify');

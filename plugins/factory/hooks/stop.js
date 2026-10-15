@@ -80,7 +80,7 @@ function waitingOnHuman(root, state) {
   const answeredIds = new Set(answers.map((a) => a.id).filter(Boolean));
   const answeredQs = new Set(answers.map((a) => a.question));
   const clarify = ledger.lastStep(root, state.id, 'clarify');
-  const openQ = clarify && !clarify.ok && clarify.detail ? (clarify.detail.question_ids || []).filter((id) => !answeredIds.has(id)) : [];
+  const openQ = clarify && !clarify.ok && clarify.detail ? [...(clarify.detail.question_ids || []), ...(clarify.detail.waiting_ids || [])].filter((id) => !answeredIds.has(id)) : [];
   if (openQ.length) return `clarify questions unanswered (${openQ.join(', ')})`;
   const ground = ledger.lastStep(root, state.id, 'ground');
   const blocking = ground && !ground.ok && ground.detail ? (ground.detail.blocking || []).filter((q) => !answeredQs.has(q)) : [];

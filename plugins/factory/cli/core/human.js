@@ -99,13 +99,16 @@ function resume(root, { jobId, step, channel }) {
   if (from === 'review') oneMore('review_rounds', L.max_review_rounds);
   if (from === 'verify') oneMore('verify_fix_rounds', L.max_verify_fix_rounds);
   if (from === 'clarify') {
-    oneMore('clarify_rounds', L.max_intent_rounds + 2);
+    // Clarify v2: the round counter stays monotonic. Resume resets the no-progress counter and,
+    // after the hard ceiling, allows as many more rounds as the no-progress rule needs.
+    const CL = require('./clarify').limits(state);
+    state.counters.clarify_no_progress = 0;
+    state.counters.clarify_degraded_streak = 0;
+    const short = CL.counted + CL.no_progress - CL.ceiling;
+    if (short > 0) state.counters.clarify_bonus_rounds = (state.counters.clarify_bonus_rounds || 0) + short;
     // Parked on unclear intent: one more intent round, with a question budget.
     const IL = readJson(pluginPath('config', 'workflows', 'clarify.json')).limits.intent_rounds;
-    if ((state.counters.intent_rounds || 0) >= IL) {
-      state.counters.intent_rounds = IL - 1;
-      oneMore('clarify_rounds', L.max_intent_rounds - 1);
-    }
+    if ((state.counters.intent_rounds || 0) >= IL) state.counters.intent_rounds = IL - 1;
   }
   if (from === 'decompose') oneMore('decompose_rounds', L.max_plan_validate_rounds);
   if (from === 'budget') state.policy.limits.max_agent_runs_per_job = Math.ceil(state.policy.limits.max_agent_runs_per_job * 1.5);
@@ -192,11 +195,13 @@ function parseReply(text) {
   if ((m = t.match(new RegExp(`^waive(?:\\s+${J})?\\s+([a-z_:]+)\\s+(.+)$`, 'i')))) return { cmd: 'waive', jobId: m[1] && m[1].toUpperCase(), floor: m[2], reason: m[3].trim() };
   if ((m = t.match(new RegExp(`^merged(?:\\s+${J})?\\s+([0-9a-f]{7,40})$`, 'i')))) return { cmd: 'merged', jobId: m[1] && m[1].toUpperCase(), commit: m[2] };
   if ((m = t.match(new RegExp(`^confirm\\s+((?:E-)?AC-\\d+)(?:\\s+${J})?$`, 'i')))) return { cmd: 'confirm', ac: m[1], jobId: m[2] && m[2].toUpperCase() };
+  // clarify v2: undo a wrong fold of two clarify issues ("split U-7 U-19", or "split U-19")
+  if ((m = t.match(new RegExp(`^split(?:\\s+${J})?\\s+(U-\\d+)(?:\\s+(U-\\d+))?$`, 'i')))) return { cmd: 'split', jobId: m[1] && m[1].toUpperCase(), ref: m[2].toUpperCase(), alias: m[3] && m[3].toUpperCase() };
   return null;
 }
 
 // The exact forms, for "that was not applied" hints.
-const REPLY_FORMS = ['approve [J-0001] [H1]', 'deny [J-0001] <reason>', 'resume [J-0001] [step]', 'cancel job [J-0001] [reason]', 'abandon job [J-0001] [reason]', 'waive [J-0001] <floor> <reason>', 'merged [J-0001] <sha>', 'confirm AC-1 [J-0001]', 'accept lesson L4', 'reject lesson L4 [reason]'];
+const REPLY_FORMS = ['approve [J-0001] [H1]', 'deny [J-0001] <reason>', 'resume [J-0001] [step]', 'cancel job [J-0001] [reason]', 'abandon job [J-0001] [reason]', 'waive [J-0001] <floor> <reason>', 'merged [J-0001] <sha>', 'confirm AC-1 [J-0001]', 'accept lesson L4', 'reject lesson L4 [reason]', 'split [J-0001] U-7 U-19'];
 const VERBS = ['approve', 'approved', 'deny', 'denied', 'resume', 'cancel', 'abandon', 'waive', 'merged', 'merge', 'confirm', 'accept', 'reject', 'lgtm'];
 
 function editDistance(a, b) {
@@ -242,6 +247,8 @@ function applyReply(root, parsed, channel = 'chat') {
       return merged(root, { jobId: parsed.jobId, commit: parsed.commit, channel });
     case 'confirm':
       return confirmAc(root, { jobId: parsed.jobId, ac: parsed.ac, channel });
+    case 'split':
+      return require('./clarify').split(root, { jobId: parsed.jobId, ref: parsed.ref, alias: parsed.alias, channel });
     default:
       fail(`Unknown reply command ${parsed.cmd}`);
   }

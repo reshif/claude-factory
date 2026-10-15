@@ -81,11 +81,14 @@ function resultText(step, ok, d) {
   d = d || {};
   switch (step) {
     case 'clarify': {
-      if (ok) return 'Contract judged clear; God Eye approved the intent';
+      if (ok) return d.approved_with_notes ? 'Contract judged clear; God Eye approved with notes' : 'Contract judged clear; God Eye approved the intent';
       const cats = [...new Set(Array.isArray(d.categories) ? d.categories : [])];
       const held = num(d.held);
-      if (num(d.questions)) return `${num(d.questions)} question(s) for you${cats.length ? ` (${cats.join(', ')})` : ''}${held ? `; ${held} more held back until the intent is settled` : ''}`;
-      return d.intent_open ? 'The intent is not settled yet' : (d.contract_problems || []).length ? `Contract has problems: ${d.contract_problems.slice(0, 2).join('; ')}` : 'Not clear yet';
+      const waiting = Array.isArray(d.waiting_ids) ? d.waiting_ids.length : 0;
+      if (num(d.questions)) return `${num(d.questions)} question(s) for you${cats.length ? ` (${cats.join(', ')})` : ''}${held ? `; ${held} more held back until the intent is settled` : ''}${waiting ? `; ${waiting} still waiting` : ''}`;
+      if (waiting) return `${waiting} question(s) still waiting for your answer`;
+      if (d.ledger && d.ledger.degraded) return 'An analyst failed: the round runs again and does not count';
+      return d.intent_open ? 'The intent is not settled yet' : (d.contract_problems || []).length ? `Contract has problems: ${d.contract_problems.slice(0, 2).join('; ')}` : d.contract_revision && d.contract_revision.rejected ? `The contract editor's revision was refused: ${short(String(d.contract_revision.rejected), 120)}` : 'Not clear yet: clarify runs again';
     }
     case 'ground': return `${num(d.claims)} sourced claim(s) across ${num(d.topics)} topic(s)${num(d.unverified) ? `, ${num(d.unverified)} unverified` : ''}${(d.blocking || []).length ? `, ${d.blocking.length} blocking` : ''}`;
     case 'decide': return `${d.kind === 'adr' ? 'ADR' : d.kind || 'Decision'} recorded after ${num(d.rounds) || 1} critique round(s)${d.threat_model ? ', with a threat model' : ''}; God Eye: ${d.critique || 'n/a'}`;
@@ -111,6 +114,33 @@ function resultText(step, ok, d) {
     case 'distill': return 'Lessons proposed from what happened';
     case 'close': return 'Job closed';
     default: return ok ? 'Done' : 'Not passed';
+  }
+}
+
+// Clarify v2: the issue ledger as the page shows it (the Clarify block in the job and section
+// views, the Board's question count). A pre-v2 job is shown migrated, as factory clarify status
+// shows it; nothing is written.
+function clarifyBlock(root, state) {
+  try {
+    const clarify = require('./clarify');
+    const data = clarify.ensure(root, state);
+    if (!data || !data.issues.length) return null;
+    const v = clarify.view(state, data);
+    return {
+      migrated: Boolean(data.migration),
+      totals: v.totals,
+      open_by_owner: v.open_by_owner,
+      questions: v.questions.map((q) => ({ id: q.id, issue: q.issue, question: short(String(q.question || ''), 200), default: q.default ? short(String(q.default), 140) : null })),
+      issues: v.issues.slice(0, 60).map((r) => ({ id: r.id, subject: r.subject, title: short(r.title, 160), kind: r.kind, status: r.status, owner: r.owner, settled_by: r.settled_by || null, next: short(r.next, 160), aliases: r.aliases, answer: r.answer ? short(r.answer, 140) : null })),
+      deferred: v.deferred_to_design,
+      rounds: v.rounds,
+      trend: v.trend,
+      limits: v.limits,
+      notes: (v.notes || []).slice(-5).map((n) => ({ round: n.round || null, ref: n.ref || null, text: short(String(n.text || ''), 200) })),
+      migration: data.migration ? { folded: (data.migration.folded || []).length, matched_answers: (data.migration.matched_answers || []).map((m) => m.issue), deferred: (data.migration.deferred || []).map((x) => x.id) } : null,
+    };
+  } catch {
+    return null;
   }
 }
 
@@ -223,7 +253,7 @@ function jobData(root, id, all, checker, nowMs = Date.now()) {
       let step = e.step;
       if (step === 'plan_critique') step = autoH3 ? 'H3' : 'decompose';
       const d = e.detail || {};
-      const outcome = e.ok ? 'ok' : step === 'clarify' && num(d.questions) ? 'ask' : 'fail';
+      const outcome = e.ok ? 'ok' : step === 'clarify' && (num(d.questions) || (d.waiting_ids || []).length) ? 'ask' : 'fail';
       const item = { t: e.at, type: 'result', step: ids.has(step) ? step : null, raw_step: e.step, ok: Boolean(e.ok), outcome, text: resultText(e.step, e.ok, d) };
       if (/challenge/.test(e.step) && d.findings) {
         // the verifier's own word (review.js): `verifier: 'unverifiable'` when it could not settle a
@@ -238,7 +268,7 @@ function jobData(root, id, all, checker, nowMs = Date.now()) {
         Object.assign(item, { round: d.round || 1, lanes: d.lanes || {}, required: d.required || [], missing: d.missing || [] });
       }
       if (e.step === 'prove') item.acs = d.acs || {};
-      if (e.step === 'clarify' && (d.categories || d.held)) Object.assign(item, { categories: d.categories || [], held: num(d.held), question_ids: d.question_ids || [] });
+      if (e.step === 'clarify' && (d.categories || d.held || d.waiting_ids)) Object.assign(item, { categories: d.categories || [], held: num(d.held), question_ids: [...(d.question_ids || []), ...(d.waiting_ids || [])] });
       push(item);
     } else if (e.kind === 'agents') {
       const step = ids.has(stepOfDecision[e.decision_id]) ? stepOfDecision[e.decision_id] : null;
@@ -343,6 +373,7 @@ function jobData(root, id, all, checker, nowMs = Date.now()) {
     runs_live: { running: liveRun ? liveRun.id : null, last_by_stage: lastByStage },
     tasks,
     lessons,
+    clarify: clarifyBlock(root, state),
   };
   // A cheap revision: the page re-renders only the jobs whose rev changed.
   job.rev = crypto.createHash('sha1').update(JSON.stringify(job)).digest('hex').slice(0, 12);

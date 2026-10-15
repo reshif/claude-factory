@@ -7,5 +7,12 @@
     "outcome": "add returns the arithmetic sum",
     "success": "tests/add.test.js passes"
   },
+  "checklist": {
+    "intent_clear": true,
+    "scope_bounded": true,
+    "acs_testable": true,
+    "no_open_blockers": true,
+    "constraints_consistent": true
+  },
   "items": []
 }

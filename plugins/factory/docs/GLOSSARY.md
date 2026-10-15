@@ -16,6 +16,8 @@ One definition per term. The skills and docs use these words in exactly this sen
 | **Envelope** | The JSON result a workflow returns. Write it unchanged to `.factory/scratch/envelope.json` and run `factory record --file …`; the CLI validates it against `schemas/envelope.json`. |
 | **Fan-out** | Several independent agents run in parallel on the same question (analysts in clarify, options in decide, review lanes in challenge), then a judge merges their results. |
 | **Lane** | One reviewer in the challenge fan-out (code, tests, security, UX…). Each confirmed or refuted finding is counted per lane. |
+| **Clarify ledger** | The one list of clarify's issues (`U-n`), kept sealed by the CLI in the job's `clarify-ledger.json`. Every question clarify raises is an issue with a subject, an owner (the user, or design), a status (proposed, settled, deferred to design, dropped) and how it was settled. `factory clarify status` prints it. Settled is final: an agent that raises it again in other words only adds a note. |
+| **Deferred to design** | An implementation detail (exact field names, line ranges, command syntax, parser behaviour) clarify hands to ground and decide instead of asking; it never blocks H1. |
 | **God Eye** | The cold critic agent (`factory:god-eye`). It reads the contract, design or plan as if it had never seen the conversation and returns `approve` or `revise`. Clarify loops until it approves and confirms the intent. |
 | **Finding verifier** | An agent that tries to reproduce or disprove one review finding; its verdict decides whether the finding is confirmed or refuted. |
 | **Degraded** | A fan-out step finished without one of its angles or lanes (an agent failed twice). The user decides: re-run, or go on without it. |

@@ -72,53 +72,293 @@ function insideJobDir(root, state, p) {
   return abs.startsWith(dir + path.sep) && exists(abs) ? abs : null;
 }
 
+// Clarify v2 (docs/DESIGN-CLARIFY-v2.md): the round's raised issues are folded into the
+// ledger (settled is final, raised-again issues are deduplicated by subject), the contract
+// editor's revision is checked and written, the CLI-owned sections are rewritten from the
+// ledger, questions get their Q-ids, and the round is measured: progress (something settled,
+// asked or applied) or not. Rounds in a row without progress park the job.
 function recClarify(root, state, env) {
+  const clarifyMod = require('./clarify');
   const d = env.data || {};
   const cfg = readJson(pluginPath('config', 'workflows', 'clarify.json'));
   const jp = jobPaths(root, state.id);
   const round = state.counters.clarify_rounds + 1;
-  const max = questions.budget(cfg, round, state.policy.limits);
+  // the first v2 round: the rounds before it (a pre-v2 job's) are not counted against the ceiling
+  if (state.counters.clarify_v2_from === undefined) state.counters.clarify_v2_from = clarifyMod.limits(state).before_v2;
+  const CL = clarifyMod.limits(state);
+  const max = questions.budget(cfg, CL.counted + 1, { ...state.policy.limits, max_intent_rounds: CL.ceiling });
   const log = state.question_log || [];
-  // Re-apply the protocol: intent first and alone, priority order, budget, never re-ask.
-  const n = questions.shape((d.judge && d.judge.questions) || [], { budget: max, asked: questions.askedList(state, readJson(jp.answers, [])), startId: log.length });
+  const answers = readJson(jp.answers, []) || [];
+  const raw = clarifyMod.load(root, state.id);
+  const data = clarifyMod.ensure(root, state, raw) || clarifyMod.empty(state);
+  const migrated = Boolean(data.migration && !data.migration.persisted_at);
+  const lastLedger = (data.rounds || []).length ? data.rounds[data.rounds.length - 1].ledger || null : null;
+  const priorIds = new Set(data.issues.map((u) => u.id));
+  const prevTotals = lastLedger && lastLedger.totals ? lastLedger.totals : clarifyMod.totals(data);
+  // Fold this round's issues into the ledger and re-derive every status that is not final.
+  // (Defaults due this round are taken first: the brief gave them to the contract editor.)
+  clarifyMod.acceptDefaults(data, state, round);
+  const unappliedBefore = data.issues.filter((u) => u.status === 'settled' && ['user', 'assumption_accepted'].includes(u.settled_by) && u.answer && !u.applied_round).map((u) => u.id);
+  const wl = d.ledger || null;
+  if (wl) clarifyMod.mergeIssues(data, wl.issues, round);
+  clarifyMod.advance(data, round);
+  foldRaised(clarifyMod, data, priorIds, round);
+  // The question protocol: every question names its issue (deduplicated by subject), a settled
+  // issue is never asked again, then intent first and alone, priority order, budget, never re-ask.
+  const crit = d.critique || null;
+  const unconfirmed = Boolean(crit && crit.intent_confirmed === false);
+  // CLI fallback: God Eye's blockers the workflow did not turn into questions (an older
+  // workflow) are asked here, so a round never ends with nothing to answer.
+  const geAsks = crit && !d.approved_with_notes && !((d.judge && d.judge.questions) || []).length && !(crit.verdict === 'approve' && !unconfirmed) ? godEyeAsks(crit) : [];
+  const judgeQs = [...((d.judge && d.judge.questions) || []), ...geAsks];
+  const dismissed = (d.judge && d.judge.dismissed) || [];
+  const asks = ledgerAsks(clarifyMod, data, judgeQs, dismissed);
+  const g = questions.ground([...judgeQs, ...asks], data, round);
+  if (g.created.length) data.issues.push(...g.created);
+  const n = questions.shape(g.questions, { budget: max, asked: questions.askedList(state, answers), startId: log.length });
   state.counters.clarify_rounds = round;
   const intentRounds = (state.counters.intent_rounds || 0) + (n.intent_open ? 1 : 0);
+  for (const q of n.questions) {
+    const u = data.issues.find((x) => x.id === q.unknown);
+    if (u && !clarifyMod.FINAL.has(u.status)) {
+      Object.assign(u, { status: 'proposed', owner: 'user', question_id: q.id, default: clarifyMod.isNone(q.default) ? u.default : q.default });
+      clarifyMod.event(u, round, 'asked', 'cli', q.id);
+    }
+  }
+  for (const x of dismissed) {
+    const u = x.unknown || x.same_as ? clarifyMod.findSame(data.issues, { same_as: x.unknown || x.same_as, text: '' }) : null;
+    if (!u || clarifyMod.FINAL.has(u.status) || u.question_id) continue;
+    if (/\bdesign\b/i.test(String(x.reason || ''))) Object.assign(u, { owner: 'design', status: 'deferred_to_design', settled_by: 'design_deferral', note: `the judge: ${String(x.reason || '').slice(0, 200)}` });
+    else Object.assign(u, { status: 'dropped', dismissed: true, note: `dismissed by the judge: ${String(x.reason || '').slice(0, 200)}` });
+    clarifyMod.event(u, round, u.status, 'judge', x.reason);
+  }
+  for (const nt of d.notes || []) (data.notes = data.notes || []).push({ round, actor: 'god-eye', ref: nt.ref || null, severity: nt.severity || null, text: String(nt.text || '').slice(0, 300) });
+  // One writer: the contract editor's revision, checked, then the CLI-owned sections.
+  const revision = applyRevision(root, state, d.contract, data, unappliedBefore, round);
+  clarifyMod.writeContract(root, state, data);
+  data.sections = contractMod.sectionHashes(contractMod.read(root, state.id));
   const b = invalidation.current(root, state);
   const probs = contractMod.problems(contractMod.parse(contractMod.read(root, state.id)));
+  // The round, measured.
+  const degradedRound = env.status === 'degraded';
+  const measure = measureRound(clarifyMod, data, { round, priorIds, prevTotals, asked: n.questions.length, degraded: degradedRound, revised: Boolean(revision && revision.effective) });
+  data.rounds = [...(data.rounds || []).filter((r) => r.round !== round), { round, at: nowIso(), degraded: (d.degraded || []).slice(0, 20), ...(d.quiet ? { quiet: true } : {}), ledger: measure }].slice(-40);
+  if (migrated) data.migration = { ...data.migration, persisted_at: nowIso() };
+  clarifyMod.save(root, state.id, data);
+  const C = state.counters;
+  if (degradedRound) {
+    C.clarify_degraded_streak = (C.clarify_degraded_streak || 0) + 1;
+    C.clarify_degraded_rounds = (C.clarify_degraded_rounds || 0) + 1;
+  } else {
+    C.clarify_degraded_streak = 0;
+    C.clarify_no_progress = measure.progress ? 0 : (C.clarify_no_progress || 0) + 1;
+  }
+  const ledgerView = clarifyMod.view(state, data);
+  // ceiling and counted: what the CLI held this round to (the inspector checks rounds against it)
+  const ledgerDetail = { opened: measure.opened, settled: measure.settled, deferred: measure.deferred, dropped: measure.dropped, asked: measure.asked, progress: measure.progress, revised: measure.revised, degraded: measure.degraded, open_by_owner: measure.totals.by_owner, no_progress_streak: C.clarify_no_progress || 0, ceiling: CL.ceiling, counted: clarifyMod.limits(state).counted, reraised: ((wl && wl.raised && wl.raised.notes) || []).length + measure.reraised };
+  const clarifyOut = { open_by_owner: ledgerView.open_by_owner, issues: ledgerView.issues.filter((r) => !['settled', 'dropped'].includes(r.status)).slice(0, 20), deferred_to_design: ledgerView.deferred_to_design, round: measure, status_command: `factory clarify status --job ${state.id}`, ...(revision ? { contract_revision: revision } : {}), ...(migrated ? { migration: data.migration } : {}) };
   // Intent never falls back to an assumption: still unclear after its rounds (or with no budget left) -> park.
   if (n.intent_open && (intentRounds > cfg.limits.intent_rounds || max === 0)) {
     job.save(root, state);
     const open = [...n.questions, ...n.dropped].map((q) => q.question);
-    ledger.append(root, state.id, { kind: 'step', step: 'clarify', ok: false, bound: { contract: b.contract }, detail: { round, intent_open: true, intent_rounds: intentRounds - 1, questions: 0, contract_problems: probs } });
-    return { status: 'park', park_from: 'clarify', park_reason: `The intent is still unclear after ${intentRounds - 1} round(s) of intent questions; the factory won't guess the why.${open.length ? ` Open: ${open.join(' | ')}` : ''}`, questions: n.questions };
+    ledger.append(root, state.id, { kind: 'step', step: 'clarify', ok: false, bound: { contract: b.contract }, detail: { round, intent_open: true, intent_rounds: intentRounds - 1, questions: 0, contract_problems: probs, ledger: ledgerDetail } });
+    return { status: 'park', park_from: 'clarify', park_reason: `The intent is still unclear after ${intentRounds - 1} round(s) of intent questions; the factory won't guess the why.${open.length ? ` Open: ${open.join(' | ')}` : ''}`, questions: n.questions, clarify: clarifyOut };
   }
   state.counters.intent_rounds = intentRounds;
-  state.question_log = [...log, ...n.questions.map((q) => ({ id: q.id, round, category: q.category, question: q.question, default: q.default }))];
+  state.question_log = [...log, ...n.questions.map((q) => ({ id: q.id, round, category: q.category, question: q.question, default: q.default, ...(q.unknown ? { unknown: q.unknown } : {}) }))];
   state.asked_questions = [...new Set([...(state.asked_questions || []), ...n.questions.map((q) => q.question)])];
+  // Waiting: questions asked in earlier rounds that are still the user's (no default to fall back on).
+  const waiting = data.issues.filter((u) => u.status === 'proposed' && u.question_id && u.impact !== 'low' && !n.questions.some((q) => q.unknown === u.id));
+  // What a numbered chat reply ("1 yes, 2 …") refers to: the questions this round shows, in
+  // order (new ones; else the ones still waiting from earlier rounds).
+  state.clarify_shown = n.questions.length ? n.questions.map((q) => q.id) : waiting.map((u) => u.question_id);
   job.save(root, state);
-  const crit = d.critique || null;
   if (crit) {
-    writeJson(path.join(jp.critiquesDir, 'intent.json'), seal({ hash: b.contract, verdict: crit.verdict, intent_confirmed: crit.intent_confirmed !== false, restatement: crit.restatement || null, items: crit.items, at: nowIso() }));
+    writeJson(path.join(jp.critiquesDir, 'intent.json'), seal({ hash: b.contract, verdict: crit.verdict, intent_confirmed: crit.intent_confirmed !== false, restatement: crit.restatement || null, checklist: crit.checklist || null, items: crit.items, approved_with_notes: Boolean(d.approved_with_notes), notes: (d.notes || []).slice(0, 30), at: nowIso() }));
   }
+  const blocking = data.issues.filter((u) => !clarifyMod.FINAL.has(u.status) && u.impact !== 'low');
   const intentConfirmed = Boolean(crit && crit.intent_confirmed !== false); // older critiques carry no flag
-  const ok = Boolean(crit && crit.verdict === 'approve' && intentConfirmed && !probs.length && !n.questions.length);
-  // A round that asks the user questions stays ok:false (clarify is not done), marked
-  // outcome needs_user so it doesn't read as a failure.
-  ledger.append(root, state.id, { kind: 'step', step: 'clarify', ok, bound: { contract: b.contract }, detail: { ...(n.questions.length && !ok ? { outcome: 'needs_user' } : {}), round, questions: n.questions.length, question_ids: n.questions.map((q) => q.id), categories: n.questions.map((q) => q.category), intent_open: n.intent_open, held: n.held.length, dropped: n.dropped.length, degraded: d.degraded || [], contract_problems: probs } });
-  if (ok) return { status: 'ok', next_gate: state.epic ? 'EH1' : 'H1', restatement: crit.restatement || null, message: 'God Eye approved the contract and confirmed the intent. Next: present it for your approval.' };
+  const approved = Boolean(crit && ((crit.verdict === 'approve' && intentConfirmed) || d.approved_with_notes));
+  // God Eye judged the editor's revision; a revision the CLI refused is not the contract, so that
+  // approval does not carry to H1.
+  const refused = Boolean(revision && revision.rejected);
+  const ok = Boolean(approved && !refused && !probs.length && !n.questions.length && !blocking.length && !degradedRound);
+  const askedNow = n.questions.length || waiting.length;
+  ledger.append(root, state.id, { kind: 'step', step: 'clarify', ok, bound: { contract: b.contract }, detail: { ...(askedNow && !ok ? { outcome: 'needs_user' } : {}), round, questions: n.questions.length, question_ids: n.questions.map((q) => q.id), ...(waiting.length ? { waiting_ids: waiting.map((u) => u.question_id) } : {}), categories: n.questions.map((q) => q.category), intent_open: n.intent_open, held: n.held.length, dropped: n.dropped.length, degraded: d.degraded || [], contract_problems: probs, ledger: ledgerDetail, ...(d.approved_with_notes ? { approved_with_notes: true } : {}), ...(revision ? { contract_revision: { written: revision.written, applied: revision.applied.length, ...(revision.rejected ? { rejected: revision.rejected } : {}) } } : {}) } });
+  const extra = { clarify: clarifyOut };
+  const notesText = (d.notes || []).length ? ` God Eye's notes (${d.notes.length}) are recorded.` : '';
+  if (ok) return { status: 'ok', next_gate: state.epic ? 'EH1' : 'H1', restatement: (crit && crit.restatement) || null, ...extra, ...(d.approved_with_notes ? { notes: d.notes || [] } : {}), message: `God Eye ${d.approved_with_notes ? 'approved with notes' : 'approved the contract and confirmed the intent'}.${notesText} Next: present it for your approval.` };
+  const answerHow = 'The user answers in chat with a numbered reply ("1 yes, 2 …", or "defaults"), which the reply hook records; or record each answer they give in their own words with factory answer Q-n "…" (factory answer Q-n --default accepts the default). An unanswered question with a default takes it next round. Do not edit the contract (the guard refuses it during clarify): run factory next.';
   if (n.questions.length) {
     return {
       status: 'needs_user',
       questions: n.questions,
       intent_first: n.intent_open,
       held: n.held.length,
-      message: `Ask these ${n.questions.length} question(s) as one numbered list (id, question, options, default).${n.intent_open ? ` Intent comes first: ${n.held.length} other question(s) wait until it is settled.` : ''} Record each answer with factory answer --id <Q-n> --answer "...", and an unanswered one takes its default (write it under Assumptions). Update the contract, then run factory next.`,
+      ...(waiting.length ? { waiting: waiting.map((u) => ({ id: u.question_id, issue: u.id, question: u.draft })) } : {}),
+      ...extra,
+      message: `${unconfirmed ? 'God Eye could not confirm the intent from the contract (its restatement is in the question). ' : ''}Ask these ${n.questions.length} question(s) as one numbered list (id, question, options, default).${n.intent_open ? ` Intent comes first: ${n.held.length} other question(s) wait until it is settled.` : ''} ${answerHow}`,
     };
   }
-  if (d.degraded && d.degraded.length) return { status: 'degraded', missing: d.degraded, message: `Analyst(s) failed twice: ${d.degraded.join(', ')}. Ask the user: re-run, or go on without that angle (write it under Assumptions).` };
-  if (probs.length) return { status: 'needs_user', problems: probs, message: 'Fix these contract problems, then run clarify again.' };
-  if (crit && crit.verdict === 'approve' && !intentConfirmed) return { status: 'needs_user', critique: crit, message: 'God Eye could not confirm the intent from the contract: compare its restatement with the Intent section, fix the contract (ask the user one intent question if needed) and run clarify again.' };
-  return { status: 'needs_user', critique: crit, message: 'God Eye asked for revisions: revise the contract (ask the user where needed) and run clarify again.' };
+  if (degradedRound && (C.clarify_degraded_streak || 0) <= 1) {
+    job.save(root, state);
+    return { status: 'retry', missing: d.degraded || [], ...extra, message: `Analyst(s) failed after their retry (${(d.degraded || []).join(', ')}): this round does not count. factory next runs clarify again once, automatically; don't ask the user yet.` };
+  }
+  if (degradedRound) return { status: 'degraded', missing: d.degraded, ...extra, message: `Analyst(s) failed in two rounds in a row: ${(d.degraded || []).join(', ')}. Ask the user: re-run, or go on without that angle (factory wfargs fanout-judge --config clarify --accept-degraded).` };
+  if (waiting.length) {
+    return { status: 'needs_user', questions: waiting.map((u) => { const q = log.find((x) => x.id === u.question_id) || {}; return { id: u.question_id, category: q.category || 'scope', question: q.question || u.draft, why: u.reason || 'Still open: only you can settle it.', default: u.default || q.default || 'None: answer needed', unknown: u.id, kind: u.kind, waiting: true }; }), ...extra, message: `Still waiting for the answer to ${waiting.map((u) => u.question_id).join(', ')} (no default to fall back on). Show them again as one numbered list. ${answerHow}` };
+  }
+  const stalled = (C.clarify_no_progress || 0) >= CL.no_progress;
+  if (stalled) {
+    const open = ledgerView.issues.filter((r) => !['settled', 'dropped', 'deferred_to_design'].includes(r.status));
+    return { status: 'park', park_from: 'clarify', ...extra, park_reason: `Clarify is not converging: ${C.clarify_no_progress} round(s) in a row settled nothing and asked nothing new.${open.length ? ` Open: ${open.slice(0, 6).map((r) => `${r.id} ${r.subject} (${r.owner})`).join('; ')}.` : ''}${probs.length ? ` Contract problems: ${probs.slice(0, 3).join('; ')}.` : ''}${refused ? ` The contract editor's last revision was refused: ${revision.rejected}.` : ''} See factory clarify status.` };
+  }
+  if (refused) return { status: 'revise', ...extra, message: `The CLI refused the contract editor's revision (${revision.rejected}), so the contract is unchanged and God Eye's verdict on the revision does not count. Clarify runs again: run factory next; don't edit the contract.` };
+  if (probs.length) return { status: 'revise', problems: probs, ...extra, message: 'The contract still has problems: clarify runs again and its contract editor fixes them (the user is not asked). Run factory next; don\'t edit the contract.' };
+  return { status: 'revise', critique: crit, ...extra, message: 'Clarify is not done yet (God Eye\'s items with nothing to ask the user): run factory next; clarify runs again and its contract editor revises the contract.' };
+}
+
+// God Eye's blockers as questions: an unconfirmed intent (its restatement, no default: the
+// factory never guesses the intent) and each blocker that points at an AC or a section.
+function godEyeAsks(c) {
+  const out = [];
+  if (c.intent_confirmed === false) {
+    const r = c.restatement || {};
+    out.push({ question: `God Eye reads the intent as: ${[r.problem, r.outcome].filter(Boolean).join(' → ')}. Is that the intent?`, category: 'intent', why: 'God Eye could not confirm the intent from the contract.', default: 'None: the factory will not guess the intent', kind: 'intent', subject: 'intent.restatement' });
+  }
+  for (const it of c.items || []) {
+    if (!it || it.severity !== 'blocker' || !it.ref || /^U-\d+$/i.test(it.ref)) continue;
+    out.push({ question: `${it.issue}: ${it.suggestion || 'how should the contract say it'}?`, category: /^(E-)?AC-\d+/i.test(it.ref) ? 'acceptance' : /intent|goal/i.test(it.ref) ? 'intent' : 'scope', why: `God Eye (${it.ref})`, default: it.suggestion || 'None: answer needed', subject: it.subject, same_as: it.same_as });
+  }
+  return out;
+}
+
+// A raise the workflow created this round that is the same issue as an older one (subject
+// dedup, CLI side): folded into the older issue as an alias.
+function foldRaised(clarifyMod, data, priorIds, round) {
+  const fresh = data.issues.filter((u) => !priorIds.has(u.id));
+  for (const u of fresh) {
+    const older = data.issues.filter((x) => x !== u && priorIds.has(x.id));
+    const hit = older.find((x) => clarifyMod.sameIssue(u, x));
+    if (!hit) continue;
+    hit.aliases = [...(hit.aliases || []), { id: u.id, text: String(u.text).slice(0, 300) }];
+    if (clarifyMod.FINAL.has(hit.status)) {
+      hit.notes = [...(hit.notes || []), { round, actor: u.source || 'agent', text: `raised again as ${u.id} (not reopened): ${String(u.text).slice(0, 200)}` }];
+      hit.reraised = (hit.reraised || 0) + 1;
+    }
+    clarifyMod.event(hit, round, 'folded', 'cli', `${u.id}: ${u.text}`);
+    data.issues = data.issues.filter((x) => x !== u);
+  }
+}
+
+// The ledger's own open proposals (CLI fallback for the workflow's): user issues raised
+// earlier and not asked yet (over budget, held while the intent was open, God Eye's blockers).
+function ledgerAsks(clarifyMod, data, judgeQs, dismissed) {
+  const covered = new Set([...(judgeQs || []).map((q) => String(q.unknown || q.same_as || '').toUpperCase()), ...(dismissed || []).map((x) => String(x.unknown || x.same_as || '').toUpperCase())]);
+  const cat = (k) => (['intent', 'scope', 'constraint', 'acceptance'].includes(k) ? k : 'scope');
+  return data.issues
+    .filter((u) => u.status === 'proposed' && u.owner === 'user' && !u.question_id && u.impact !== 'low' && !covered.has(u.id))
+    .map((u) => ({ question: u.draft || u.text, category: cat(u.kind), why: u.why || (u.reason ? `Open: ${u.reason}.` : 'Only you can settle it.'), default: u.default || 'None: answer needed', unknown: u.id, kind: u.kind, ...(u.options ? { options: u.options } : {}) }));
+}
+
+// What a revision loses: acceptance criteria by id; constraints and non-goals by count (a
+// rewording keeps the count). Each loss needs a `removed` entry from the editor whose `because`
+// holds up: a settled or dropped issue (U-n), or a God Eye item, user note or gate denial that
+// the editor was given for that criterion or section. Returns what is unjustified.
+function lostItems(before, after, edits, data) {
+  const removed = edits.flatMap((e) => e.removed || []);
+  const requested = edits.flatMap((e) => e.requested || []);
+  const key = (x) => String(x || '').trim().toLowerCase();
+  const asked = (from, ref, section) => requested.some((r) => key(r.from) === from && (from !== 'god-eye' || [key(ref), key(section)].includes(key(r.ref))));
+  const holds = (x, ref, section) => {
+    if (![key(ref), key(section)].includes(key(x.ref))) return false;
+    const b = String(x.because || '').trim();
+    if (/^U-\d+$/i.test(b)) {
+      const u = data.issues.find((y) => y.id === b.toUpperCase() || (y.aliases || []).some((a) => a.id === b.toUpperCase()));
+      return Boolean(u && ['settled', 'dropped'].includes(u.status));
+    }
+    if (/god.?eye/i.test(b)) return asked('god-eye', ref, section);
+    if (/note/i.test(b)) return asked('user note');
+    if (/denial|gate/i.test(b)) return asked('gate denial');
+    return false;
+  };
+  const out = [];
+  const ids = new Set(after.acs.map((a) => a.id));
+  for (const a of before.acs) if (!ids.has(a.id) && !removed.some((x) => holds(x, a.id, 'acceptance criteria'))) out.push(a.id);
+  for (const [name, k] of [['Constraints', 'constraints'], ['Non-goals', 'nonGoals']]) {
+    const gone = before[k].length - after[k].length;
+    if (gone <= 0) continue;
+    const okN = removed.filter((x) => holds(x, name, name)).length;
+    if (okN < gone) out.push(`${gone - okN} of ${name}`);
+  }
+  return out;
+}
+
+// The contract editor's revision: CLI-owned sections kept, written only if it still parses,
+// keeps the Intent section, loses no criterion, constraint or non-goal without a reason and
+// adds no contract problem. Settled issues it applied are marked.
+function applyRevision(root, state, c, data, unappliedBefore, round) {
+  if (!c) return null;
+  const approved = state.approvals && (state.approvals.H1 || state.approvals.EH1);
+  const edits = Array.isArray(c.edits) ? c.edits : [];
+  const appliedRefs = new Set(edits.flatMap((e) => (e.applied || []).map((a) => String(a.ref || '').toUpperCase())));
+  const removed = edits.flatMap((e) => (e.removed || []).map((x) => ({ ref: String(x.ref || ''), because: String(x.because || '') })));
+  const out = { written: false, applied: [...appliedRefs], ...(removed.length ? { removed } : {}), skipped: edits.flatMap((e) => (e.skipped || []).map((x) => ({ ref: x.ref, reason: String(x.reason || '').slice(0, 200) }))), editors: edits.map((e) => ({ label: e.label, ok: Boolean(e.ok) })) };
+  if (typeof c.text === 'string' && c.text.trim()) {
+    const cur = contractMod.read(root, state.id);
+    const next = contractMod.keepCliSections(c.text, cur);
+    const pb = contractMod.problems(contractMod.parse(cur)).length;
+    const pn = contractMod.parse(next);
+    const pa = contractMod.problems(pn).length;
+    const known = new Set([...Object.keys(contractMod.sections(cur)), 'intent', 'goal', 'non-goals', 'acceptance criteria', 'constraints', 'allowed paths', 'verify commands', 'assumptions', ...contractMod.CLI_OWNED]);
+    const foreign = Object.keys(contractMod.sections(next)).filter((k) => !known.has(k));
+    const lost = lostItems(contractMod.parse(cur), pn, edits, data);
+    if (approved) out.rejected = 'the contract is approved: changes go through an amendment';
+    else if (!pn.intent.present) out.rejected = 'the revision has no Intent section';
+    else if (lost.length) out.rejected = `the revision drops ${lost.join('; ')} without a recorded reason (a settled issue, or the God Eye item, note or gate denial that asked for it)`;
+    else if (foreign.length) out.rejected = `the revision adds sections a contract does not have (${foreign.slice(0, 3).join(', ')})`;
+    else if (/^## (Your final message|Your output|Your tools|This run)\b|^# Factory [a-z-]+ — this run/m.test(next)) out.rejected = 'the revision carries the agent\'s own instructions';
+    else if (pa > pb) out.rejected = `the revision adds contract problems (${pa} > ${pb})`;
+    else {
+      writeText(jobPaths(root, state.id).contract, next.endsWith('\n') ? next : `${next}\n`);
+      out.written = true;
+      out.changed = next.replace(/\s+$/, '') !== String(cur).replace(/\s+$/, '');
+      out.problems_fixed = Math.max(0, pb - pa);
+    }
+  }
+  if (edits.some((e) => e.ok)) {
+    for (const id of unappliedBefore) {
+      const u = data.issues.find((x) => x.id === id);
+      if (!u) continue;
+      if (out.written && appliedRefs.has(id)) {
+        u.applied_round = round;
+        require('./clarify').event(u, round, 'applied', 'contract-editor');
+      } else u.edit_attempts = (u.edit_attempts || 0) + 1;
+    }
+    if (out.written) for (const nt of data.notes || []) if (nt.ref === 'contract') nt.applied = true;
+  }
+  // Progress, for the no-progress rule: a revision that changed the text AND applied something
+  // it was given (a settled issue, a note, a denial) or fixed a contract problem. A rewrite that
+  // applies nothing is not progress, or an editor rewording every round would keep clarify from
+  // ever parking before its ceiling.
+  const newlyApplied = unappliedBefore.filter((id) => appliedRefs.has(id)).length;
+  const handled = edits.some((e) => e.ok && (e.requested || []).some((r) => ['user note', 'gate denial'].includes(r.from)));
+  out.effective = Boolean(out.written && out.changed && (newlyApplied > 0 || out.problems_fixed > 0 || handled));
+  return out;
+}
+
+// Per-round counts and the progress test: something settled, deferred or dropped since the
+// last round, questions asked, or a contract revision that applied something.
+function measureRound(clarifyMod, data, { round, priorIds, prevTotals, asked, degraded, revised = false }) {
+  const t = clarifyMod.totals(data);
+  const p = prevTotals || { closed: 0, settled: 0, deferred_to_design: 0, dropped: 0 };
+  const opened = data.issues.filter((u) => !priorIds.has(u.id));
+  const settled = Math.max(0, (t.settled || 0) - (p.settled || 0));
+  const deferred = Math.max(0, (t.deferred_to_design || 0) - (p.deferred_to_design || 0));
+  const dropped = Math.max(0, (t.dropped || 0) - (p.dropped || 0));
+  const reraised = data.issues.reduce((k, u) => k + (u.reraised || 0), 0) - (p.reraised || 0);
+  const progress = settled + deferred + dropped > 0 || asked > 0 || revised;
+  return { round, opened: opened.length, settled, deferred, dropped, asked, revised, progress, degraded: Boolean(degraded), reraised: Math.max(0, reraised), totals: { ...t, reraised: data.issues.reduce((k, u) => k + (u.reraised || 0), 0) } };
 }
 
 function recGround(root, state, env) {
@@ -313,15 +553,24 @@ function apply(root, { jobId, file, envelope }) {
   return { job: state.id, workflow: env.workflow, config: env.config || null, ...res };
 }
 
-function answer(root, { jobId, id, question, answer: a }) {
+// `factory answer`: one channel. U-n / Q-n (positional or --id) or free text (--question).
+// During clarify it settles the issue in the ledger (cli/core/clarify.js answer); free text
+// that matches no issue is refused with the open ids, never dropped. After H1 (ground's
+// blocking questions) a free-text answer is recorded by its question text, as before.
+function answer(root, { jobId, id, ref, question, answer: a, acceptDefault = false, via = 'cli' }) {
   const state = job.resolve(root, jobId);
-  const logged = id ? (state.question_log || []).find((q) => q.id === String(id).toUpperCase()) : null;
-  if (id && !logged) fail(`No question ${id} was asked in ${state.id}.`, 'bad_input');
+  const R = String(ref || id || '').trim().toUpperCase();
+  const clarifyMod = require('./clarify');
+  const approved = Boolean(state.approvals && (state.approvals.H1 || state.approvals.EH1));
+  if (clarifyMod.inClarify(state) || /^U-\d+$/.test(R) || (R && !approved)) return clarifyMod.answer(root, { jobId: state.id, ref: R, text: a, question, acceptDefault, via });
+  const logged = R ? (state.question_log || []).find((q) => q.id === R) : null;
+  if (R && !logged) fail(`No question ${R} was asked in ${state.id}.`, 'bad_input');
+  if (logged && approved) return clarifyMod.answer(root, { jobId: state.id, ref: R, text: a, acceptDefault, via });
   const q = logged ? logged.question : question;
-  if (!q || !a) fail('Need --answer and either --id Q-n or --question "...".', 'bad_input');
+  if (!q || !a) fail('Need the answer: factory answer <U-n|Q-n> "<answer>", or --question "..." --answer "...".', 'bad_input');
   const f = jobPaths(root, state.id).answers;
   const list = readJson(f, []);
-  list.push({ ...(logged ? { id: logged.id, category: logged.category } : {}), question: q, answer: a, at: nowIso() });
+  list.push({ ...(logged ? { id: logged.id, category: logged.category } : {}), question: q, answer: a, via, at: nowIso() });
   writeJson(f, list);
   return { job: state.id, ...(logged ? { id: logged.id } : {}), answers: list.length };
 }

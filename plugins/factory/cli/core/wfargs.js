@@ -28,6 +28,7 @@ function docCheck(root, state, file) {
 const ROLE_OUTPUTS = {
   'intent-analyst': ['analyst'],
   judge: ['judge'],
+  'contract-editor': ['contract-edit'],
   'god-eye': ['intent-critique', 'critique'],
   'option-generator': ['option'],
   'threat-modeler': ['threat'],
@@ -195,42 +196,94 @@ function base(root, state, workflow, extra = {}) {
 }
 
 // ---------------------------------------------------------------- fanout-judge: clarify
+// Clarify v2 (docs/DESIGN-CLARIFY-v2.md): every brief carries the issue ledger (settled: do not
+// re-raise; open: the only things to ask about), what is new since the last round and which
+// contract sections changed; the contract editor gets what was settled but is not in the
+// contract text yet, the user's notes, the contract's problems and a new gate denial.
 function clarify(root, state, ctx, acceptDegraded) {
   const cfg = readJson(pluginPath('config', 'workflows', 'clarify.json'));
+  const clarifyMod = require('./clarify');
   const round = state.counters.clarify_rounds + 1;
-  const L = state.policy.limits;
-  const maxQ = questions.budget(cfg, round, L);
-  const answers = readJson(jobPaths(root, state.id).answers, []);
+  const CL = clarifyMod.limits(state);
+  const L = { ...state.policy.limits, max_intent_rounds: CL.ceiling };
+  const maxQ = questions.budget(cfg, CL.counted + 1, L);
+  const jp = jobPaths(root, state.id);
+  const answers = readJson(jp.answers, []) || [];
   const asked = questions.askedList(state, answers);
   const jc = jobContext(root, state, ['H1', 'EH1']);
+  // the ledger as the next round will see it (a pre-v2 job's migrated in memory; defaults due now taken)
+  const data = clarifyMod.ensure(root, state);
+  if (data) clarifyMod.acceptDefaults(data, state, round);
+  const issues = data ? data.issues : [];
+  const lastRound = data && (data.rounds || []).length ? data.rounds[data.rounds.length - 1] : null;
+  const since = lastRound ? lastRound.at : '';
+  // What changed since the last recorded round: contract sections, answers, notes.
+  const text = contractMod.read(root, state.id);
+  const hashes = contractMod.sectionHashes(text);
+  const before = (data && data.sections) || null;
+  const changed = before ? Object.keys(hashes).filter((k) => hashes[k] !== before[k]) : null;
+  const settledSections = before ? Object.keys(hashes).filter((k) => hashes[k] === before[k]) : [];
+  const newAnswers = answers.filter((a) => !since || String(a.at || '') > since).map((a) => ({ ...(a.id ? { question: a.id } : {}), ...(a.issue ? { issue: a.issue } : {}), text: String(a.question || '').slice(0, 200), answer: String(a.answer || '').slice(0, 300) }));
+  const newNotes = [...issues.flatMap((u) => (u.notes || []).filter((n) => String(n.at || '') > since && /^user/.test(n.actor || '')).map((n) => ({ issue: u.id, text: n.text }))), ...((data && data.notes) || []).filter((n) => n.ref === 'contract' && !n.applied && String(n.at || '') > since).map((n) => ({ issue: null, text: n.text }))];
+  const defaultsTaken = issues.filter((u) => u.status === 'settled' && u.settled_by === 'assumption_accepted' && u.answered && u.answered.via === 'default' && (u.history || []).some((h) => h.round === round && /^settled/.test(h.event))).map((u) => ({ issue: u.id, default: u.answer }));
+  // a gate denial goes to the editor once: in the first round after it (God Eye and the
+  // analysts keep seeing it in the job context until the gate is approved)
+  const denial = denialNotes(state, ['H1', 'EH1']);
+  const denialNew = Boolean(denial) && (state.denials || []).some((x) => ['H1', 'EH1'].includes(x.gate) && (!since || String(x.at || '') > since));
+  const nothingNew = Boolean(data && lastRound && !(lastRound.ledger && lastRound.ledger.degraded) && changed && !changed.length && !newAnswers.length && !newNotes.length && !defaultsTaken.length && !denialNew);
+  const slim = (u) => ({ id: u.id, subject: u.subject, subject_explicit: Boolean(u.subject_explicit), text: u.text, kind: u.kind, impact: u.impact, owner: u.owner, status: u.status, settled_by: u.settled_by || null, draft: u.draft, ...(u.options ? { options: u.options } : {}), default: u.default || null, reason: u.reason || null, ...(u.why ? { why: u.why } : {}), question_id: u.question_id || null, answer: u.answer || null, aliases: u.aliases || [], applied_round: u.applied_round || null, history: (u.history || []).slice(-8), notes: (u.notes || []).slice(-5), source: u.source, round: u.round });
+  const nextId = issues.reduce((m, u) => Math.max(m, Number(String(u.id).slice(2)) || 0, ...(u.aliases || []).map((a) => Number(String(a.id).slice(2)) || 0)), 0);
+  const ledgerBrief = { round, prior: issues.map(slim), next_id: nextId, new_since: { answers: newAnswers, defaults_taken: defaultsTaken, notes: newNotes }, changed_sections: changed, settled_sections: settledSections, nothing_new: nothingNew };
+  const review = changed === null
+    ? '- Review the whole contract (first round with a ledger).'
+    : changed.length
+      ? `- Contract sections changed since the last round (review ONLY these; the others are settled and not re-reviewed): ${changed.join(', ')}.${settledSections.length ? ` Settled: ${settledSections.join(', ')}.` : ''}`
+      : `- No contract section changed since the last round (settled: ${settledSections.join(', ') || 'all'}): review only the new answers and notes under CLARIFY LEDGER.`;
   const askedText = asked.map((q) => `  - ${q}`).join('\n') || '  - (none)';
   const answersText = answers.map((a) => `  - Q: ${a.question}\n    A: ${a.answer}`).join('\n') || '  - (none)';
-  const protocol = `- Question priority: ${cfg.priority.join(' > ')}.`;
+  const protocol = `- Question priority: ${cfg.priority.join(' > ')}.\n- Identity: every question you raise names its issue: \`same_as\` an existing U-n from CLARIFY LEDGER (after your pointer), or "new" with a short \`subject\` key (e.g. "cart.discount-on-sale"). Never raise a settled issue again, in any wording.`;
   const fanout = cfg.fanout.map((f) => ({
     id: `${f.role}:${f.focus}`,
     ...agentSpec(state, f.role),
     category: f.category || questions.FOCUS_CATEGORY[f.focus] || 'scope',
     gate: Boolean(f.gate),
     label: `analyst · ${f.focus}`,
-    prompt: prompt(f.role, `${jc}\n- Your focus: **${f.focus}** (category: ${f.category || 'scope'}) — ${f.brief}${f.gate ? '\n- You are the intent gate (see your role\'s rules for the intent focus).' : ''}\n${protocol}\n- Round ${round}. Questions already asked (never repeat them):\n${askedText}\n- Answers given earlier:\n${answersText}`, 'analyst'),
+    prompt: prompt(f.role, `${jc}\n- Your focus: **${f.focus}** (category: ${f.category || 'scope'}) — ${f.brief}${f.gate ? '\n- You are the intent gate (see your role\'s rules for the intent focus).' : ''}\n${protocol}\n${review}\n- Round ${round}. Questions already asked (never repeat them):\n${askedText}\n- Answers given earlier:\n${answersText}`, 'analyst'),
     schema: schema('analyst'),
   }));
   const judge = {
     ...agentSpec(state, 'judge'),
     prompt: prompt(
       'judge',
-      `${jc}\n- Mode: clarify, round ${round} of at most ${L.max_intent_rounds}.\n- Ask at most ${maxQ} questions this round${maxQ === 0 ? ' (question budget spent: return none, record assumptions instead)' : ''}.\n${protocol}\n- Never re-ask any of these:\n${askedText}\n- Answers given earlier:\n${answersText}\n- The analysts' outputs follow under INPUTS.`,
+      `${jc}\n- Mode: clarify, round ${round} (clarify parks after ${CL.no_progress} rounds in a row that settle nothing, or at ${CL.ceiling} rounds).\n- Ask at most ${maxQ} questions this round${maxQ === 0 ? ' (question budget spent: return none, record assumptions instead)' : ''}.\n${protocol}\n${review}\n- Never re-ask any of these:\n${askedText}\n- Answers given earlier:\n${answersText}\n- The analysts' outputs follow under INPUTS.`,
       'judge',
     ),
     schema: schema('judge'),
   };
   const critique = {
     ...agentSpec(state, 'god-eye'),
-    prompt: prompt('god-eye', `${jc}\n- Focus: **intent**. The document: ${jobPaths(root, state.id).contract}`, cfg.critique.schema || 'critique'),
+    prompt: prompt('god-eye', `${jc}\n- Focus: **intent**. The document: ${jp.contract}\n- CLARIFY LEDGER (after your pointer) lists every issue, how the settled ones were settled (the CLI writes the user's answers into "## Clarifications (settled)") and what was deferred to design. Judge the contract as if those sections were there, and answer the checklist.\n${review}`, cfg.critique.schema || 'critique'),
     schema: schema(cfg.critique.schema || 'critique'),
     max_rounds: 1,
     when: 'no_questions',
   };
+  const inClarify = clarifyMod.inClarify(state);
+  const todo = [];
+  for (const u of issues) {
+    if (u.status === 'settled' && ['user', 'assumption_accepted'].includes(u.settled_by) && u.answer && !u.applied_round && (u.edit_attempts || 0) < 2) {
+      todo.push({ from: 'ledger', ref: u.id, issue: String(u.text).slice(0, 300), settled: String(u.answer).slice(0, 300), how: u.settled_by === 'user' ? 'answered by the user' : 'default accepted' });
+    }
+  }
+  for (const n of newNotes) todo.push({ from: 'user note', ref: n.issue || 'contract', note: n.text });
+  if (inClarify) for (const pr of contractMod.problems(contractMod.parse(text))) todo.push({ from: 'contract check', problem: pr });
+  if (denialNew && inClarify) todo.push({ from: 'gate denial', note: denial.replace(/^- /, '') });
+  const editor = cfg.editor ? {
+    ...agentSpec(state, cfg.editor.role),
+    label: 'contract editor',
+    prompt: prompt(cfg.editor.role, `${jc}\n- The contract to revise: ${jp.contract}. Return its full revised text; the CLI writes it when it records this round. Change only what CHANGES TO APPLY (after your pointer) asks for.\n- Never change the CLI-owned sections (## Clarifications (settled), ## Deferred to design): return them as they are.`, cfg.editor.schema),
+    schema: schema(cfg.editor.schema),
+    todo: inClarify ? todo : [],
+  } : null;
   return base(root, state, 'fanout-judge', {
     config: 'clarify',
     mode: state.epic ? 'epic' : null,
@@ -242,6 +295,8 @@ function clarify(root, state, ctx, acceptDegraded) {
     fanout,
     judge,
     critique,
+    editor,
+    ledger: ledgerBrief,
     verifier: null,
   });
 }
@@ -262,7 +317,8 @@ function decide(root, state, ctx, action) {
       ? `- God Eye's last design critique (${lastCritique.verdict}):\n${lastCritique.items.slice(0, 12).map((it) => `  - ${typeof it === 'string' ? it : [it.severity, it.issue || it.summary || JSON.stringify(it)].filter(Boolean).join(': ')}`).join('\n')}`
       : '',
   ].filter(Boolean).join('\n');
-  const jc = `${jobContext(root, state, ['H2', 'EH2', 'HF'])}\n- Findings (cited): ${jp.findings}${history ? `\n${history}` : ''}`;
+  const deferred = require('./clarify').deferredFor(root, state);
+  const jc = `${jobContext(root, state, ['H2', 'EH2', 'HF'])}\n- Findings (cited): ${jp.findings}${deferred ? `\n${deferred}` : ''}${history ? `\n${history}` : ''}`;
   const existingAdrs = priorDesign.filter((f) => /adr-\d+/.test(f));
   const nextAdr = existingAdrs.length
     ? `${existingAdrs[existingAdrs.length - 1]} (revise it in place — keep this path — unless the decision itself is new)`
@@ -402,7 +458,8 @@ function ground(root, state, ctx, action) {
         ['external', 'Only if the contract depends on something outside the repo: official docs, cited by URL. Otherwise return no claims.'],
       ];
   const cap = state.policy.limits.max_parallel_research;
-  const jc = jobContext(root, state);
+  const deferred = require('./clarify').deferredFor(root, state);
+  const jc = `${jobContext(root, state)}${deferred ? `\n${deferred}` : ''}`;
   const probes = topics.slice(0, Math.max(1, cap)).map(([t, brief]) => ({
     id: t,
     ...agentSpec(state, 'researcher'),

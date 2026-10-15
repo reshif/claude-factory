@@ -8,7 +8,9 @@
       "options": [
         "Numbers only",
         "Coerce numeric strings"
-      ]
+      ],
+      "same_as": "new",
+      "subject": "add.numeric-strings"
     }
   ],
   "held": [],

@@ -117,8 +117,8 @@ function bpAnswer(asked) {
   const nums = n === 1 ? ['<your answer>'] : n <= 3 ? Array.from({ length: n }, (_, i) => `${i + 1} <your answer>`) : ['1 <your answer>', '2 <your answer>', `… ${n} <your answer>`];
   return {
     answer: nums.join(', '),
-    hint: n === 1 ? `answer ${ids[0] || 'the question'} in your own words; skip it and it takes its default`
-      : `answer ${ids.length ? ids.join(', ') : 'the questions'} by number, in your own words; skip one and it takes its default`,
+    hint: n === 1 ? `answer ${ids[0] || 'the question'} in your own words (or "defaults"); skip it and it takes its default`
+      : `answer ${ids.length ? ids.join(', ') : 'the questions'} by number, in your own words (or "defaults"); skip one and it takes its default`,
   };
 }
 
@@ -215,7 +215,8 @@ function bpWaiting(job, state, asked) {
   const g = BP_GATE_OF[state];
   if (job.status !== 'active' && job.status !== 'parked') return { who: 'nobody', what: BP_MEANING[state] || state };
   if (!g) return { who: 'agent', what: BP_MEANING[state] || state };
-  if (g === 'Q') return { who: 'you', gate: g, what: BP_MEANING[state], ...bpAnswer(asked), command: null };
+  // clarify v2: the ledger's open questions (new and still waiting) when the data carries them
+  if (g === 'Q') return { who: 'you', gate: g, what: BP_MEANING[state], ...bpAnswer(job.clarify && Array.isArray(job.clarify.questions) && job.clarify.questions.length ? { question_ids: job.clarify.questions.map((q) => q.id) } : asked), command: null };
   // the replies the prompt hook applies (human.parseReply, the README's "Your replies"), and the same
   // human-only command from your own terminal (factory approve · resume · merged, with --job)
   const reply = g === 'P' ? `resume ${job.id} · cancel job ${job.id} · abandon job ${job.id}` : g === 'H4' ? `merged ${job.id} <commit>` : `approve ${job.id} ${g} · deny ${job.id} <what must change>`;
@@ -264,6 +265,8 @@ function toDisplay(data) {
       amendment: amend ? { reason: amend.text, from: 'you' } : null,
       evidence_count: (j.tasks || []).filter((t) => t.pass !== null && t.pass !== undefined).length,
       runs: bpRuns(j),
+      // clarify v2: the issue ledger (cli/core/console.js clarifyBlock), for the section view's Clarify block
+      clarify: j.clarify || null,
     });
     activity = activity.concat(bpActivity(j, hist));
     for (const l of j.lessons || []) {

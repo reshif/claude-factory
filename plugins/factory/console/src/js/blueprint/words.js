@@ -67,7 +67,7 @@ APP.words = (function () {
 
   // Every role in agents/*.md: a plain name, and what it does.
   var ROLES = {
-    "intent-analyst": ["Intent analyst", "finds gaps in the intent"],
+    "intent-analyst": ["Intent analyst", "finds gaps in the intent"], "contract-editor": ["Contract editor", "applies what was settled to the contract"],
     "option-generator": ["Option generator", "proposes one independent design option"],
     judge: ["Judge", "merges the analysts' reports"], "god-eye": ["God Eye", "independent reviewer: reads the whole document fresh"],
     researcher: ["Researcher", "finds facts in the code, with sources"], architect: ["Architect", "weighs the options, writes the design record"],

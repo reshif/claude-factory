@@ -11,7 +11,9 @@
         "Numbers only (strings throw)",
         "Coerce numeric strings",
         "Coerce and log a warning"
-      ]
+      ],
+      "same_as": "new",
+      "subject": "add.numeric-strings"
     }
   ],
   "assumptions": [
