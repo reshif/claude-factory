@@ -7,6 +7,7 @@ Turns a request into a verified, merged change. Claude does the work through spe
 | `factory` | 0.11.0 | The orchestrator: skills, hooks, the `factory` CLI, workflows, agents, recipes, templates and the console |
 | `factory-inspector` | 0.3.0 | An independent auditor: checks each job against the rulebook it declared and the factory's health |
 
+
 ## How it fits together
 
 ```mermaid
@@ -44,7 +45,7 @@ flowchart TB
 
   store[/"<b>.factory/</b> in your repo · contract · ADRs · plan · ledger · decisions · events · lessons"/]:::art
 
-  console["<b>Console</b><br/>factory console --serve<br/>live board · wire · line map · story"]
+  console["<b>Console</b><br/>factory console --serve<br/>live board · wire · line map · story · blueprint"]
   inspector["<b>Inspector</b><br/>plugin factory-inspector<br/>conformance and health rules · runs when a job ends"]
 
   you --> skills
@@ -213,11 +214,16 @@ Run `factory console`, or `/factory:console` in Claude Code, then open `.factory
 
   ![A job's story](plugins/factory/console/dev/screenshots/job-story.png)
 - **Live.** With `--serve`, the page gets each change over server-sent events. Only the rows whose job changed are redrawn, with a short highlight, and a row that changes group slides there. A new gate brings a toast with the reply to copy, and, if you turn on the bell, a desktop notification. On an open job, new steps play in if you are watching the latest moment, and your place is kept if you are scrubbing back. The server listens on this machine only (`http://127.0.0.1:4477/`, `--port 0` for any free port), refuses foreign `Host` headers and is read-only.
-- **Keys.** `j`/`k` move, `Enter` opens, `Esc` goes back, `/` filters, `⌘K` (or ctrl-K) opens a palette to jump to any job or view, `1`–`5` toggle the tiles, `g w` opens the next job waiting for you, `?` lists them all. The view, filters and open job are in the URL, so a link brings you back to the same place.
-- **Recipe map and Crew.** *Recipe map* is the whole factory as a floor plan for any recipe; *Crew* lists every agent and how often each ran.
-- **Where the data comes from.** Each workflow returns a roster of every agent it started, and `factory record` seals it into the ledger as an `agents` entry tied to the routing decision. Hooks add timings. Parks, amendments, follow-ups, hook errors and refused "done" claims come from the event log and the job's own records. An agent that started but never stopped counts as running for two hours at most, and only while its job is active; after that it shows as stale.
+- **Keys.** `j`/`k` move, `Enter` opens, `Esc` goes back, `/` filters, `⌘K` (or ctrl-K) opens a palette to jump to any job or view, `1`–`5` toggle the tiles, `g w` opens the next job waiting for you, `g b` / `g l` / `g m` / `g c` / `g p` open the board, line map, recipe map, crew and blueprint, `?` lists them all. On the Blueprint, `/` finds a job (`Esc` clears it, a second `Esc` leaves the box), `Esc` closes a section view and the arrow keys switch sheets. The view, filters and open job are in the URL, so a link brings you back to the same place.
+- **Recipe map and Crew.** *Recipe map* is the whole factory as a floor plan for any recipe; *Crew* lists every agent, how often each ran and its Claude Code tools, which the build reads from the `tools:` line of each `agents/*.md` file (a test keeps them in step).
+- **Findings and outcomes.** A blocker or major finding the finding-verifier could not settle (no result, or `unverifiable`) stays unverified and **blocking** everywhere: the round's text counts it, the Story and the step panel name it with the verifier's reason and evidence. Agent outcomes are red when the agent did not do its job, amber when its answer holds the job up (`revise`, `unverifiable`), green only for a positive verdict, and neutral otherwise.
+- **Blueprint.** The same jobs drawn as an engineering drawing set, ported from claude-software-factory's console by way of copilot-factory. *Sheet 1, the line*: Intake, Contract, Design, Plan, Build, Prove, Challenge, Ship and Learn, with every job at its station and, under each, the bank of agents it calls on, lit while one works (Clarify is the intent analysts, the judge and God Eye; Prove is a CLI check; Challenge is one reviewer per lane the jobs must pass plus the finding verifier; Ship shows the post-merge reviewers only when a recipe runs that review). Red rails show work sent back to Build, side tracks hold changing, parked and stopped jobs (cancelled and abandoned in red), numbered callouts mark each decision waiting on you, and details zoom into Build, Challenge (lane verdicts as the CLI recorded them, unverified findings blocking) and the open rounds. Then *Projection* (a turning globe of the repository, its files, jobs, tasks and agents), *Matrix* (stations × whose turn it is), *Schedule* (lead time, throughput, first-pass and rework rates, human wait), *Parts list* (every agent role, its runs over time and its last action) and *General notes* (lessons to `accept lesson L2`, the review rounds per job against the policy's `max_review_rounds`, and the checks prove runs, such as a promoted lesson's). A title block replays the history and counts *Your turn* as the Board does; *Snapshot* freezes the sheet; a job's *section view* gives the reply to copy and the same human-only command for your own terminal (`factory approve H3 --job J-0004`). Epics are not drawn: sheet 1 names them and the notes list them, with any epic gate waiting on you.
+
+  ![The Blueprint: the line as an engineering drawing](plugins/factory/console/dev/screenshots/blueprint-dark.png)
+- **Where the data comes from.** Each workflow returns a roster of every agent it started, and `factory record` seals it into the ledger as an `agents` entry tied to the routing decision. Hooks add timings. Review results carry the CLI's own lane verdicts, required and missing lanes, round and each finding's verifier word; jobs carry their policy limits. Parks, amendments, follow-ups, hook errors and refused "done" claims come from the event log and the job's own records. An agent that started but never stopped counts as running for two hours at most, and only while its job is active; after that it shows as stale.
 - **Options.** `--job J-0003` makes the page for one job, `--out file.html` writes it elsewhere, `--label "…"` adds a banner, and `--data file.json` also writes the data as JSON. Dark is the default look when your system is dark; the half-moon button switches theme.
 - **Sample.** `node plugins/factory/console/dev/make-sample.js <dir>` builds a realistic sample: nine jobs over about three days on a simulated clock. They run through the real CLI, workflows, hooks and inspector, with scripted agents. More screenshots are in [`plugins/factory/console/dev/screenshots/`](plugins/factory/console/dev/screenshots/).
+- **Changing the page.** `console/console.html` is built from the modules in `plugins/factory/console/src/`: `index.html` (the markup), `styles/` and `js/` (`definitions.js`, `helpers.js`, `recipe-map/`, `job-line/`, `shell/`, `views/`, `blueprint/`, `boot.js`). `src/manifest.json` sets the order; scripts share one scope. Edit the sources, then run `node plugins/factory/console/build.js`; the result is still one self-contained page with one data slot. `npm test` fails if `console.html` is stale (`node console/build.js --check` says the same).
 
 ## The inspector
 
@@ -298,7 +304,7 @@ plugins/factory/
   policy/                           default-policy.json · floors.json
   schemas/                          envelope, contract, plan, ledger and agent-output schemas
   templates/                        docs/ (document templates) · git/commit-msg · github/factory-gate.yml
-  console/                          console.html (the page) · dev/ (sample builder, screenshots)
+  console/                          console.html (built) · build.js · src/ (its modules) · dev/ (sample builder, screenshots)
   docs/                             ARCHITECTURE · DESIGN-v2 · RECIPES · FLOORS · DOCS
   tests/                            end-to-end and unit tests
 plugins/factory-inspector/
