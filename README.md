@@ -141,7 +141,7 @@ The `UserPromptSubmit` hook applies these **before Claude sees them**; nothing e
 | `1 yes, 2 trunk ports too` · `skip 2` · `defaults` | While clarify waits on you: your answers to the questions it showed, by number (`Q-4 no` names one by id). All or nothing; a message that isn't that shape is left alone. |
 | `split U-7 U-19` | Clarify folded two different questions into one issue: make the second its own issue again. |
 
-From your own terminal you can run the human-only commands directly: `factory approve`, `factory resume`, `factory reseal`, `factory clarify split`, `factory-inspect mark …`. Agents are blocked from running them.
+From your own terminal you can run the human-only commands directly: `factory approve`, `factory resume`, `factory reseal`, `factory clarify split`, `factory-inspect mark …`. Agents are blocked from running them. Each one shows a short random code on your terminal (written to the terminal device only: never to stdout, stderr, a file or the log) and asks you to type it back, and each refuses a shell that belongs to an agent: Claude Code's Bash tool sets `CLAUDECODE=1`, `AI_AGENT=claude-code_<version>_agent` and `CLAUDE_CODE_CHILD_SESSION=1` in every command's environment (so a `!` command typed into Claude Code is refused too: reply in chat instead), and VS Code's, Copilot's, Codex's and Gemini's agent shells set markers of their own. The limit, plainly: an agent that drives an interactive terminal (reads its screen and types into it) in a harness that sets none of these markers could read the code; the guard, which refuses these commands from any agent's tool call, is the first line.
 
 ### Gates you may see
 

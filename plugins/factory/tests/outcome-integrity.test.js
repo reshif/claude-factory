@@ -368,3 +368,19 @@ test('P1.3: a confirmed finding with no file (or in no task\'s paths) reaches ev
   const brief = F.cli(root, ['wfargs', 'realize', '--scope', 'fix']);
   assert.match(fs.readFileSync(brief.tasks.T1.builder_prompt.split('\n').find((l) => l.trim().startsWith('/')).trim(), 'utf8'), /no single owner/);
 });
+
+// ------------------------------------------------------------------------------- P1.6
+
+test('P1.6: the guard refuses any agent command that sets the test-only human seam or the secret override', () => {
+  const G = require('../hooks/guard-rules');
+  for (const cmd of [
+    'FACTORY_TEST_HUMAN=abc NODE_ENV=test factory approve',
+    'env FACTORY_TEST_HUMAN_INPUT={code} node bin/factory approve',
+    'export FACTORY_SECRET_FILE=/tmp/s; factory approve',
+    '$env:FACTORY_TEST_HUMAN="x"; factory approve',
+  ]) {
+    assert.match(G.checkBash('/tmp', cmd, null, { agent: true }) || '', /test suite's seam/, cmd);
+    assert.match(G.checkBash('/tmp', cmd, null, {}) || '', /test suite's seam/, cmd);
+  }
+  assert.equal(G.checkBash('/tmp', 'npm test', null, {}), null);
+});

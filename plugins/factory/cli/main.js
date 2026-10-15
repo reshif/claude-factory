@@ -363,6 +363,7 @@ function run(argv) {
       return C('human').confirmAc(R(), { jobId: J, ac: sub, channel: tty });
     case 'reseal':
       C('human').requireHumanChannel(tty);
+      if (J || C('job').current(R())) C('human').confirmTyped(tty, J || C('job').current(R()), 'reseal it');
       return C('job').reseal(R(), J || C('job').current(R()));
     default:
       return fail(`Unknown command "${cmd}". Run factory help.`, 'bad_input');

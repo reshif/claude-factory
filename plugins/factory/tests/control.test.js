@@ -229,6 +229,95 @@ test('human-only actions refuse the agent path', () => {
   for (const t of ['please continue', 'approve', 'what does the approve gate check in this repo for us today', 'hello']) assert.equal(human.nearMiss(t), null, t);
 });
 
+test('terminal human actions: a random code shown on the terminal only, no bypass, agent shells refused, one test-only seam', () => {
+  const root = F.makeRepo();
+  const { spawnSync } = require('child_process');
+  const human = require('../cli/core/human');
+  const J = F.cli(root, ['job', 'new', '--title', 'x', '--type', 'bug', '--risk', 'low']).job;
+  // the test suite itself may run inside an agent's shell (Claude Code sets CLAUDECODE=1 there)
+  const clean = Object.fromEntries(Object.entries(process.env).filter(([k]) => !human.AGENT_ENV.some(([a]) => a === k)));
+  const cli = (args, env = {}) => {
+    const r = spawnSync('node', [F.BIN, ...args], { cwd: root, encoding: 'utf8', env: { ...clean, FACTORY_ROOT: '', ...env } });
+    return JSON.parse(r.stdout);
+  };
+  const token = human.testToken();
+  const seam = (input) => ({ NODE_ENV: 'test', FACTORY_TEST_HUMAN: token, FACTORY_TEST_HUMAN_INPUT: input });
+  const status = () => F.cli(root, ['job', 'show']).status;
+  // without a terminal and without the seam: refused
+  assert.equal(cli(['cancel']).code, 'human_only');
+  assert.equal(cli(['cancel'], { ...seam('{code}'), FACTORY_TEST_HUMAN: 'guess' }).code, 'human_only', 'the seam needs the token');
+  assert.equal(cli(['cancel'], { ...seam('{code}'), NODE_ENV: 'production' }).code, 'human_only', 'the seam needs NODE_ENV=test');
+  // Claude Code's Bash tool, VS Code's agent terminals, the Copilot CLI: agent shells
+  for (const [k, v] of [['CLAUDECODE', '1'], ['CLAUDE_CODE_CHILD_SESSION', '1'], ['AI_AGENT', 'claude-code_2-1-300_agent'], ['AI_AGENT', 'github_copilot_vscode_agent'], ['COPILOT_AGENT', '1'], ['COPILOT_CLI', '1']]) {
+    assert.equal(human.agentContext({ [k]: v }), k);
+    assert.match(cli(['cancel'], { [k]: v }).message, new RegExp(`belongs to an agent \\(${k} is set\\)`));
+  }
+  assert.equal(human.agentContext({ TERM_PROGRAM: 'vscode', VSCODE_INJECTION: '1' }), null, 'your own VS Code terminal is not an agent');
+  // the job id is no confirmation (every agent knows it); --yes is no bypass
+  assert.equal(cli(['cancel'], seam(J)).code, 'not_confirmed');
+  const wrong = cli(['cancel', '--yes'], seam('y'));
+  assert.equal(wrong.code, 'not_confirmed');
+  assert.match(wrong.message, /^Not confirmed: that was not the code shown on your terminal\. Nothing was done/, 'the refusal never shows the code');
+  assert.equal(status(), 'active');
+  assert.equal(cli(['cancel'], seam(' {code} ')).job, J, 'the code shown, spaces aside');
+  assert.equal(status(), 'cancelled');
+  // lessons too: the code, not the lesson id
+  F.cli(root, ['lessons', 'add', '--text', 'Run the linter before review', '--scope', 'review']);
+  assert.equal(cli(['lessons', 'accept', 'L1'], seam('L1')).code, 'not_confirmed');
+  assert.equal(cli(['lessons', 'accept', 'L1'], seam('{code}')).lesson.status, 'accepted');
+  // codes are random: short, from the unambiguous alphabet, not repeating
+  const codes = new Set(Array.from({ length: 50 }, () => human.confirmationCode()));
+  assert.ok(codes.size > 45);
+  for (const c of codes) assert.match(c, /^[ABCDEFGHJKMNPQRSTUVWXYZ2-9]{4}$/);
+  // chat replies need no confirmation: the reply is the human's own words
+  const J2 = F.cli(root, ['job', 'new', '--title', 'y', '--type', 'bug', '--risk', 'low']).job;
+  assert.match(F.reply(root, `abandon job ${J2}`).message, /abandoned/);
+  // a real terminal: a pty (python's pty module) reads the code off the screen and types it
+  const py = spawnSync('python3', ['-c', 'import pty'], { encoding: 'utf8' }).status === 0;
+  if (py && process.platform !== 'win32') {
+    const J3 = F.cli(root, ['job', 'new', '--title', 'z', '--type', 'bug', '--risk', 'low']).job;
+    const drive = path.join(root, '..', `pty-${path.basename(root)}-${J3}.py`);
+    fs.writeFileSync(drive, [
+      'import os, pty, re, sys, json',
+      'mode = sys.argv[1]',
+      'pid, fd = pty.fork()',
+      'if pid == 0:',
+      '    os.execvp(sys.argv[2], sys.argv[2:])',
+      'buf = b""',
+      'while True:',
+      '    try: chunk = os.read(fd, 1024)',
+      '    except OSError: break',
+      '    if not chunk: break',
+      '    buf += chunk',
+      '    m = re.search(rb"type the code ([A-Z0-9]{4}): ", buf)',
+      '    if m and b"\\x00sent" not in buf:',
+      '        reply = m.group(1) if mode == "right" else (b"J-0001" if mode == "jobid" else b"ZZZZ")',
+      '        os.write(fd, reply + b"\\n")',
+      '        buf += b"\\x00sent"',
+      'os.waitpid(pid, 0)',
+      'print(json.dumps(buf.decode("utf8", "replace")))',
+    ].join('\n'));
+    const term = (mode) => JSON.parse(spawnSync('python3', [drive, mode, 'node', F.BIN, 'cancel'], { cwd: root, encoding: 'utf8', env: { ...clean, FACTORY_ROOT: '' }, timeout: 20000 }).stdout);
+    for (const mode of ['wrong', 'jobid']) {
+      const out = term(mode);
+      assert.match(out, new RegExp(`To cancel it \\(${J3}\\), type the code [A-Z2-9]{4}: `));
+      assert.match(out, /not_confirmed/);
+      assert.equal(F.cli(root, ['job', 'show', '--job', J3]).status, 'active');
+    }
+    const ok = term('right');
+    const code = /type the code ([A-Z2-9]{4}): /.exec(ok)[1];
+    assert.match(ok, new RegExp(`${J3} cancelled`));
+    assert.equal(F.cli(root, ['job', 'show', '--job', J3]).status, 'cancelled');
+    // the code went to the terminal only: no factory file or log holds it
+    const hits = spawnSync('grep', ['-rl', code, path.join(root, '.factory')], { encoding: 'utf8' }).stdout.trim();
+    assert.equal(hits, '', `the code is in ${hits}`);
+    // the same pty, but inside Claude Code's Bash tool (CLAUDECODE=1): refused before any code is shown
+    const agentTerm = JSON.parse(spawnSync('python3', [drive, 'right', 'node', F.BIN, 'cancel', '--job', J2], { cwd: root, encoding: 'utf8', env: { ...clean, FACTORY_ROOT: '', CLAUDECODE: '1' }, timeout: 20000 }).stdout);
+    assert.doesNotMatch(agentTerm, /type the code/);
+    assert.match(agentTerm, /belongs to an agent \(CLAUDECODE is set\)/);
+  }
+});
+
 test('an open GitHub PR alternates sync and wait instead of busy-looping', () => {
   const root = F.makeRepo();
   const { J } = toProve(root);
