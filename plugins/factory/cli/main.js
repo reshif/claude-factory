@@ -207,7 +207,7 @@ function run(argv) {
       if (sub === 'start') return t.start(R(), J, id);
       if (sub === 'show') return t.show(R(), J, id);
       if (sub === 'verify') {
-        const r = t.verify(R(), J, id);
+        const r = t.verifyRecorded(R(), J, id);
         if (!r.pass) process.exitCode = 1;
         return r;
       }

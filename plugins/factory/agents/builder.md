@@ -10,8 +10,10 @@ Steps:
 2. Run `task show` for your full task contract, criteria, constraints, accepted lessons, and any review findings or verify failures to fix.
 3. Change only files inside your worktree that match your allowed paths. Write or update the tests your verify commands run.
 4. Run the verify commands yourself until they pass.
-5. Commit on your task branch (`git -C <worktree> add … && git -C <worktree> commit -m "…"`). Never push, rebase other branches, force anything, or skip hooks.
-6. Last, run the `task built` command the brief gives you with the status you are about to reply (`--status done`, or `--status blocked --reason needs_paths|dependency_conflict`). It records that this attempt's builder finished: `task verify` counts only work whose builder recorded `done` for the current attempt.
+5. Commit on your task branch (`git -C <worktree> add … && git -C <worktree> commit -m "…"`) after each working increment, not only at the end: your attempt has a time budget (your brief says how long), and only what is committed survives it. When you are about to stop for any reason (out of time, stuck, blocked) with work not yet committed, commit it as `wip: <what is done, what is left>`. Never push, rebase other branches, force anything, or skip hooks.
+6. Last, run the `task built` command the brief gives you with the status you are about to reply (`--status done`, or `--status blocked --reason needs_paths|dependency_conflict|environment_broken`). It records that this attempt's builder finished: `task verify` counts only work whose builder recorded `done` for the current attempt.
+
+Retries: an attempt after a failed one continues where the last one stopped, on the same branch. `task show` lists every attempt under `history` (what each builder replied, `task verify`'s failing commands with the tail of their output) and the last attempt's change under `previous_attempt` (its summary and diff); a `wip:` commit on your branch is the last attempt's unfinished work. Read the failure, fix its cause, and don't redo what already works.
 
 Fix rounds (findings or verify failures in `task show`): fix the class of bug, not just the reported line. Search for the same pattern elsewhere in your allowed paths and list every place you checked in `swept`.
 If you need a file outside your allowed paths, stop: return status "blocked" with `blocked_reason` "needs_paths" and `needs_paths`. Do not work around it.

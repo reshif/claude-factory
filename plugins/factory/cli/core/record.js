@@ -437,6 +437,28 @@ function recRealize(root, state, env) {
   const reported = (env.data && env.data.tasks) || [];
   const ctx = steps.context(root, state, job.load);
   const table = [];
+  // A broken build environment parks the job once with its reason; tasks it stopped keep
+  // their state (no attempt was spent on it).
+  const eb = env.data && env.data.environment_broken;
+  if (eb) {
+    for (const r of reported.filter((x) => x.outcome !== 'pending')) {
+      const done = steps.taskDone(ctx, r.id);
+      state.tasks[r.id] = { ...(state.tasks[r.id] || {}), outcome: done ? 'done' : r.outcome, outcome_reason: r.summary || '', outcome_at: nowIso() };
+    }
+    job.save(root, state);
+    const reason = String(eb.reason || 'environment broken').slice(0, 1500);
+    require('./events').append(root, { event: 'environment_broken', job: state.id, task: eb.task || null, reason: reason.slice(0, 500) });
+    return { status: 'park', park_from: 'environment', park_reason: `${reason} — no builder attempt was spent. Fix the environment (factory env check shows it; factory env set changes it), then reply "resume".`, tasks: reported.map((r) => ({ id: r.id, outcome: r.outcome, attempts: r.attempts, summary: r.summary })), environment_broken: eb, message: 'Parked: the build environment is broken.' };
+  }
+  // The tester relays task verify (a workflow cannot run it): what it relayed is compared with
+  // the evidence task verify recorded, which alone decides.
+  const relayMismatches = [];
+  for (const v of (env.data && env.data.verifications) || []) {
+    const t = state.tasks[v.task] || {};
+    if (!v.pass || !t.evidence) continue;
+    if (!t.evidence.pass || (v.evidence_id && v.evidence_id !== t.evidence.id)) relayMismatches.push({ task: v.task, relayed: true, evidence: Boolean(t.evidence.pass), evidence_id: t.evidence.id });
+  }
+  if (relayMismatches.length) require('./events').append(root, { event: 'relay_mismatch', job: state.id, tasks: relayMismatches.map((m) => m.task) });
   for (const r of reported) {
     const done = steps.taskDone(ctx, r.id);
     const outcome = done ? 'done' : r.outcome === 'done' ? 'not_verified' : r.outcome;
@@ -446,9 +468,9 @@ function recRealize(root, state, env) {
   job.save(root, state);
   const bad = table.filter((t) => t.outcome !== 'done');
   if (bad.length) {
-    return { status: 'park', park_reason: `Tasks not done: ${bad.map((t) => `${t.id} (${t.outcome})`).join(', ')}. Nothing partial ships.`, tasks: table, message: 'Parked with a per-task table.' };
+    return { status: 'park', park_reason: `Tasks not done: ${bad.map((t) => `${t.id} (${t.outcome})`).join(', ')}. Nothing partial ships.`, tasks: table, ...(relayMismatches.length ? { relay_mismatches: relayMismatches } : {}), message: 'Parked with a per-task table.' };
   }
-  return { status: 'ok', tasks: table, message: 'Every task in scope is built and verified.' };
+  return { status: 'ok', tasks: table, ...(relayMismatches.length ? { relay_mismatches: relayMismatches } : {}), message: 'Every task in scope is built and verified.' };
 }
 
 function recReconcile(root, state, env) {

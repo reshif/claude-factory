@@ -508,6 +508,9 @@ function realize(root, state, ctx, action) {
   const pendingIds = new Set(pending.map((t) => t.id));
   const waves = (plan.waves || [plan.tasks.map((t) => t.id)]).map((w) => w.filter((id) => pendingIds.has(id))).filter((w) => w.length);
   const jc = jobContext(root, state);
+  // A builder's time budget: guidance only (Claude Code's Workflow tool sets no agent time cap),
+  // so it commits increments and leaves a `wip:` commit when it stops early.
+  const minutes = Math.max(1, Number((state.policy.limits || {}).builder_minutes) || 30);
   const tasks = {};
   for (const t of pending) {
     const wt = taskWorktree(root, state.id, t.id);
@@ -518,19 +521,26 @@ function realize(root, state, ctx, action) {
       : t.id && state.tasks[t.id] && state.tasks[t.id].needs_work === 'amendment'
         ? '- The contract or plan was amended; rebuild this task against the amended version.'
         : '';
+    const st = state.tasks[t.id] || {};
     tasks[t.id] = {
       id: t.id,
+      // Attempts already made (earlier realize runs): numbering continues, and what the last one
+      // left (task verify's raw failures, or the builder's reply) is the next one's input.
+      attempt_base: st.attempts || 0,
+      previous_failures: require('./tasks').lastFailures(st),
       // depends_on plus earlier-wave tasks on overlapping paths: a failed one skips this task.
       depends_on: require('./plan').effectiveDeps(plan.tasks, t.id),
       retry_limit: t.retry_limit || state.policy.limits.retry_limit,
       // Builders may move to a stronger model on retries (policy.agents.builder_escalation).
       builder: { ...agentSpec(state, 'builder'), escalate: ((state.policy.agents || {}).builder_escalation || []).slice() },
+      // The tester only runs `task verify` and relays its result: the CLI's exit code and evidence
+      // decide (factory record trusts the task's evidence in the job state, never this reply).
       tester: agentSpec(state, 'tester'),
       builder_prompt: prompt(
         'builder',
-        `${jc}\n- Task: **${t.id}** — ${t.objective}\n- Start: \`${cli(root)} task start ${t.id} --job ${state.id}\`\n- Show: \`${cli(root)} task show ${t.id} --job ${state.id}\`\n- Built (your last step): \`${cli(root)} task built ${t.id} --job ${state.id} --status done\` (or \`--status blocked --reason needs_paths|dependency_conflict\`)\n- Worktree: ${wt}\n- Allowed paths: ${t.allowed_paths.join(', ')}${fixNote ? `\n${fixNote}` : ''}`,
+        `${jc}\n- Task: **${t.id}** — ${t.objective}\n- Start: \`${cli(root)} task start ${t.id} --job ${state.id}\`\n- Show: \`${cli(root)} task show ${t.id} --job ${state.id}\`\n- Built (your last step): \`${cli(root)} task built ${t.id} --job ${state.id} --status done\` (or \`--status blocked --reason needs_paths|dependency_conflict|environment_broken\`)\n- Worktree: ${wt}\n- Allowed paths: ${t.allowed_paths.join(', ')}\n- Time: about ${minutes} minutes for this attempt. Commit each working increment as you go; if you stop before you are done, commit what you have as \`wip: …\` first (the next attempt continues from your branch).${fixNote ? `\n${fixNote}` : ''}`,
         'builder',
-        'Attempt {{attempt}}. Previous tester failures, if any:\n{{failures}}',
+        'Attempt {{attempt}}. What the previous attempts left (task verify\'s failing commands, or the builder\'s reply; `task show` has the raw output under history and the last attempt\'s diff under previous_attempt), if any:\n{{failures}}',
       ),
       tester_prompt: prompt(
         'tester',

@@ -96,14 +96,15 @@ function invariants(schema, o, { role } = {}) {
       if (!o.reason.trim()) e.push('reason is empty');
       break;
     case 'builder':
-      if (o.status === 'blocked' && !(o.needs_paths || []).length) e.push('blocked without needs_paths');
+      if (o.status === 'blocked' && (!o.blocked_reason || o.blocked_reason === 'needs_paths') && !(o.needs_paths || []).length) e.push('blocked without needs_paths');
       if (o.status === 'done' && !(o.commits || []).length) e.push('done without commits');
       if (o.status === 'done' && o.needs_paths && o.needs_paths.length) e.push('done but asks for paths');
       break;
     case 'tester':
       if (o.pass && o.failures.length) e.push('pass with failures');
       if (!o.pass && !o.failures.length) e.push('fail without failures');
-      if (!o.evidence_id) e.push('no evidence_id');
+      if (!o.evidence_id && !o.refused) e.push('no evidence_id');
+      if (o.refused && o.pass) e.push('refused but pass');
       break;
     case 'integrator':
       if (o.status !== 'merged' && !o.summary.trim()) e.push(`${o.status} without a summary`);

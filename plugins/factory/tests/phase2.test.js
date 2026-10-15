@@ -171,3 +171,114 @@ test('finding accept|dismiss: a finding the human dismissed stays settled when a
   const f = core('ledger').lastStep(root, J, 'challenge').detail.findings[0];
   assert.equal(f.status, 'dismissed');
 });
+
+// ------------------------------------------------------------------ P2.5 deterministic tester
+// Adapted: a Workflow tool script cannot run a command, so the tester agent stays, as a messenger:
+// it runs `task verify` and relays it. The CLI decides: record trusts only the evidence task verify
+// wrote into the job state, never the relayed `pass`.
+
+const H = require('./helpers/workflow-harness');
+const REALIZE = path.join(F.PLUGIN, 'workflows', 'realize.js');
+function realizeBrief(tasks = { T1: {} }, extra = {}) {
+  const t = {};
+  for (const [id, o] of Object.entries(tasks)) {
+    t[id] = { id, depends_on: o.depends_on || [], retry_limit: o.retry_limit || 3, builder: { agent_type: 'factory:builder', escalate: [] }, tester: { agent_type: 'factory:tester' }, builder_prompt: `build ${id} attempt {{attempt}}\n{{failures}}`, tester_prompt: `test ${id} {{swept}}` };
+  }
+  return { workflow: 'realize', job: 'J-0001', scope: 'all', input_hash: 'h', waves: [Object.keys(tasks)], tasks: t, max_parallel_tasks: 4, builder_schema: {}, tester_schema: {}, ...extra };
+}
+
+test('P2.5: the tester only relays task verify; a relayed pass the evidence does not back is not done at record', async () => {
+  const root = F.makeRepo();
+  const J = grounded(root);
+  customPlan(root, J, [T1]);
+  F.cli(root, ['next']);
+  const b = F.cli(root, ['wfargs', 'realize'], { allowFail: false });
+  // the builder commits a change that fails its verify command; the tester claims a pass anyway
+  const { result } = await H.run(REALIZE, JSON.stringify(b), (prompt, opts) => {
+    if (opts.agentType === 'factory:builder') {
+      const s = F.cli(root, ['task', 'start', 'T1'], { allowFail: false });
+      F.write(s.worktree, 'src/add.js', 'module.exports = (a, b) => a * b; // still wrong\n');
+      F.sh(s.worktree, 'git commit -qam "multiply"');
+      return { status: 'done', summary: 'built', commits: ['x'], swept: [] };
+    }
+    const v = F.cli(root, ['task', 'verify', 'T1']);
+    assert.equal(v.pass, false, 'task verify itself fails');
+    return { pass: true, evidence_id: v.evidence_id, failures: [] };
+  });
+  assert.equal(result.data.tasks[0].outcome, 'done', 'the workflow believed the messenger');
+  const rec = F.record(root, result);
+  assert.equal(rec.status, 'park', JSON.stringify(rec));
+  assert.equal(rec.tasks[0].outcome, 'not_verified', 'record trusts task verify\'s evidence, not the relay');
+  assert.deepEqual(rec.relay_mismatches, [{ task: 'T1', relayed: true, evidence: false, evidence_id: core('job').load(root, J).tasks.T1.evidence.id }]);
+});
+
+test('P2.5: a verify refusal is the next attempt\'s input, word for word', async () => {
+  const { calls } = await H.run(REALIZE, realizeBrief({ T1: { retry_limit: 2 } }), (prompt, opts) => (opts.agentType === 'factory:builder'
+    ? { status: 'done', summary: 'built', swept: [] }
+    : { pass: false, refused: 'dirty_worktree', failures: ['T1 has uncommitted changes. Commit them on the task branch first:\n M src/add.js'] }));
+  const second = calls.filter((c) => c.opts.agentType === 'factory:builder')[1];
+  assert.match(second.prompt, /task verify refused \(dirty_worktree\): T1 has uncommitted changes[\s\S]*M src\/add.js/);
+});
+
+test('P2.5: a tester that returns nothing is asked once more; task verify, not the tester, has the last word', async () => {
+  let n = 0;
+  const { result, calls } = await H.run(REALIZE, realizeBrief(), (prompt, opts) => {
+    if (opts.agentType === 'factory:builder') return { status: 'done', summary: 'built', swept: [] };
+    n += 1;
+    return n === 1 ? null : { pass: true, evidence_id: 'T1-1-1', failures: [] };
+  });
+  assert.deepEqual(calls.filter((c) => c.opts.agentType === 'factory:tester').map((c) => c.opts.label), ['test T1', 'test T1 (retry)']);
+  assert.equal(result.data.tasks[0].outcome, 'done');
+  assert.deepEqual(result.data.verifications, [{ task: 'T1', attempt: 1, pass: true, evidence_id: 'T1-1-1' }]);
+});
+
+// ------------------------------------------------------------------ P2.4 retries continue
+// Adapted: Claude Code's Workflow tool cannot resume a previous subagent, and sets no agent time
+// cap. So the retry builder gets the previous attempt from the CLI instead (its reply, task
+// verify's raw output, its diff), and what an attempt left uncommitted is kept as a `wip:` commit.
+
+test('P2.4: a stopped attempt\'s uncommitted work becomes a wip: commit; the next builder gets its reply, raw verify output and diff; a later realize run continues the numbering', async () => {
+  const root = F.makeRepo();
+  const J = grounded(root);
+  customPlan(root, J, [T1]);
+  F.cli(root, ['next']);
+  // attempt 1: commits a half fix that fails verify
+  let s = F.cli(root, ['task', 'start', 'T1'], { allowFail: false });
+  F.write(s.worktree, 'src/add.js', 'module.exports = (a, b) => a * b; // half way\n');
+  F.sh(s.worktree, 'git commit -qam "half"');
+  F.built(root, 'T1');
+  const v = F.cli(root, ['task', 'verify', 'T1']);
+  assert.equal(v.pass, false);
+  // attempt 2: starts, edits, and stops without committing or replying (crashed, out of time)
+  s = F.cli(root, ['task', 'start', 'T1'], { allowFail: false });
+  F.write(s.worktree, 'src/add.js', 'module.exports = (a, b) => a + b; // fixed, never committed\n');
+  // a later realize run: the brief continues at attempt 3 with what attempt 2 left
+  let b = F.cli(root, ['wfargs', 'realize'], { allowFail: false });
+  assert.equal(b.tasks.T1.attempt_base, 2);
+  assert.match(b.tasks.T1.previous_failures.join('\n'), /Attempt 2: the builder never recorded a reply/);
+  // its task start keeps the uncommitted work as wip: on the branch
+  s = F.cli(root, ['task', 'start', 'T1'], { allowFail: false });
+  assert.equal(s.attempt, 3);
+  assert.match(F.sh(s.worktree, 'git log -1 --format=%s'), /^wip: T1 attempt 2 /);
+  assert.match(fs.readFileSync(path.join(s.worktree, 'src/add.js'), 'utf8'), /a \+ b/, 'nothing was lost');
+  const show = F.cli(root, ['task', 'show', 'T1']);
+  assert.deepEqual(show.history.map((h) => h.attempt), [1, 2, 3]);
+  assert.equal(show.history[0].verify.pass, false);
+  assert.match(show.history[0].verify.failures[0].tail, /add\(2,3\) =/, 'task verify\'s raw output');
+  assert.ok(show.history[1].wip_commit);
+  assert.equal(show.previous_attempt.attempt, 2);
+  assert.match(show.previous_attempt.diff.patch, /\+module\.exports = \(a, b\) => a \+ b;/, 'the previous attempt\'s change');
+  // a refusal is history too, word for word (the main session's CLI path records it)
+  const r = F.cli(root, ['task', 'verify', 'T1']);
+  assert.equal(r.code, 'no_builder_result');
+  const h = core('job').load(root, J).tasks.T1.history.pop();
+  assert.equal(h.verify.refused, 'no_builder_result');
+  b = F.cli(root, ['wfargs', 'realize'], { allowFail: false });
+  assert.match(b.tasks.T1.previous_failures.join('\n'), /Attempt 3: task verify refused \(no_builder_result\)/);
+  // the workflow numbers its builds from there
+  const { calls } = await H.run(REALIZE, JSON.stringify(b), (prompt, opts) => (opts.agentType === 'factory:builder' ? null : { pass: true, failures: [] }));
+  assert.equal(calls[0].opts.label, 'build T1 #4');
+  assert.match(calls[0].prompt, /Attempt 4\./);
+  assert.match(calls[0].prompt, /Attempt 3: task verify refused \(no_builder_result\)/);
+  assert.match(fs.readFileSync(b.tasks.T1.builder_prompt.split('\n').find((l) => l.trim().startsWith('/')).trim(), 'utf8'), /Time: about 30 minutes[\s\S]*wip: /, 'the brief gives the time budget and the wip rule');
+});

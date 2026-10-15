@@ -67,8 +67,11 @@ function fixMarker(wt, kind) {
 }
 
 // Outcomes after which a task's branch is not worth building on: the next `task start` (a
-// resume, an amendment) restarts it from the job branch plus its dependencies.
-const FAILED = ['blocked', 'exhausted', 'not_verified', 'skipped_dependency'];
+// resume, an amendment) restarts it from the job branch plus its dependencies. An exhausted
+// task is not among them: its retries ran out, but its commits (a `wip:` one included) are
+// what the next attempt continues from (P2.4); a scope violation in its last attempt still
+// restarts it (restartReason).
+const FAILED = ['blocked', 'not_verified', 'skipped_dependency'];
 
 // Why this start must restart the task's branch (once per failure), or null: the task ended
 // failed in an earlier run, or its last attempt changed files outside its paths.
@@ -95,6 +98,67 @@ function resetToJobBranch(root, state, wt, taskId, attempt) {
   return backup;
 }
 
+// Commit what a builder left uncommitted in its task worktree as "wip:" on the task branch, so
+// an attempt that stopped early is continued, not lost. Returns the commit or null.
+function commitWip(wt, taskId, attempt) {
+  try {
+    if (!git.status(wt)) return null;
+    if (git.ok(wt, ['rev-parse', '-q', '--verify', 'MERGE_HEAD'])) git.run(wt, ['merge', '--abort'], { allowFail: true });
+    if (!git.status(wt)) return null;
+    git.run(wt, ['add', '-A']);
+    const r = git.run(wt, ['commit', '-q', '-m', `wip: ${taskId} attempt ${attempt} (left uncommitted when its builder stopped; saved by task start)`], { allowFail: true });
+    return r.code === 0 ? git.revParse(wt, 'HEAD') : null;
+  } catch {
+    return null;
+  }
+}
+
+// The last finished attempt for the next builder (Claude Code subagents can't resume a previous
+// one's session): what its builder said and its diff on the task's paths since it started.
+function previousAttempt(root, state, task, t) {
+  const h = (t && t.history) || [];
+  const cur = h.find((x) => x.attempt === (t.attempts || 0));
+  const prev = h.filter((x) => x.attempt < (t.attempts || 0)).pop();
+  if (!prev) return null;
+  const wt = taskWorktree(root, state.id, task.id);
+  let diff = null;
+  try {
+    const from = prev.start_head;
+    const to = (cur && cur.start_head) || 'HEAD';
+    if (from) {
+      const paths = ['--', ...(task.allowed_paths || [])];
+      const stat = git.out(wt, ['diff', '--stat', from, to, ...paths]).trim();
+      const patch = git.out(wt, ['diff', from, to, ...paths]);
+      diff = { from: from.slice(0, 12), to: String(to).slice(0, 12), stat, patch: patch.length > 6000 ? `${patch.slice(0, 6000)}\n… (${patch.length - 6000} more characters: git -C ${wt} diff ${from.slice(0, 12)} ${String(to).slice(0, 12)})` : patch };
+    }
+  } catch {
+    diff = null;
+  }
+  return { attempt: prev.attempt, builder: prev.builder || null, summary: prev.summary || null, wip_commit: prev.wip_commit || null, verify: prev.verify ? { pass: prev.verify.pass, refused: prev.verify.refused || null, failures: (prev.verify.failures || []).map((f) => ({ cmd: f.cmd, code: f.code })) } : null, diff };
+}
+
+// task verify, with a refusal noted in the attempt's history (word for word, for the next
+// attempt): the CLI command and the tests use this.
+function verifyRecorded(root, jobId, taskId) {
+  try {
+    return verify(root, jobId, taskId);
+  } catch (e) {
+    if (e && e.code && !['bad_input', 'no_plan', 'no_job'].includes(e.code)) {
+      try {
+        const st = job.resolve(root, jobId);
+        if (st.tasks && st.tasks[taskId]) {
+          const t = st.tasks[taskId];
+          st.tasks[taskId] = { ...t, history: noteAttempt(t.history, t.attempts || 0, { verify: { pass: false, refused: e.code, message: String(e.message).slice(0, 1500), at: nowIso() } }) };
+          job.save(root, st);
+        }
+      } catch {
+        /* the refusal itself is what matters */
+      }
+    }
+    throw e;
+  }
+}
+
 function conflict(root, state, taskId, message) {
   const fresh = job.load(root, state.id);
   fresh.tasks[taskId] = { ...(fresh.tasks[taskId] || {}), start_error: { code: 'dependency_conflict', message, at: nowIso() } };
@@ -116,6 +180,9 @@ function start(root, jobId, taskId) {
   prepareWorktree(root, state, taskId);
   const prev = state.tasks[taskId] || {};
   const restart = restartReason(prev);
+  // What the last attempt left uncommitted (its builder stopped, crashed or ran out of time)
+  // is kept as a `wip:` commit the next attempt continues from; a restart stashes it instead.
+  const wip = restart ? null : commitWip(wt, taskId, prev.attempts || 0);
   const backup = restart ? resetToJobBranch(root, state, wt, taskId, prev.attempts || 0) : null;
   const bring = (ref, what) => {
     if (git.isAncestor(root, ref, branch)) return;
@@ -147,6 +214,9 @@ function start(root, jobId, taskId) {
     builder_tracking: BUILDER_TRACKING,
     ...(restart ? { restarted_for: restart.key, restarted: { reason: restart.reason, backup, at: nowIso() } } : {}),
   };
+  let hist = t.history;
+  if (wip && (t.attempts || 0) > 0) hist = noteAttempt(hist, t.attempts, { wip_commit: wip });
+  fresh.tasks[taskId].history = noteAttempt(hist, (t.attempts || 0) + 1, { start_head: head, started_at: nowIso(), ...(restart ? { restarted: restart.reason } : {}) });
   job.save(root, fresh);
   return { job: state.id, task: taskId, worktree: wt, branch, attempt: fresh.tasks[taskId].attempts, allowed_paths: task.allowed_paths, ...(restart ? { restarted: { reason: restart.reason, backup } } : {}) };
 }
@@ -155,7 +225,7 @@ function start(root, jobId, taskId) {
 // it records what this attempt's builder returned, which `task verify` and taskDone require.
 // A builder that returned nothing after `task start` refused with dependency_conflict did not
 // crash: its result becomes the typed blocked result it should have replied with.
-function afterBuilder(root, jobId, taskId, result, { startedAt, label } = {}) {
+function afterBuilder(root, jobId, taskId, result, { startedAt, label, outcome: run } = {}) {
   const state = job.load(root, jobId);
   const t = state.tasks[taskId] || {};
   let r = result || null;
@@ -164,9 +234,45 @@ function afterBuilder(root, jobId, taskId, result, { startedAt, label } = {}) {
     r = { status: 'blocked', blocked_reason: 'dependency_conflict', summary: se.message, needs_paths: [] };
   }
   const outcome = !r ? 'no_result' : r.status === 'done' ? 'done' : 'blocked';
-  state.tasks[taskId] = { ...t, builder: { attempt: t.attempts || 0, outcome, at: nowIso(), label: label || null, ...(r && r.blocked_reason ? { blocked_reason: r.blocked_reason } : {}) } };
+  const attempt = t.attempts || 0;
+  const builder = { attempt, outcome, at: nowIso(), label: label || null, ...(r && r.blocked_reason ? { blocked_reason: r.blocked_reason } : {}) };
+  const entry = { builder: outcome, ...(run && run !== 'ok' ? { run } : {}), ...(r && r.summary ? { summary: String(r.summary).slice(0, 400) } : {}), ...(r && r.blocked_reason ? { blocked_reason: r.blocked_reason } : {}), ...(r && (r.needs_paths || []).length ? { needs_paths: r.needs_paths } : {}), builder_at: builder.at };
+  state.tasks[taskId] = { ...t, builder, history: noteAttempt(t.history, attempt, entry) };
   job.save(root, state);
   return r;
+}
+
+// The task's attempt history, one entry per attempt (where it started, a `wip:` commit of what
+// it left uncommitted, the builder's reply, then task verify's result), across realize runs:
+// task show returns it and a later realize continues from it. The last HISTORY are kept.
+const HISTORY = 6;
+function noteAttempt(history, attempt, fields) {
+  const h = Array.isArray(history) ? history.map((x) => ({ ...x })) : [];
+  let e = h.find((x) => x.attempt === attempt);
+  if (!e) {
+    e = { attempt };
+    h.push(e);
+  }
+  Object.assign(e, fields);
+  return h.sort((a, b) => a.attempt - b.attempt).slice(-HISTORY);
+}
+
+// What the last attempt left for the next one: the raw verify failures (command, exit code,
+// output tail) or what its builder said, as text lines. Empty when there is nothing to carry.
+function lastFailures(t) {
+  const h = (t && t.history) || [];
+  const e = h[h.length - 1];
+  if (!e) return [];
+  const out = [];
+  if (e.builder && e.builder !== 'done') out.push(`Attempt ${e.attempt}: the builder ${e.builder === 'no_result' ? `returned no result${e.run ? ` (${e.run})` : ''}` : `replied ${e.builder}`}${e.summary ? `: ${e.summary}` : ''}.${e.wip_commit ? ` Its uncommitted work was saved as ${e.wip_commit.slice(0, 10)} (wip:) on the task branch.` : ''}`);
+  else if (!e.builder && e.attempt && !e.verify) out.push(`Attempt ${e.attempt}: the builder never recorded a reply (it crashed, was stopped or skipped).${e.wip_commit ? ` Its uncommitted work was saved as ${e.wip_commit.slice(0, 10)} (wip:) on the task branch: continue from it.` : ''}`);
+  if (e.verify && !e.verify.pass) {
+    if (e.verify.refused) out.push(`Attempt ${e.attempt}: task verify refused (${e.verify.refused})${e.verify.message ? `: ${e.verify.message}` : ''}`);
+    for (const f of e.verify.failures || []) out.push(`Attempt ${e.attempt}: \`${f.cmd}\` exited ${f.code}. Output (tail):\n${String(f.tail || '').split('\n').map((l) => `      ${l}`).join('\n')}`);
+    for (const p of e.verify.scope_violations || []) out.push(`Attempt ${e.attempt}: ${p} was changed but is outside this task's allowed paths (or protected).`);
+    if (e.verify.no_changes) out.push(`Attempt ${e.attempt}: no change was committed on the task branch.`);
+  }
+  return out;
 }
 
 function show(root, jobId, taskId) {
@@ -187,6 +293,10 @@ function show(root, jobId, taskId) {
     worktree: taskWorktree(root, state.id, taskId),
     branch: steps.taskBranch(state, taskId),
     attempts: t.attempts || 0,
+    // every recorded attempt: where it started, the builder's reply, task verify's raw result
+    history: t.history || [],
+    // the last finished attempt's summary and its change on the task branch since it started
+    previous_attempt: previousAttempt(root, state, task, t),
     needs_work: t.needs_work || null,
     last_evidence: evidence ? { pass: evidence.pass, failures: evidence.commands.filter((c) => !c.pass), scope_violations: evidence.scope_violations } : null,
     fix_findings: fixFindings,
@@ -278,7 +388,9 @@ function verify(root, jobId, taskId) {
   };
   writeJson(file, ev);
   const fresh = job.load(root, state.id);
-  fresh.tasks[taskId] = { ...(fresh.tasks[taskId] || {}), evidence: { id, file, pass, tree: ev.tree, at: ev.at, builder_at: b.at } };
+  const tail = (x, n) => (String(x || '').length > n ? `…${String(x).slice(-n)}` : String(x || ''));
+  const verifyEntry = { pass, at: ev.at, evidence_id: id, failures: commands.filter((c) => !c.pass).map((c) => ({ cmd: c.cmd, code: c.code, ...(c.flaky ? { flaky: true } : {}), tail: tail(c.output, 1500) })), ...(scopeViolations.length ? { scope_violations: scopeViolations } : {}), ...(changed.length ? {} : { no_changes: true }) };
+  fresh.tasks[taskId] = { ...(fresh.tasks[taskId] || {}), evidence: { id, file, pass, tree: ev.tree, at: ev.at, builder_at: b.at }, history: noteAttempt((fresh.tasks[taskId] || {}).history, t.attempts || 0, { verify: verifyEntry }) };
   if (pass) delete fresh.tasks[taskId].needs_work;
   job.save(root, fresh);
   return {
@@ -301,4 +413,4 @@ function setState(root, jobId, taskId, value, reason) {
   return { job: state.id, task: taskId, state: value };
 }
 
-module.exports = { start, show, verify, setState, ensureJobWorktree, planTask, prepareWorktree, ownChangedFiles, afterBuilder, legacyAttempt, FAILED };
+module.exports = { start, show, verify, verifyRecorded, commitWip, previousAttempt, setState, ensureJobWorktree, planTask, prepareWorktree, ownChangedFiles, afterBuilder, legacyAttempt, lastFailures, noteAttempt, FAILED };
