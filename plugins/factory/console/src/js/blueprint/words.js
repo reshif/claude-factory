@@ -22,6 +22,8 @@
 APP.words = (function () {
   // The decisions only a person makes. `short` finishes "Waiting for you: ...".
   var GATES = {
+    // not a recipe gate: clarify asked what the repo cannot answer, and the job waits on your answers (the Blueprint's Q)
+    Q: { title: "Answer clarify's questions", short: "questions", tip: "Clarify asked what the repo can't answer. Reply in Claude Code by number, in your own words; a question you skip takes its default." },
     H1: { title: "Approve the contract", short: "contract", tip: "Agree that the contract and its numbered criteria describe what you want (H1 · contract)." },
     H2: { title: "Approve the design", short: "design", tip: "Agree with the approach, written as a design record." },
     H3: { title: "Approve the plan", short: "plan", tip: "Agree with the tasks; approving it starts the build." },
@@ -38,7 +40,7 @@ APP.words = (function () {
 
   // Every state the Blueprint's adapter (blueprint/adapter.js) walks a job through, and the epic states of the ported sheets.
   var STATES = {
-    received: "Received", intent: "Writing the contract", awaiting_intent_approval: "Waiting for you: contract",
+    received: "Received", intent: "Writing the contract", awaiting_answers: "Waiting for you: questions", awaiting_intent_approval: "Waiting for you: contract",
     designing: "Designing", awaiting_design_approval: "Waiting for you: design",
     awaiting_findings_approval: "Waiting for you: findings", planning: "Planning",
     awaiting_plan_approval: "Waiting for you: plan", awaiting_ship_approval: "Waiting for you: ship", building: "Building", integrating: "Combining the tasks",

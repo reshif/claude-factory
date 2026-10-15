@@ -350,6 +350,47 @@ test('console blueprint: gates wait on you with the reply the prompt hook applie
   for (const s of d.stages.concat(d.side_lanes)) for (const x of s.states) assert.ok(d.meaning[x], `${x} has a meaning`);
 });
 
+test('console blueprint: clarify\'s questions wait on you (Q) until the next clarify round, as the Board\'s Your turn', () => {
+  const toDisplay = blueprintAdapter();
+  const human = require('../cli/core/human');
+  // what cli/core/console.js makes of a clarify result that asked questions
+  const ask = (m, ids) => ({ t: at(m), type: 'result', step: 'clarify', raw_step: 'clarify', ok: false, outcome: 'ask', text: `${ids.length} question(s) for you (scope)`, categories: ['scope'], held: 0, question_ids: ids });
+  const d = toDisplay({ generated_at: at(60), project: 'p', jobs: [
+    bpJob('J-0001', { timeline: [route(1, 'clarify'), ask(3, ['Q-1', 'Q-2'])] }),
+    bpJob('J-0002', { timeline: [route(1, 'clarify'), ask(3, ['Q-1']), route(9, 'clarify'), { t: at(12), type: 'result', step: 'clarify', raw_step: 'clarify', ok: true, outcome: 'ok', text: 'Contract judged clear' }, route(13, 'H1')], pending_gate: { id: 'H1', at: at(13) } }),
+    bpJob('J-0003', { timeline: [route(1, 'clarify'), ask(3, ['Q-1']), { t: at(5), type: 'park', text: 'waiting on infra', from: 'manual' }, { t: at(8), type: 'human', action: 'resume' }] }),
+    bpJob('J-0009', { epic: true, timeline: [route(1, 'clarify'), ask(4, ['Q-1', 'Q-2', 'Q-3', 'Q-4'])] }),
+  ] });
+  const [a, b, c] = d.jobs;
+  assert.equal(a.state, 'awaiting_answers');
+  assert.deepEqual(a.history.map((h) => [h.to, h.by, h.reason]), [['intent', 'router', 'rule r'], ['awaiting_answers', 'router', 'clarify asked 2 question(s)']]);
+  assert.equal(a.waiting_on.who, 'you');
+  assert.equal(a.waiting_on.gate, 'Q');
+  assert.equal(a.waiting_on.answer, '1 <your answer>, 2 <your answer>');
+  assert.match(a.waiting_on.hint, /Q-1, Q-2 by number/);
+  assert.equal(a.waiting_on.command, null, 'there is no terminal command for answering');
+  // the answer is ordinary chat for Claude (skill clarify: "1 yes, skip 2"), so the prompt hook must not swallow it
+  for (const w of [a.waiting_on.answer, '1 yes, skip 2']) assert.equal(human.parseReply(w), null, `"${w}" reaches Claude`);
+  assert.ok(d.stages.find((s) => s.key === 'intent').states.includes('awaiting_answers'), 'it waits at the Contract station');
+  assert.ok(d.meaning.awaiting_answers);
+  // the next route back into clarify is your answer, not the router's move
+  assert.deepEqual(b.history.map((h) => h.to), ['intent', 'awaiting_answers', 'intent', 'awaiting_intent_approval']);
+  const back = b.history[2];
+  assert.equal(back.by, 'you');
+  assert.equal(back.reason, 'you answered');
+  assert.equal(b.waiting_on.gate, 'H1');
+  // parked while it waited: resume goes back to clarify for another round, as the Board shows it running again
+  assert.deepEqual(c.history.map((h) => h.to), ['intent', 'awaiting_answers', 'parked', 'intent']);
+  assert.equal(c.waiting_on.who, 'agent');
+  // an epic whose clarify asked is your turn too, with the answer and no gate reply
+  const e = d.epic_jobs[0];
+  assert.equal(e.gate, 'Q');
+  assert.equal(e.gate_at, at(4));
+  assert.equal(e.reply, null);
+  assert.equal(e.answer, '1 <your answer>, 2 <your answer>, … 4 <your answer>');
+  assert.equal(human.parseReply(e.answer), null);
+});
+
 test('console blueprint: park and resume, a failed proof sent back to Build, stops and closes', () => {
   const toDisplay = blueprintAdapter();
   const d = toDisplay({ generated_at: at(60), project: 'p', jobs: [

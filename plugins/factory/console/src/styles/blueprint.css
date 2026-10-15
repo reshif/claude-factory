@@ -132,7 +132,7 @@ html[data-theme="light"] .dx-blueprint{
 .dx-blueprint svg .bp-on-hl{fill:var(--on-hl)}
 .dx-blueprint .bp-cloud{fill:none;stroke:var(--fail);stroke-width:1.4}
 .dx-blueprint .bp-delta{fill:var(--paper);stroke:var(--fail);stroke-width:1.4}
-.dx-blueprint svg .bp-t-fail{fill:var(--fail)} .dx-blueprint svg .bp-t-ok{fill:var(--ok)} .dx-blueprint svg .bp-t-agent{fill:var(--agent)}
+.dx-blueprint svg .bp-t-hl{fill:var(--hl-ink)} .dx-blueprint svg .bp-t-fail{fill:var(--fail)} .dx-blueprint svg .bp-t-ok{fill:var(--ok)} .dx-blueprint svg .bp-t-agent{fill:var(--agent)}
 .dx-blueprint .bp-sq-pass{fill:var(--paper);stroke:var(--ok);stroke-width:1.6}
 .dx-blueprint .bp-sq-fail{fill:url(#bp-h-fail);stroke:var(--fail);stroke-width:1.6}
 .dx-blueprint .bp-sq-run{fill:var(--agent-soft);stroke:var(--agent);stroke-width:1.6}
