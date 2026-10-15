@@ -43,6 +43,71 @@ function save(root, state) {
   return state;
 }
 
+// Load, change and save the job state under a lock, for writes that run in parallel: builders'
+// task start and task built, the testers' task verify for several tasks at once, the
+// per-wave integration. Without it, two load-modify-save cycles lose one update (an attempt
+// count, a task's evidence). The lock is a file created exclusively, naming its holder: one
+// whose holder process is gone (killed inside mutate: a stopped agent's task verify) is taken
+// over at once; one older than 60 s is taken over too (a holder on
+// another machine, or a hung one).
+function lockHolderGone(file) {
+  try {
+    const held = JSON.parse(require('fs').readFileSync(file, 'utf8'));
+    if (!held || !Number.isInteger(held.pid) || held.pid <= 0 || held.host !== require('os').hostname()) return false;
+    try {
+      process.kill(held.pid, 0);
+      return false;
+    } catch (e) {
+      return e.code === 'ESRCH';
+    }
+  } catch {
+    return false; // being written, or released meanwhile
+  }
+}
+
+// An exclusive lock file naming its holder, held while fn runs. A holder whose process is gone
+// (on this host) is taken over at once; one older than staleMs too (another machine, or hung).
+// Waits up to waitMs, then fails with state_locked.
+function withLock(file, fn, { waitMs = 30000, staleMs = 60000, what = file } = {}) {
+  const fs = require('fs');
+  const until = Date.now() + waitMs;
+  let fd = null;
+  while (fd === null) {
+    try {
+      fd = fs.openSync(file, 'wx');
+      fs.writeSync(fd, JSON.stringify({ pid: process.pid, host: require('os').hostname(), at: new Date().toISOString() }));
+    } catch (e) {
+      if (e.code !== 'EEXIST') throw e;
+      try {
+        if (Date.now() - fs.statSync(file).mtimeMs > staleMs || lockHolderGone(file)) fs.rmSync(file, { force: true });
+      } catch {
+        /* released meanwhile */
+      }
+      if (Date.now() > until) fail(`${what} stayed locked for ${Math.round(waitMs / 1000)} s (${file}); another factory command is writing it.`, 'state_locked');
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 15);
+    }
+  }
+  try {
+    return fn();
+  } finally {
+    try {
+      fs.closeSync(fd);
+      fs.rmSync(file, { force: true });
+    } catch {
+      /* gone */
+    }
+  }
+}
+
+function mutate(root, jobId, fn, { waitMs = 30000 } = {}) {
+  return withLock(`${jobPaths(root, jobId).state}.lock`, () => {
+    const state = load(root, jobId);
+    const out = fn(state);
+    save(root, state);
+    return out === undefined ? state : out;
+  }, { waitMs, what: `${jobId}/state.json` });
+}
+
 // Human-only: accept a hand-edited state.json.
 function reseal(root, jobId) {
   const s = readJson(jobPaths(root, jobId).state, null);
@@ -190,4 +255,4 @@ function tasksOf(root, state) {
   return plan && Array.isArray(plan.tasks) ? plan.tasks : [];
 }
 
-module.exports = { reseal, listJobIds, nextJobId, load, save, current, setCurrent, resolve, create, tasksOf, path };
+module.exports = { mutate, withLock, reseal, listJobIds, nextJobId, load, save, current, setCurrent, resolve, create, tasksOf, path };

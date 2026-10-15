@@ -97,6 +97,15 @@ function report(root, state, ctx, fl) {
   L.push(`- Risk level: ${state.risk}${state.risk_proposed && state.risk_proposed !== state.risk ? ` (raised by policy from ${state.risk_proposed})` : ''}`);
   L.push(`- Threat model: ${exists(jp.threatModel) ? `threat-model.md (${docMod.threatIds(readText(jp.threatModel, '')).join(', ') || 'no threat ids'})` : 'none'}`);
   L.push(`- Confirmed serious review findings at this build: ${serious.length}${serious.length ? ` (${serious.map((f) => f.id).join(', ')})` : ''}`);
+  const unverified = floors.openUnverifiedFindings(ctx);
+  L.push(`- Unverified serious review findings (they block ship): ${unverified.length}${unverified.length ? ` (${unverified.map((f) => `${f.id} [${f.severity}] ${f.file || ''}${f.line ? `:${f.line}` : ''} ${f.summary}`.trim()).join('; ')})` : ''}`);
+  // Serious findings no verifier settled and the human did (factory finding accept|dismiss).
+  const byYou = require('./ledger').all(root, state.id).filter((e) => e.kind === 'finding' && ['accepted', 'dismissed'].includes(e.decision));
+  const fmt = (e) => `${e.finding} [${e.severity}] ${e.file || ''}${e.line ? `:${e.line}` : ''} ${e.summary} — "${e.reason}" (${e.at.slice(0, 10)}, ${e.channel})`.replace(/\s+/g, ' ');
+  const acceptedByYou = byYou.filter((e) => e.decision === 'accepted');
+  const dismissedByYou = byYou.filter((e) => e.decision === 'dismissed');
+  L.push(`- Unverified findings accepted by you (known risk, shipped): ${acceptedByYou.length}${acceptedByYou.length ? ` (${acceptedByYou.map(fmt).join('; ')})` : ''}`);
+  L.push(`- Unverified findings dismissed by you: ${dismissedByYou.length}${dismissedByYou.length ? ` (${dismissedByYou.map(fmt).join('; ')})` : ''}`);
   L.push(`- Waivers: ${Object.keys(state.waivers || {}).length ? Object.entries(state.waivers).map(([f, w]) => `${f} — ${w.reason} (${w.at})`).join('; ') : 'none'}`);
   L.push('', '## Rollout and rollback', '');
   L.push(`- Rollout: merge ${state.branch || 'each slice'} into ${state.base_branch}; CI (factory-gate) re-runs the verify commands in .factory-ship/${state.id}.json on the merge result.`);
@@ -242,8 +251,17 @@ function ciVerify(root, { manifestDir, jobId, commit }) {
   if (exists(wt)) git.run(root, ['worktree', 'remove', '--force', wt], { allowFail: true });
   git.run(root, ['worktree', 'add', '--detach', wt, at]);
   const m = readJson(path.join(wt, '.factory-ship', `${state.id}.json`), null) || manifest(root, state);
-  const results = m.commands.map((c) => runCommand(c.cmd, wt, { timeoutSec: state.policy.limits.command_timeout_seconds, reruns: 0 }));
-  git.run(root, ['worktree', 'remove', '--force', wt], { allowFail: true });
+  // inside the build environment, as task verify and prove ran them (a venv, services…)
+  const envMod = require('./environment');
+  let results;
+  try {
+    const E = envMod.ensure(root, state, { taskId: 'ci', wt });
+    if (!E.ok) fail(`${E.broken.reason}\nThe environment is broken, not the merge result: fix it (factory env check, factory env set), then run factory ci verify again.`, 'environment_broken', E.broken);
+    results = m.commands.map((c) => ({ ...runCommand(envMod.wrap(E.env, E.vars, c.cmd), wt, { timeoutSec: state.policy.limits.command_timeout_seconds, reruns: 0 }), cmd: c.cmd }));
+  } finally {
+    envMod.teardown(root, state, { taskId: 'ci', wt });
+    git.run(root, ['worktree', 'remove', '--force', wt], { allowFail: true });
+  }
   const ok = results.every((r) => r.pass);
   state.pr.checks = { ...(state.pr.checks || {}), [state.policy.ci.required_check]: ok ? 'success' : 'failure' };
   state.pr.ci_local = { at: nowIso(), commit: at, ok };

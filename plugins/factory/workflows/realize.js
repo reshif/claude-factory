@@ -1,6 +1,6 @@
 export const meta = {
   name: 'realize',
-  description: 'Software Factory: build tasks wave by wave, each in its own git worktree — builder then independent tester, retried up to each task\'s limit; a blocked or exhausted task skips only its dependents. Pass the JSON brief from `factory wfargs realize` as args.',
+  description: 'Software Factory: build tasks wave by wave, each in its own git worktree — builder, then `task verify` (relayed by the tester; the CLI\'s exit code and evidence decide), retried up to each task\'s limit with the previous attempt as input; after each wave the CLI integrates it into the job branch and checks it (relayed by the integrator); a blocked or exhausted task skips only its dependents. Pass the JSON brief from `factory wfargs realize` as args.',
 }
 
 const brief = (() => {
@@ -39,9 +39,13 @@ function builderModel(spec, attempt) {
 }
 
 let runs = 0
+const checks = []
 const T = brief.tasks
 const st = {}
-for (const id of Object.keys(T)) st[id] = { outcome: 'pending', attempts: 0, failures: [], swept: [], summary: '' }
+// attempts counts this run's attempts (the retry limit applies per run); attempt_base is what
+// earlier runs used, so numbering and the failure history continue across realize runs.
+for (const id of Object.keys(T)) st[id] = { outcome: 'pending', attempts: 0, failures: (T[id].previous_failures || []).slice(), swept: [], summary: '' }
+const attemptNo = (id) => (T[id].attempt_base || 0) + st[id].attempts + 1
 const BAD = ['blocked', 'exhausted', 'skipped_dependency']
 const cap = Math.max(1, brief.max_parallel_tasks || 4)
 
@@ -75,41 +79,85 @@ function skipDependents() {
   }
 }
 
-for (let w = 0; w < brief.waves.length; w++) {
-  skipDependents()
-  let active = brief.waves[w].filter((id) => st[id] && st[id].outcome === 'pending')
-  if (!active.length) continue
-  phase(`realize: wave ${w + 1}/${brief.waves.length} (${active.join(', ')})`)
-  while (active.length) {
+// A broken build environment (a setup step or a service health check failed) is not a build
+// failure: the run stops, no attempt is spent on it, and the job parks once with the reason.
+let envBroken = null
+
+// The tester only runs `task verify` and relays it (a workflow script cannot run a command);
+// one that returns nothing is asked once more, since nothing was relayed.
+async function relayVerify(ids) {
+  const out = await runAll(ids, (id) => call(T[id].tester_prompt.replace('{{swept}}', () => st[id].swept.join(', ') || '(none listed)'), opts({ ...T[id].tester, schema: brief.tester_schema }, `test ${id}`)))
+  const lost = ids.filter((id) => !out[id])
+  if (lost.length) {
+    const again = await runAll(lost, (id) => call(T[id].tester_prompt.replace('{{swept}}', () => st[id].swept.join(', ') || '(none listed)'), opts({ ...T[id].tester, schema: brief.tester_schema }, `test ${id} (retry)`)))
+    for (const id of lost) out[id] = again[id]
+  }
+  return out
+}
+
+// Build, then verify, until every task in `ids` is settled (done, blocked or exhausted).
+async function settle(ids) {
+  let active = ids.filter((id) => st[id].outcome === 'pending')
+  while (active.length && !envBroken) {
     const built = await runAll(active, (id) => {
       const s = st[id]
       const prompt = T[id].builder_prompt
-        .replace('{{attempt}}', String(s.attempts + 1))
-        .replace('{{failures}}', s.failures.length ? s.failures.map((f) => `  - ${f}`).join('\n') : '  - (none)')
-      return call(prompt, opts({ ...T[id].builder, schema: brief.builder_schema }, `build ${id} #${s.attempts + 1}`, builderModel(T[id].builder, s.attempts + 1)))
+        .replace('{{attempt}}', () => String(attemptNo(id)))
+        .replace('{{failures}}', () => (s.failures.length ? s.failures.map((f) => `  - ${f}`).join('\n') : '  - (none)'))
+      return call(prompt, opts({ ...T[id].builder, schema: brief.builder_schema }, `build ${id} #${attemptNo(id)}`, builderModel(T[id].builder, s.attempts + 1)))
     })
-    const toTest = []
+    const toVerify = []
     for (const id of active) {
       const b = built[id]
       const s = st[id]
-      if (b && b.status === 'blocked') {
-        s.outcome = 'blocked'
-        s.summary = `Blocked: needs ${(b.needs_paths || []).join(', ') || 'paths outside its scope'}. ${b.summary || ''}`
+      if (b && b.status === 'blocked' && b.blocked_reason === 'environment_broken') {
+        // task start could not set the environment up: not this builder's failure
+        if (!envBroken) envBroken = { task: id, reason: String(b.summary || 'environment broken').split('\n')[0] }
         continue
       }
-      if (b) { s.swept = b.swept || []; s.summary = b.summary || '' }
-      toTest.push(id)
+      if (b && b.status === 'blocked') {
+        s.outcome = 'blocked'
+        // dependency_conflict is typed: the task's dependencies don't merge, a plan change
+        // fixes it, and retrying the same merge would only fail again.
+        s.summary = b.blocked_reason === 'dependency_conflict'
+          ? `Blocked (dependency_conflict): ${b.summary || 'its dependencies do not merge'}`
+          : `Blocked: needs ${(b.needs_paths || []).join(', ') || 'paths outside its scope'}. ${b.summary || ''}`
+        continue
+      }
+      // A builder that returned nothing (crashed, stopped, no valid reply) built nothing this
+      // attempt: verifying the branch would only re-check an older state. The attempt is spent.
+      if (!b) {
+        s.attempts += 1
+        s.failures = [`Attempt ${attemptNo(id) - 1}: the builder returned no result (crashed, stopped or replied without the JSON); nothing was verified. What it left uncommitted becomes a \`wip:\` commit at your task start: continue from it.`]
+        if (s.attempts >= (T[id].retry_limit || 3)) {
+          s.outcome = 'exhausted'
+          s.summary = `Exhausted after ${s.attempts} attempt(s): ${s.failures[0]}`
+        }
+        continue
+      }
+      s.swept = b.swept || []
+      s.summary = b.summary || ''
+      toVerify.push(id)
     }
-    const tested = await runAll(toTest, (id) => call(T[id].tester_prompt.replace('{{swept}}', st[id].swept.join(', ') || '(none listed)'), opts({ ...T[id].tester, schema: brief.tester_schema }, `test ${id}`)))
-    for (const id of toTest) {
+    // `task verify` decides, by its exit code and the evidence it records; the tester relays it.
+    const tested = await relayVerify(toVerify)
+    for (const id of toVerify) {
       const s = st[id]
       s.attempts += 1
       const t = tested[id]
+      checks.push({ task: id, attempt: attemptNo(id) - 1, pass: Boolean(t && t.pass), ...(t && t.evidence_id ? { evidence_id: t.evidence_id } : {}), ...(t && t.refused ? { refused: t.refused } : {}) })
+      if (t && t.refused === 'environment_broken') {
+        // not the builder's failure: the attempt is given back and the run stops
+        s.attempts -= 1
+        if (!envBroken) envBroken = { task: id, reason: String((t.failures || [])[0] || 'environment broken').split('\n')[0] }
+        continue
+      }
       if (t && t.pass) {
         s.outcome = 'done'
         continue
       }
-      s.failures = t ? t.failures : ['The tester returned nothing.']
+      const why = !t ? ['the tester returned nothing twice, so task verify\'s result was not relayed (`task show` has it under history if it ran).'] : t.refused ? [`task verify refused (${t.refused}): ${(t.failures || []).join(' ')}`] : (t.failures || []).length ? t.failures : ['task verify did not pass.']
+      s.failures = why.map((f) => `Attempt ${attemptNo(id) - 1}: ${f}`)
       if (s.attempts >= (T[id].retry_limit || 3)) {
         s.outcome = 'exhausted'
         s.summary = `Exhausted after ${s.attempts} attempt(s): ${s.failures.slice(0, 2).join('; ')}`
@@ -118,23 +166,113 @@ for (let w = 0; w < brief.waves.length; w++) {
     active = active.filter((id) => st[id].outcome === 'pending')
   }
 }
+
+// After a wave: merge its finished tasks into the job branch and run the job's checks on the
+// integrated tree. The CLI does it (`factory reconcile wave`); the integrator only runs it and
+// relays the result, and the job state the CLI wrote is what record trusts. A failure goes back
+// to the task(s) whose files it names (`task show` has the raw output under
+// integration_failures); they are rebuilt on the integrated branch (within their retry limit)
+// and the wave is integrated again. Returns null when the wave is integrated (or had nothing to
+// integrate), else why the integrated build is still broken.
+const integrations = []
+async function relayIntegrate(ids, wave) {
+  const prompt = brief.integrate_prompt.replace('{{tasks}}', () => ids.join(',')).replace('{{wave}}', () => String(wave))
+  runs += 1
+  let r = await call(prompt, opts(brief.integrator, `integrate wave ${wave}`))
+  if (!r) {
+    runs += 1
+    r = await call(prompt, opts(brief.integrator, `integrate wave ${wave} (retry)`))
+  }
+  return r
+}
+async function integrate(w) {
+  for (;;) {
+    const done = brief.waves[w].concat(Object.keys(st).filter((id) => st[id].reopened && !brief.waves[w].includes(id))).filter((id) => st[id] && st[id].outcome === 'done')
+    if (!done.length) return null
+    const ig = await relayIntegrate(done, w + 1)
+    integrations.push({ wave: w + 1, tasks: done, ok: Boolean(ig && ig.ok), kind: (ig && ig.kind) || null, route: (ig && ig.route) || [], ...(ig && ig.reconciled ? { reconciled: true } : {}) })
+    if (ig && ig.ok) return null
+    if (ig && ig.kind === 'environment') {
+      envBroken = { reason: ig.message || 'environment broken' }
+      return envBroken.reason
+    }
+    const why = !ig ? 'the integration step was not relayed' : ig.kind === 'commands' ? `${(ig.failures || []).join(', ') || 'its checks failed'}` : `${ig.kind || 'error'}${ig.message ? `: ${String(ig.message).slice(0, 200)}` : ''}`
+    const again = []
+    for (const id of (ig && ig.route) || []) {
+      const s = st[id]
+      if (!s) continue // built before this run: its next realize rebuilds it (needs_work: integration)
+      if (s.outcome !== 'done') continue // only work that was integrated goes back
+      s.failures = [`Attempt ${attemptNo(id) - 1}: the integrated build failed after wave ${w + 1} (${why}). \`task show\` lists the failing commands and their output under integration_failures; task start brings the integrated branch into yours.`]
+      if (s.attempts >= (T[id].retry_limit || 3)) {
+        s.outcome = 'exhausted'
+        s.summary = `Exhausted after ${s.attempts} attempt(s): the integrated build failed: ${why}`
+        continue
+      }
+      s.outcome = 'pending'
+      s.reopened = true
+      again.push(id)
+    }
+    if (!again.length) return why
+    phase(`realize: wave ${w + 1}: rebuilding ${again.join(', ')} on the integrated branch`)
+    await settle(again)
+    if (envBroken) return envBroken.reason
+    // A task rebuilt for the integration that still failed leaves its broken merge in the job
+    // branch: the wave is not integrated, whatever the remaining tasks' checks say.
+    const unfixed = again.filter((id) => st[id].outcome !== 'done')
+    if (unfixed.length) return `${why}; ${unfixed.join(', ')} could not fix it`
+  }
+}
+
+// The integrated build after a wave stayed broken (its failing tasks are exhausted, blocked or
+// were built before this run): later waves would start from broken code, so they don't start.
+function skipAfterBrokenIntegration(w, why) {
+  for (let v = w + 1; v < brief.waves.length; v++) {
+    for (const id of brief.waves[v]) {
+      if (!st[id] || st[id].outcome !== 'pending') continue
+      st[id].outcome = 'skipped_dependency'
+      st[id].summary = `Skipped: the integrated build after wave ${w + 1} is broken (${why}); it would start from broken code.`
+    }
+  }
+}
+
+for (let w = 0; w < brief.waves.length && !envBroken; w++) {
+  skipDependents()
+  const active = brief.waves[w].filter((id) => st[id] && st[id].outcome === 'pending')
+  if (!active.length) continue
+  phase(`realize: wave ${w + 1}/${brief.waves.length} (${active.join(', ')})`)
+  await settle(active)
+  if (envBroken) break
+  if (brief.integrate_each_wave && brief.integrator && brief.integrate_prompt) {
+    const broken = await integrate(w)
+    if (broken && !envBroken) {
+      skipAfterBrokenIntegration(w, broken)
+      break
+    }
+  }
+}
 skipDependents()
 
 const tasks = Object.keys(T).map((id) => ({ id, outcome: st[id].outcome, attempts: st[id].attempts, summary: st[id].summary }))
-const notDone = tasks.filter((t) => t.outcome !== 'done')
-return {
+const base = {
   workflow: 'realize',
   config: null,
   mode: brief.scope || null,
   job: brief.job,
-  status: notDone.length ? 'park' : 'ok',
   next_gate: null,
   input_hash: brief.input_hash,
   agents: roster,
   budgets: { used: { agent_runs: runs }, limit: (brief.budgets && brief.budgets.limit) || {} },
   artifacts: [],
   questions: [],
+}
+if (envBroken) {
+  return { ...base, status: 'park', park_reason: envBroken.reason, summary: `Stopped: ${envBroken.reason}`, data: { tasks, verifications: checks, integrations, environment_broken: envBroken } }
+}
+const notDone = tasks.filter((t) => t.outcome !== 'done')
+return {
+  ...base,
+  status: notDone.length ? 'park' : 'ok',
   park_reason: notDone.length ? `Tasks not done: ${notDone.map((t) => `${t.id} (${t.outcome})`).join(', ')}` : null,
   summary: `${tasks.length - notDone.length}/${tasks.length} task(s) done.`,
-  data: { tasks },
+  data: { tasks, verifications: checks, integrations },
 }

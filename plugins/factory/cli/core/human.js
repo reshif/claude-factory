@@ -1,8 +1,25 @@
 'use strict';
 // Human-only actions. They are reachable two ways and no other:
 //   1. your own chat reply, applied by the UserPromptSubmit hook before the model sees it
-//   2. the `factory` CLI from a real terminal (stdin and stdout are TTYs)
+//   2. the `factory` CLI from a real terminal (stdin and stdout are TTYs), confirmed by typing
+//      a short random code shown on the terminal itself (/dev/tty; CONOUT$/CONIN$ on Windows)
 // The PreToolUse guard also blocks agents from running these subcommands.
+//
+// A TTY is not proof of a human: an agent's shell can be a terminal too. So the terminal path
+// also refuses an environment that shows an agent's shell (AGENT_ENV: variables agent harnesses
+// set for the commands they run, Claude Code's Bash tool first; absence proves nothing), and
+// asks for a confirmation code that is random per command, never derivable from the repo or the
+// job, and written only to the terminal device: not to stdout or stderr, not to any file or
+// event. An agent that only runs a command and reads its output never sees it. The limit,
+// honestly: an agent that drives an interactive terminal (reads its screen and types into it)
+// can read the code off that screen; the env markers are what stop those terminals, and a
+// harness that sets none is not detected. There is no --yes.
+//
+// Tests run without a terminal through one seam: FACTORY_TEST_HUMAN set to an HMAC of a fixed
+// label under the seal secret (which the guard keeps agents from reading), honoured only with
+// NODE_ENV=test and when stdin or stdout is NOT a terminal. The guard refuses any shell command
+// that sets it. The "typed" text then comes from FACTORY_TEST_HUMAN_INPUT, where {code} stands
+// for the code the terminal would show.
 
 const { nowIso, fail, sha256, readJson } = require('../lib/util');
 const { pluginPath } = require('../lib/paths');
@@ -15,10 +32,136 @@ const policyMod = require('./policy');
 
 const GATE_IDS = ['H1', 'H2', 'H3', 'HF', 'HS', 'EH1', 'EH2', 'EH3', 'A'];
 
+// Variables agent harnesses set in the shells they run commands in (best effort: a harness
+// that sets none is not detected; the user's own terminal sets none of these).
+// Claude Code (observed in 2.1.300, whose Bash tool builds each command's environment with
+// CLAUDECODE=1, AI_AGENT=claude-code_<version>_agent, CLAUDE_CODE_CHILD_SESSION=1,
+// CLAUDE_CODE_SESSION_ID and CLAUDE_PID; CLAUDECODE=1 is also documented on
+// code.claude.com/docs/en/env-vars as set in the shells Claude Code spawns). AI_AGENT is the
+// cross-vendor convention (VS Code sets AI_AGENT=github_copilot_vscode_agent in its agent
+// terminals from 1.124: microsoft/vscode#320127, PR #320129). The others: VS Code's agent
+// terminals (COPILOT_AGENT=1 from 1.121, VSCODE_AGENT_ZSH_FIXUPS, VSCODE_PREVENT_SHELL_HISTORY:
+// src/vs/workbench/contrib/terminalContrib/chatAgentTools/browser/toolTerminalCreator.ts),
+// the Copilot CLI (COPILOT_CLI=1), the Copilot cloud agent, Codex and Gemini CLI.
+const AGENT_ENV = [
+  ['CLAUDECODE', null], // Claude Code's Bash tool (and `!` commands typed into Claude Code)
+  ['CLAUDE_CODE_CHILD_SESSION', null], // Claude Code's Bash tool
+  ['AI_AGENT', null], // cross-vendor: Claude Code, VS Code agent terminals (≥ 1.124), others
+  ['COPILOT_AGENT', null], // VS Code agent terminals (≥ 1.121)
+  ['VSCODE_AGENT_ZSH_FIXUPS', null], // VS Code agent terminals running zsh
+  ['VSCODE_PREVENT_SHELL_HISTORY', null], // VS Code agent terminals
+  ['COPILOT_CLI', '1'], // commands the Copilot CLI runs
+  ['COPILOT_AGENT_PROMPT', null], // Copilot cloud agent
+  ['CODEX_SANDBOX', null], // Codex
+  ['CODEX_SANDBOX_NETWORK_DISABLED', null],
+  ['GEMINI_CLI', null], // Gemini CLI
+];
+
+function agentContext(env = process.env) {
+  for (const [k, v] of AGENT_ENV) if (env[k] !== undefined && env[k] !== '' && (v === null || env[k] === v)) return k;
+  return null;
+}
+
+const TEST_LABEL = 'factory test human seam v1';
+
+function testToken() {
+  const crypto = require('crypto');
+  const fs = require('fs');
+  const key = fs.readFileSync(require('../lib/seal').secretFile(), 'utf8').trim();
+  return crypto.createHmac('sha256', key).update(TEST_LABEL).digest('hex');
+}
+
+// The test seam: only under NODE_ENV=test, never in a terminal, only with the right token.
+function testSeam() {
+  const t = process.env.FACTORY_TEST_HUMAN;
+  if (!t || process.env.NODE_ENV !== 'test' || (process.stdin.isTTY && process.stdout.isTTY)) return false;
+  try {
+    const want = testToken();
+    return want.length === t.length && require('crypto').timingSafeEqual(Buffer.from(want), Buffer.from(t));
+  } catch {
+    return false;
+  }
+}
+
+const HUMAN_MSG = 'This is a human-only action. Reply in chat (e.g. "approve") or run it from your own terminal.';
+
 function requireHumanChannel(channel) {
   if (channel === 'chat') return;
-  if (channel === 'tty' && process.stdin.isTTY && process.stdout.isTTY) return;
-  fail('This is a human-only action. Reply in chat (e.g. "approve") or run it from your own terminal.', 'human_only');
+  if (channel === 'tty') {
+    if (testSeam()) return;
+    const agent = agentContext();
+    if (agent) fail(`${HUMAN_MSG} This shell belongs to an agent (${agent} is set), so it does not count as your terminal.`, 'human_only');
+    if (process.stdin.isTTY && process.stdout.isTTY) return;
+  }
+  fail(HUMAN_MSG, 'human_only');
+}
+
+// One line typed on the controlling terminal, read synchronously (the CLI is synchronous).
+function readTty(question) {
+  const fs = require('fs');
+  const win = process.platform === 'win32';
+  let inFd;
+  let outFd;
+  try {
+    inFd = fs.openSync(win ? '\\\\.\\CONIN$' : '/dev/tty', win ? 'r' : 'r+');
+    outFd = win ? fs.openSync('\\\\.\\CONOUT$', 'w') : inFd;
+  } catch {
+    fail(`${HUMAN_MSG} (No terminal to confirm on.)`, 'human_only');
+  }
+  try {
+    fs.writeSync(outFd, question);
+    const buf = Buffer.alloc(1);
+    let line = '';
+    for (;;) {
+      let n;
+      try {
+        n = fs.readSync(inFd, buf, 0, 1, null);
+      } catch (e) {
+        if (e.code === 'EAGAIN') {
+          Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20);
+          continue;
+        }
+        throw e;
+      }
+      if (n === 0) break;
+      const c = buf.toString('latin1');
+      if (c === '\n' || c === '\r') break;
+      if (line.length < 200) line += c;
+    }
+    return line;
+  } finally {
+    try {
+      fs.closeSync(inFd);
+      if (outFd !== inFd) fs.closeSync(outFd);
+    } catch {
+      /* closed */
+    }
+  }
+}
+
+// A short confirmation code: 4 characters from an alphabet without look-alikes (0/O, 1/I/L),
+// random per command (crypto), so nothing in the repo, the job or an earlier run predicts it.
+const CODE_ALPHABET = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
+function confirmationCode(n = 4) {
+  const crypto = require('crypto');
+  let c = '';
+  for (let i = 0; i < n; i++) c += CODE_ALPHABET[crypto.randomInt(CODE_ALPHABET.length)];
+  return c;
+}
+
+// The terminal path's typed confirmation: a fresh code is shown on the terminal device only
+// (never stdout/stderr, a file or an event) and the user types it back. `subject` (the job or
+// lesson id) and `action` only label the prompt. Chat replies need none: the reply itself is
+// the human's words.
+function confirmTyped(channel, subject, action) {
+  if (channel !== 'tty') return;
+  const code = confirmationCode();
+  const typed = testSeam()
+    ? String(process.env.FACTORY_TEST_HUMAN_INPUT || '').replace(/\{code\}/gi, code)
+    : readTty(`To ${action} (${subject}), type the code ${code}: `);
+  if (typed.trim().replace(/\s+/g, '').toUpperCase() !== code) {
+    fail('Not confirmed: that was not the code shown on your terminal. Nothing was done; run the command again (each run shows a new code).', 'not_confirmed');
+  }
 }
 
 function log(root, state, action, extra = {}) {
@@ -63,6 +206,7 @@ function approve(root, { jobId, gate, channel, via }) {
   if (!now || now !== pending.hash) {
     fail(`The ${pending.id} document changed after it was presented (or is still being drafted). Ask Claude to present it again, then approve.`, 'stale_gate');
   }
+  confirmTyped(channel, state.id, `approve ${pending.id}`);
   state.approvals[pending.id] = { hash: now, at: nowIso(), via: via || channel, snapshot: snapshot(root, state, pending.id, now) };
   state.pending_gate = null;
   if (pending.id === 'A') require('./amend').applyApproved(root, state);
@@ -77,6 +221,7 @@ function deny(root, { jobId, reason, channel }) {
   const pending = state.pending_gate;
   if (!pending || pending.id === 'P') fail(`${state.id} has no gate waiting.`, 'no_gate');
   if (!String(reason || '').trim()) fail(`Say what must change: reply "deny <what must change>" (for example "deny cover negative numbers too"). Nothing was denied; ${pending.id} is still waiting.`, 'needs_reason');
+  confirmTyped(channel, state.id, `deny ${pending.id}`);
   state.denials.push({ gate: pending.id, hash: pending.hash, at: nowIso(), reason: reason || '' });
   if (pending.id === 'A') {
     state.amendment.status = 'open';
@@ -90,6 +235,7 @@ function resume(root, { jobId, step, channel }) {
   requireHumanChannel(channel);
   const state = job.resolve(root, jobId);
   if (state.status !== 'parked') fail(`${state.id} is not parked (status: ${state.status}).`, 'not_parked');
+  confirmTyped(channel, state.id, 'resume it');
   const from = state.park && state.park.from;
   // One more round of whatever ran out.
   const L = state.policy.limits;
@@ -111,6 +257,7 @@ function resume(root, { jobId, step, channel }) {
     if ((state.counters.intent_rounds || 0) >= IL) state.counters.intent_rounds = IL - 1;
   }
   if (from === 'decompose') oneMore('decompose_rounds', L.max_plan_validate_rounds);
+  if (from === 'reverify') state.counters.reverify_bonus = (state.counters.reverify_bonus || 0) + 1;
   if (from === 'budget') state.policy.limits.max_agent_runs_per_job = Math.ceil(state.policy.limits.max_agent_runs_per_job * 1.5);
   state.repeat = { key: null, count: 0 };
   state.status = 'active';
@@ -126,6 +273,7 @@ function stop(root, { jobId, kind, channel, reason }) {
   requireHumanChannel(channel);
   if (!['cancelled', 'abandoned'].includes(kind)) fail('kind must be cancelled or abandoned', 'bad_input');
   const state = job.resolve(root, jobId);
+  confirmTyped(channel, state.id, kind === 'cancelled' ? 'cancel it' : 'abandon it');
   state.status = kind;
   state.pending_gate = null;
   state.stopped = { at: nowIso(), reason: reason || '' };
@@ -140,6 +288,7 @@ function waive(root, { jobId, floor, reason, channel }) {
   if (!doc.waivable.includes(floor)) fail(`"${floor}" cannot be waived. Waivable: ${doc.waivable.join(', ')}`, 'not_waivable');
   if (!reason) fail('A waiver needs a reason.', 'bad_input');
   const state = job.resolve(root, jobId);
+  confirmTyped(channel, state.id, `waive ${floor}`);
   state.waivers[floor] = { reason, at: nowIso() };
   job.save(root, state);
   log(root, state, 'waive', { floor, reason });
@@ -159,6 +308,10 @@ function merged(root, { jobId, commit, channel }) {
   }
   if (!git.isAncestor(root, state.pr.head || state.branch, sha)) fail(`${commit} does not contain the shipped job branch.`, 'bad_input');
   if (!git.isAncestor(root, sha, state.base_branch)) fail(`${commit} is not on ${state.base_branch}.`, 'bad_input');
+  // H4 refuses while a serious review finding is still unverified (as ship and close do).
+  const open = require('./floors').openUnverifiedFindings(steps.context(root, state, job.load));
+  if (open.length) fail(`${state.id} still has serious review findings no verifier settled: ${open.map((f) => f.id).join(', ')}. Run factory next to re-verify them before recording the merge.`, 'floor', { missing: ['no_unverified_serious'] });
+  confirmTyped(channel, state.id, `record its merge at ${sha.slice(0, 12)}`);
   state.pr.merged = true;
   state.pr.merge_commit = sha;
   state.pr.merged_at = nowIso();
@@ -173,9 +326,48 @@ function confirmAc(root, { jobId, ac, channel }) {
   const state = job.resolve(root, jobId);
   const ctx = steps.context(root, state, job.load);
   if (!ctx.b.fingerprint) fail('Nothing built yet to confirm against.', 'bad_input');
+  confirmTyped(channel, state.id, `confirm ${String(ac).toUpperCase()}`);
   ledger.append(root, state.id, { kind: 'evidence', ac: ac.toUpperCase(), type: 'human', fingerprint: ctx.b.fingerprint, pass: true, source: `human:${channel}` });
   log(root, state, 'confirm_ac', { ac });
   return { job: state.id, message: `Confirmed ${ac.toUpperCase()} for ${state.id} on the current build. Run factory verify run to include it.` };
+}
+
+// "dismiss finding code-1 <reason>" / "accept finding code-1 <reason>": settle a serious
+// review finding no verifier could settle (carried from round to round, blocking ship).
+// Accepted: a known risk that ships, listed in the completion report; dismissed: not a
+// problem. Only the human can, with a reason; recorded in the ledger.
+function settleFinding(root, { jobId, id, decision, reason, channel }) {
+  requireHumanChannel(channel);
+  const state = job.resolve(root, jobId);
+  if (!['accept', 'dismiss'].includes(decision)) fail('finding accept|dismiss <id> --reason "…"', 'bad_input');
+  if (!String(id || '').trim()) fail(`Name the finding: "${decision} finding <id> <reason>" (factory next or the completion report lists the open ones).`, 'bad_input');
+  if (!String(reason || '').trim()) fail(`Say why: reply "${decision} finding ${id} <reason>". Nothing was settled.`, 'needs_reason');
+  const open = require('./floors').openUnverifiedFindings(steps.context(root, state, job.load));
+  if (!open.some((f) => f.id.toLowerCase() === String(id).trim().toLowerCase())) fail(`${id} is not an open unverified finding of ${state.id}${open.length ? `; open: ${open.map((f) => f.id).join(', ')}` : ' (none is open)'}.`, 'bad_input');
+  confirmTyped(channel, state.id, `${decision} finding ${id}`);
+  const r = require('./review').settle(root, { jobId: state.id, id, decision, reason, channel });
+  log(root, job.load(root, state.id), `${decision}_finding`, { channel, finding: r.finding, reason: String(reason).slice(0, 200) });
+  return { ...r, message: `${r.finding} ${r.status} by you: ${String(reason).trim()}.${r.still_open.length ? ` Still unverified: ${r.still_open.join(', ')}.` : ''} Claude continues with factory next.` };
+}
+
+// "confirm environment [hash]" / "confirm environment none": the build environment every
+// worktree is set up with (its setup commands run on this machine), so only the human
+// confirms it. The hash, when given, must be the proposal's as it was shown.
+function setEnvironment(root, { file, none = false, expectHash = null, channel }) {
+  requireHumanChannel(channel);
+  const envMod = require('./environment');
+  const p = none ? { name: 'none' } : file ? { name: file } : envMod.proposal(root);
+  confirmTyped(channel, 'this repository', `use the build environment ${none ? 'none' : p.name || ''}`.trim());
+  const r = envMod.confirm(root, { file, none, expectHash, channel });
+  let state = null;
+  try {
+    state = job.resolve(root, null);
+  } catch {
+    state = null;
+  }
+  if (state) log(root, state, 'set_environment', { channel, environment: r.environment.name || null, hash: r.hash });
+  require('./events').append(root, { event: 'environment_set', channel, name: r.environment.name || null, hash: r.hash, job: state ? state.id : null });
+  return { ...r, message: `Build environment set: ${r.environment.name || '(unnamed)'} (${r.hash}). ${(r.environment.setup || []).length ? `Each worktree runs: ${r.environment.setup.join(' && ')}.` : 'Worktrees need no setup.'} Claude continues with factory next.` };
 }
 
 // Trailing punctuation, emoji and spaces are tone, not content: "Approve!", "approve 👍".
@@ -191,6 +383,8 @@ function parseReply(text) {
   if ((m = t.match(new RegExp(`^deny(?:\\s+${J})?(?:(?:\\s*[:\u2014\u2013-]\\s*|\\s+)(.*))?$`, 'i')))) return { cmd: 'deny', jobId: m[1] && m[1].toUpperCase(), reason: (m[2] || '').trim() };
   if ((m = t.match(new RegExp(`^resume(?:\\s+${J})?(?:\\s+(.*))?$`, 'i')))) return { cmd: 'resume', jobId: m[1] && m[1].toUpperCase(), step: (m[2] || '').trim() || null };
   if ((m = t.match(new RegExp(`^(cancel|abandon)\\s+job(?:\\s+${J})?(?:\\s+(.*))?$`, 'i')))) return { cmd: m[1].toLowerCase() === 'cancel' ? 'cancel' : 'abandon', jobId: m[2] && m[2].toUpperCase(), reason: (m[3] || '').trim() };
+  if ((m = t.match(new RegExp(`^(accept|dismiss)\\s+finding(?:\\s+${J})?\\s+([a-z][\\w.@-]*-\\d+(?:@r\\d+)?)(?:\\s*[:\u2014\u2013-]?\\s+(.*))?$`, 'i')))) return { cmd: 'settle_finding', decision: m[1].toLowerCase(), jobId: m[2] && m[2].toUpperCase(), id: m[3], reason: (m[4] || '').trim() };
+  if ((m = t.match(/^confirm\s+environment(?:\s+(none|[0-9a-f]{8}))?$/i))) return { cmd: 'set_environment', none: Boolean(m[1] && m[1].toLowerCase() === 'none'), hash: m[1] && m[1].toLowerCase() !== 'none' ? m[1].toLowerCase() : null };
   if ((m = t.match(/^(accept|reject)\s+lesson\s+(L\d+)(?:\s+(.*))?$/i))) return { cmd: `${m[1].toLowerCase()}_lesson`, lessonId: m[2].toUpperCase(), reason: (m[3] || '').trim() };
   if ((m = t.match(new RegExp(`^waive(?:\\s+${J})?\\s+([a-z_:]+)\\s+(.+)$`, 'i')))) return { cmd: 'waive', jobId: m[1] && m[1].toUpperCase(), floor: m[2], reason: m[3].trim() };
   if ((m = t.match(new RegExp(`^merged(?:\\s+${J})?\\s+([0-9a-f]{7,40})$`, 'i')))) return { cmd: 'merged', jobId: m[1] && m[1].toUpperCase(), commit: m[2] };
@@ -201,8 +395,8 @@ function parseReply(text) {
 }
 
 // The exact forms, for "that was not applied" hints.
-const REPLY_FORMS = ['approve [J-0001] [H1]', 'deny [J-0001] <reason>', 'resume [J-0001] [step]', 'cancel job [J-0001] [reason]', 'abandon job [J-0001] [reason]', 'waive [J-0001] <floor> <reason>', 'merged [J-0001] <sha>', 'confirm AC-1 [J-0001]', 'accept lesson L4', 'reject lesson L4 [reason]', 'split [J-0001] U-7 U-19'];
-const VERBS = ['approve', 'approved', 'deny', 'denied', 'resume', 'cancel', 'abandon', 'waive', 'merged', 'merge', 'confirm', 'accept', 'reject', 'lgtm'];
+const REPLY_FORMS = ['approve [J-0001] [H1]', 'deny [J-0001] <reason>', 'resume [J-0001] [step]', 'cancel job [J-0001] [reason]', 'abandon job [J-0001] [reason]', 'waive [J-0001] <floor> <reason>', 'merged [J-0001] <sha>', 'confirm AC-1 [J-0001]', 'accept lesson L4', 'reject lesson L4 [reason]', 'split [J-0001] U-7 U-19', 'accept finding code-1 <reason>', 'dismiss finding code-1 <reason>', 'confirm environment [hash|none]'];
+const VERBS = ['approve', 'approved', 'deny', 'denied', 'resume', 'cancel', 'abandon', 'waive', 'merged', 'merge', 'confirm', 'accept', 'reject', 'dismiss', 'lgtm'];
 
 function editDistance(a, b) {
   const d = Array.from({ length: a.length + 1 }, (_, i) => [i, ...Array(b.length).fill(0)]);
@@ -249,9 +443,13 @@ function applyReply(root, parsed, channel = 'chat') {
       return confirmAc(root, { jobId: parsed.jobId, ac: parsed.ac, channel });
     case 'split':
       return require('./clarify').split(root, { jobId: parsed.jobId, ref: parsed.ref, alias: parsed.alias, channel });
+    case 'set_environment':
+      return setEnvironment(root, { none: parsed.none, expectHash: parsed.hash, channel });
+    case 'settle_finding':
+      return settleFinding(root, { jobId: parsed.jobId, id: parsed.id, decision: parsed.decision, reason: parsed.reason, channel });
     default:
       fail(`Unknown reply command ${parsed.cmd}`);
   }
 }
 
-module.exports = { snapshot, GATE_IDS, requireHumanChannel, approve, deny, resume, stop, waive, merged, confirmAc, parseReply, nearMiss, REPLY_FORMS, applyReply, sha256 };
+module.exports = { snapshot, GATE_IDS, requireHumanChannel, confirmTyped, confirmationCode, CODE_ALPHABET, agentContext, testToken, AGENT_ENV, approve, deny, resume, stop, waive, merged, confirmAc, settleFinding, setEnvironment, parseReply, nearMiss, REPLY_FORMS, applyReply, sha256 };

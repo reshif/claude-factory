@@ -34,8 +34,8 @@ function makeRepo() {
   return root;
 }
 
-function cli(root, args, { allowFail = true } = {}) {
-  const r = spawnSync('node', [BIN, ...args], { cwd: root, encoding: 'utf8', env: { ...process.env, FACTORY_ROOT: '' } });
+function cli(root, args, { allowFail = true, env = {} } = {}) {
+  const r = spawnSync('node', [BIN, ...args], { cwd: root, encoding: 'utf8', env: { ...process.env, FACTORY_ROOT: '', ...env } });
   let json;
   try {
     json = JSON.parse(r.stdout);
@@ -265,8 +265,54 @@ function record(root, env) {
   return cli(root, ['record', '--file', f]);
 }
 
+// What a task's builder records as its last step (`factory task built`, tasks.afterBuilder):
+// tests that play the builder by hand call this after their commits, as the real builder would.
+function built(root, taskId, { job, result = { status: 'done', summary: 'built by the test' } } = {}) {
+  const jobId = job || require('../../cli/core/job').resolve(root).id;
+  return require('../../cli/core/tasks').afterBuilder(root, jobId, taskId, result, { startedAt: new Date().toISOString(), label: `build ${taskId}` });
+}
+
+// The user's chat reply through the real UserPromptSubmit hook: { status: applied|refused|ignored,
+// code (a refusal's, from the log), text (what the hook told Claude) }.
+function say(root, text) {
+  const r = spawnSync('node', [path.join(PLUGIN, 'hooks', 'prompt.js')], { cwd: root, input: JSON.stringify({ prompt: text, cwd: root, session_id: 'human', hook_event_name: 'UserPromptSubmit' }), encoding: 'utf8', env: { ...process.env, FACTORY_ROOT: '' } });
+  let ctx = '';
+  try {
+    ctx = JSON.parse(r.stdout).hookSpecificOutput.additionalContext || '';
+  } catch {
+    ctx = '';
+  }
+  const status = /Applied your reply/.test(ctx) ? 'applied' : /NOT applied/.test(ctx) ? 'refused' : 'ignored';
+  let code = null;
+  if (status === 'refused') {
+    const lines = fs.readFileSync(path.join(root, '.factory', 'log', 'events.jsonl'), 'utf8').trim().split('\n').map((l) => JSON.parse(l));
+    const e = lines.reverse().find((x) => x.event === 'reply_refused');
+    code = e ? e.code : null;
+  }
+  return { status, code, text: ctx };
+}
+
+// What the tester relays (agents/tester.md): the task's `task verify` run once, its result
+// mapped onto the tester schema. `label` is the agent's label ("test T1", "test T1 (retry)").
+function relayVerify(root, label, { job } = {}) {
+  const id = /^test (\S+)/.exec(label)[1];
+  const v = cli(root, ['task', 'verify', id, ...(job ? ['--job', job] : [])]);
+  if (v.error) return { pass: false, refused: v.code, failures: [v.message] };
+  return { pass: Boolean(v.pass), evidence_id: v.evidence_id, failures: [...(v.failures || []).map((f) => `\`${f.cmd}\` exited ${f.code}:\n${String(f.output || '').slice(-400)}`), ...(v.scope_violations || []).map((p) => `${p} is outside the task's allowed paths`), ...(v.no_changes ? ['no changes'] : [])], swept_checked: [] };
+}
+
+// What the integrator relays for a wave integration (agents/integrator.md): the brief's
+// `reconcile wave` command run once, its JSON mapped onto the integrate-wave schema.
+function relayWave(root, text) {
+  const m = /reconcile wave --tasks ([\w,-]+) --wave (\d+)/.exec(text);
+  if (!m) throw new Error('no reconcile wave command in the integrator brief');
+  const r = cli(root, ['reconcile', 'wave', '--tasks', m[1], '--wave', m[2]]);
+  if (r.error) return { ok: false, kind: 'error', route: [], reconciled: false, failures: [], message: r.message };
+  return { ok: Boolean(r.ok), kind: r.ok ? 'integrated' : r.kind, route: Object.keys(r.route || {}), reconciled: Boolean(r.reconciled), failures: (r.failures || []).map((f) => `\`${f.cmd}\` exited ${f.code}`), message: r.ok ? `Wave ${m[2]} integrated.` : r.message || `${r.kind}` };
+}
+
 function jobDir(root, id) {
   return path.join(root, '.factory', 'jobs', id);
 }
 
-module.exports = { PLUGIN, BIN, sh, write, makeRepo, cli, reply, contractText, envelope, record, jobDir, adrText, noAdrText, threatModelText, recommendationText, contractsDocText, DIAGRAM };
+module.exports = { PLUGIN, BIN, sh, write, makeRepo, cli, reply, say, built, relayVerify, relayWave, contractText, envelope, record, jobDir, adrText, noAdrText, threatModelText, recommendationText, contractsDocText, DIAGRAM };

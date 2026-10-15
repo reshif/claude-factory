@@ -34,7 +34,7 @@ safe((input) => {
     }
   }
   else if (READ_TOOLS.has(tool)) why = checkReadTool(root, tool, ti, absFile, cwd, policy);
-  else if (tool === 'Bash' && root) why = checkBash(root, ti.command, policy, { job: jobInScope(root, cwd), agent: Boolean(input.agent_id || input.agent_type) });
+  else if (tool === 'Bash' && root) why = checkBash(root, ti.command, policy, { job: jobInScope(root, cwd), agent: Boolean(input.agent_id || input.agent_type), agentType: input.agent_type || null });
   if (why) {
     // Say what was seen, so a block can be traced to the exact command.
     if (tool === 'Bash' && ti.command) {

@@ -12,12 +12,14 @@ user-invocable: false
 |---|---|
 | H1 / EH1 | The contract (it is short: show the goal and every acceptance criterion with its evidence type; mention allowed paths and verify commands). Then the user's settled answers (`## Clarifications (settled)`) and what clarify handed to design (`## Deferred to design`: decided in ground and decide, not now). |
 | H2 / EH2 | The design record: the decision, rejected options, how criteria are met, and the ADR's architecture diagram (paste its ```mermaid block as is so it renders); the God Eye critique verdict and any open items (from `critiques/design.json`). For EH2, the contracts being frozen. |
-| H3 / EH3 | The plan as a table: task, objective, allowed paths, depends on, criteria; then the waves. For EH3, the slices and their order. |
+| H3 / EH3 | The plan as a table: task, objective, allowed paths, depends on, consumes, criteria; then the interfaces as a table (interface, kind, file, owner, consumed by — `factory plan validate` prints them, with the dependencies they imply under `implied_dependencies`), so the user sees who builds what for whom; then the waves (after each wave the factory integrates it and runs the job's checks before the next starts). For EH3, the slices and their order. |
 | HF | The findings summary and the recommendation (spike). |
 | HS | Run `factory report` first, then show the floors table and the AC → proof table from the report. This signs off the irreversible step (push / PR). |
 | A | The amendment: what changed, who asked, criteria changed, tasks that will be rebuilt. |
 
 Read the files in `docs` yourself and summarise faithfully — don't hide open critique items.
+
+**Build environment.** When `factory next` carries `environment` (no environment is confirmed for this repository yet), show it after the gate's documents, at H1 and every later gate until the user decides: its name, setup commands, env, services and the files it was detected from (`evidence`), and its `hash`. The user replies `confirm environment <hash>` to use it, or `confirm environment none` for bare worktrees; to change it, write a copy under `.factory/scratch/`, run `factory env propose --file <copy>` and show the new hash (`factory env show` prints both). Never confirm it for them: its setup commands run on their machine.
 
 ## Then
 End with exactly this, and **stop**:

@@ -20,7 +20,7 @@ The CLI is on your PATH as `factory` (from this plugin's `bin/`). If it isn't, u
 ## The loop
 Repeat until you reach a stop point:
 
-1. Run `factory next` and read `action`. Running it again from the same state is harmless (it returns the same decision, with `requery: true`), but don't poll it: run it when a step is finished or the user has replied.
+1. Run `factory next` and read `action`. Running it again from the same state is harmless (it returns the same decision, with `requery: true`), but don't poll it: run it when a step is finished or the user has replied. If it carries `environment` (no build environment is confirmed for this repository), show its `message` once; at a gate the gate skill shows the proposal in full. Never confirm it yourself: its setup runs on the user's machine.
 
 | action | what you do |
 |---|---|
@@ -49,7 +49,7 @@ Repeat until you reach a stop point:
 **No Workflow tool?** Run the same brief by hand with the Agent tool: start every item of the fan-out in one message (parallel) with `subagent_type` set to the item's `agent_type` (e.g. `factory:researcher`), its `prompt`, and the item's `model` if it has one, requiring JSON that matches its `schema`; retry a failed item once; then do the judge / critique / verifier / builder-tester steps exactly as the workflow script (`workflows/<name>.js`) does, and build the result envelope with the same fields. Record it the same way.
 
 ## Rules
-- Human gates are the user's. Never approve, deny, resume, waive or confirm on their behalf, and never run those commands (the guard blocks them). The user replies in chat: `approve`, `deny <what must change>`, `resume`, `cancel job`, `abandon job`, `waive <floor> <reason>`, `merged <commit>`, `confirm AC-n`, `accept lesson Ln`, `split U-n <alias>`, and while clarify waits, numbered answers (`1 yes, 2 …`, `defaults`). The reply hook applies them before you see the message.
+- Human gates are the user's. Never approve, deny, resume, waive or confirm on their behalf, and never run those commands (the guard blocks them). The user replies in chat: `approve`, `deny <what must change>`, `resume`, `cancel job`, `abandon job`, `waive <floor> <reason>`, `merged <commit>`, `confirm AC-n`, `accept lesson Ln`, `split U-n <alias>`, `dismiss finding <id> <why>`, `accept finding <id> <why>`, `confirm environment <hash|none>`, and while clarify waits, numbered answers (`1 yes, 2 …`, `defaults`). The reply hook applies them before you see the message.
 - During clarify you never edit the contract and never answer for the user: record what the user said with `factory answer`, add context with `factory clarify note`, show `factory clarify status` when they ask what is open, and run `factory next`.
 - If the user says the requirements changed, follow **factory:amend**.
 - Don't claim the job is done until `factory next` says `done` (the Stop hook checks floors).

@@ -182,7 +182,7 @@ function checkReadTool(root, tool, ti, absFile, cwd, policy) {
 
 // ---- factory CLI recognition -------------------------------------------------------------
 
-const HUMAN_ONLY = new Set(['approve', 'deny', 'resume', 'cancel', 'abandon', 'waive', 'merged', 'confirm', 'reseal']);
+const HUMAN_ONLY = new Set(['approve', 'deny', 'resume', 'cancel', 'abandon', 'waive', 'merged', 'confirm', 'reseal', 'finding']);
 // Mirrors cli/main.js parseArgs: --k=v, --k v (unless the flag is boolean or v starts with --), and --.
 const CLI_BOOL = new Set(['epic', 'local', 'check', 'json', 'plan-fields', 'help', 'threat-model', 'plan-critique', 'no-threat-model', 'accept-degraded', 'serve', 'default']);
 const TTY_FAKERS = /^(script|unbuffer|expect|socat|faketty|ptyexec|zpty|empty)$/;
@@ -192,7 +192,7 @@ const INTERPRETER = /^(node|nodejs|python[0-9.]*|ruby|perl|php|deno|bun|osascrip
 // Factory state and CLI internals. STRICT: code that loads the CLI's internals or the seal
 // secret could forge state, whatever it does. STATE: the job files; reading them is fine.
 const INTERNALS_STRICT = /cli\/core\/|cli\/lib\/(seal|util)|software-factory\/secret|\.config\/software-factory/;
-const STATE = /\.factory\/(jobs|log|lessons|project\.json|policy\.json|current)/;
+const STATE = /\.factory\/(jobs|log|lessons|project\.json|policy\.json|environment\.json|current)/;
 const INTERNALS = new RegExp(`${INTERNALS_STRICT.source}|${STATE.source}`);
 const WRITE_OPS = /writeFile|appendFile|createWriteStream|\bunlink|\brename|\brmSync|\brmdir|\bcopyFile|truncate|\.write\(|open\([^)]*['"][wax+]|json\.dump\(|os\.remove|os\.replace|shutil\.|Path\([^)]*\)\.write_|File\.write|>>?\s*['"]?\.factory/;
 const SECRET_FILE = /software-factory[\\/]secret|\.config[\\/]software-factory/;
@@ -200,7 +200,7 @@ const SECRET_FILE = /software-factory[\\/]secret|\.config[\\/]software-factory/;
 const KNOWN_VARS = /^(HOME|PWD|OLDPWD|PATH|TMPDIR|TMP|TEMP|USER|SHELL|VIRTUAL_ENV|CONDA_PREFIX|PYENV_ROOT|NVM_DIR|GOPATH|GOROOT|CARGO_HOME|JAVA_HOME|ANDROID_HOME|XDG_\w+|CI|GITHUB_\w+|RUNNER_\w+|npm_\w+|env:\w+)$/;
 
 function isHumanOnly(a, b) {
-  return HUMAN_ONLY.has(a) || (a === 'lessons' && ['accept', 'reject', 'promote'].includes(b)) || (a === 'ci' && b === 'install') || (a === 'clarify' && b === 'split');
+  return HUMAN_ONLY.has(a) || (a === 'lessons' && ['accept', 'reject', 'promote'].includes(b)) || (a === 'ci' && b === 'install') || (a === 'clarify' && b === 'split') || (a === 'env' && b === 'set');
 }
 
 // The user's relay, never a factory agent's: answers and clarify notes come from the main
@@ -656,6 +656,9 @@ function checkCommand(cmd, pipeline, ctx, depth, collect) {
         }
       }
       if (a && isHumanOnly(a, b)) return humanMessage(a, b);
+      // `task built` is a builder's own last step (its reply for this attempt): nobody else may
+      // vouch that a builder finished, not the main session and not another agent.
+      if (a === 'task' && b === 'built' && ctx.agentType !== 'factory:builder') return '"factory task built" records a task builder\'s own reply; only that builder (factory:builder) runs it. Builds happen through the realize workflow.';
       if (a && ctx.agent && isUserRelay(a, b)) return `"factory ${a}${a === 'clarify' ? ` ${b}` : ''}" records what the user said; it is the main session's, never a factory agent's. Return what you found in your final message instead.`;
     } else if (!collect) {
       const why = unknownExpansionHuman(head, ctx);
@@ -725,8 +728,13 @@ function ownJobDir(jobId) {
   return new RegExp(`\\.factory[\\\\/]jobs[\\\\/]${jobId}(?![\\w-])(?![^\\s'"\`;|&)]*\\.\\.)`, 'g');
 }
 
+// The CLI's test-only human seam and the seal-secret override are for the test suite: a shell
+// command that sets them (bash, env, export) is never an agent's business.
+const TEST_SEAM = /\bFACTORY_(TEST_HUMAN\w*|SECRET_FILE)\b/;
+
 function checkBash(root, cmd, policy, opts = {}) {
-  const ctx = { root, policy: policy || require('../cli/core/policy').defaults(), job: opts.job || null, agent: Boolean(opts.agent), names: new Set(), vars: new Map(), found: [] };
+  if (TEST_SEAM.test(String(cmd || ''))) return 'FACTORY_TEST_HUMAN and FACTORY_SECRET_FILE are the test suite\'s seam into human-only actions, never set from here. Human-only actions are the user\'s: their chat reply, or their own terminal.';
+  const ctx = { root, policy: policy || require('../cli/core/policy').defaults(), job: opts.job || null, agent: Boolean(opts.agent), agentType: opts.agentType || null, names: new Set(), vars: new Map(), found: [] };
   try {
     return walk(String(cmd || ''), ctx, 0);
   } catch {

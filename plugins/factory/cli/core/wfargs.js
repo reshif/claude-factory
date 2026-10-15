@@ -38,7 +38,7 @@ const ROLE_OUTPUTS = {
   slicer: ['planner'],
   builder: ['builder'],
   tester: ['tester'],
-  integrator: ['integrator'],
+  integrator: ['integrator', 'integrate-wave'],
   'code-reviewer': ['reviewer'],
   'test-reviewer': ['reviewer'],
   'security-reviewer': ['reviewer'],
@@ -407,6 +407,13 @@ function challenge(root, state, ctx, action) {
   })();
   const ls = lessons.inScope(root, changed);
   const jc = jobContext(root, state);
+  // What the human approved, for every lane: the design record (H2) and the plan (H3).
+  const designFiles = invalidation.designFiles(root, state.id).filter((f) => f.endsWith('.md'));
+  const designRefs = [
+    designFiles.length ? `- Design record (approved at H2): ${designFiles.join(', ')} — its Decision and Architecture diagram are what the change must implement.` : '',
+    require('fs').existsSync(jp.plan) ? `- Plan (approved at H3): ${jp.plan} — each task's objective, paths and interfaces.` : '',
+    require('fs').existsSync(jp.findings) ? `- Findings: ${jp.findings}` : '',
+  ].filter(Boolean).map((l) => `${l}\n`).join('');
   const fanout = lanes.map((lane) => {
     const role = cfg.lanes[lane];
     if (!role) fail(`No reviewer configured for lane "${lane}"`, 'plugin_broken');
@@ -416,7 +423,7 @@ function challenge(root, state, ctx, action) {
       label: `review · ${lane}`,
       prompt: prompt(
         role,
-        `${jc}\n- Lane: **${lane}**\n- See the change with: \`${diffCmd}\`\n- Changed files: ${changed.join(', ') || '(see diff)'}\n${extra}\n- Accepted lessons to check (a broken lesson is a finding with rule "lesson:<id>"):\n${ls.map((l) => `  - ${l.id}: ${l.text}`).join('\n') || '  - (none)'}\n- Finding ids start with "${lane}-"; lane is "${lane}".`,
+        `${jc}\n- Lane: **${lane}**\n- See the change with: \`${diffCmd}\`\n- Changed files: ${changed.join(', ') || '(see diff)'}\n${designRefs}${extra}\n- Accepted lessons to check (a broken lesson is a finding with rule "lesson:<id>"):\n${ls.map((l) => `  - ${l.id}: ${l.text}`).join('\n') || '  - (none)'}\n- Finding ids start with "${lane}-"; lane is "${lane}".`,
         'reviewer',
       ),
       schema: schema('reviewer'),
@@ -428,6 +435,9 @@ function challenge(root, state, ctx, action) {
     schema: schema('verifier'),
     severities: cfg.verifier.severities,
   };
+  // Serious findings the last round left unverified: re-verified this round whether or not a
+  // reviewer raises them again (review.record keeps them open until a verifier settles them).
+  const carried = mode ? [] : review.openUnverified(ledger.lastStep(root, state.id, 'challenge')).map((f) => ({ id: f.id, lane: f.lane, severity: f.severity, file: f.file, line: f.line, summary: f.summary, rule: f.rule, from_round: f.carried ? f.carried.from_round : f.round }));
   return base(root, state, 'fanout-judge', {
     config: 'challenge',
     mode,
@@ -438,6 +448,7 @@ function challenge(root, state, ctx, action) {
     judge: null,
     critique: null,
     verifier,
+    carried,
   });
 }
 
@@ -479,7 +490,7 @@ function decompose(root, state, ctx, action) {
   const ls = lessons.inScope(root, []);
   const what = slices
     ? `Write ${jp.slices}: {"slices":[{"id":"S00","goal":"…","criteria_ids":["E-AC-1"],"depends_on":[],"work_type":"feature","risk":"${state.risk}","allowed_paths":["…"]}], "epic_verify_commands":["…"]}. S00 freezes the contracts and adds the feature flag; later slices are vertical and safe to stop after. Every E-AC must be owned by a slice.`
-    : `Write ${jp.plan}: {"tasks":[{"id":"T1","objective":"…","allowed_paths":["src/x/**"],"depends_on":[],"criteria_ids":["AC-1"],"verify_commands":[{"cmd":"…","covers":["AC-1"]}],"retry_limit":3,"rollback":"…"}]}. Tasks that can run in parallel must not share allowed paths.`;
+    : `Write ${jp.plan}: {"interfaces":[{"name":"parse(text) -> Config","kind":"function","file":"src/x/parse.js","owner":"T1"}],"tasks":[{"id":"T1","objective":"…","allowed_paths":["src/x/**"],"depends_on":[],"criteria_ids":["AC-1"],"verify_commands":[{"cmd":"…","covers":["AC-1"]}],"retry_limit":3,"rollback":"…"},{"id":"T2","objective":"…","allowed_paths":["src/y/**"],"consumes":["parse(text) -> Config"],"criteria_ids":["AC-2"],"verify_commands":[{"cmd":"…","covers":["AC-2"]}]}]}. Tasks that can run in parallel must not share allowed paths. Declare every interface one task builds and another uses, and list it in the user's \`consumes\`.`;
   const planner = {
     ...agentSpec(state, slices ? 'slicer' : 'planner'),
     prompt: prompt(
@@ -504,29 +515,48 @@ function realize(root, state, ctx, action) {
   const pendingIds = new Set(pending.map((t) => t.id));
   const waves = (plan.waves || [plan.tasks.map((t) => t.id)]).map((w) => w.filter((id) => pendingIds.has(id))).filter((w) => w.length);
   const jc = jobContext(root, state);
+  // A builder's time budget: guidance only (Claude Code's Workflow tool sets no agent time cap),
+  // so it commits increments and leaves a `wip:` commit when it stops early.
+  const minutes = Math.max(1, Number((state.policy.limits || {}).builder_minutes !== undefined ? state.policy.limits.builder_minutes : (require('./policy').load(root).limits || {}).builder_minutes) || 30);
+  // The build environment, as the builder should know it: task start sets it up in the worktree
+  // (cached by its lockfiles) and prints the shell prefix that puts a command inside it; task
+  // verify runs every verify command inside it.
+  const E = require('./environment').loadSafe(root).env;
+  const envNote = E && ((E.setup || []).length || Object.keys(E.env || {}).length || E.prefix || E.services)
+    ? `\n- Build environment "${E.name || 'configured'}": task start sets it up in your worktree (${(E.setup || []).join(' && ') || 'no setup'}${E.services ? '; the job\'s services too' : ''}) and prints \`environment.shell_prefix\`. Every Bash call is a fresh shell: start each command that builds or tests with that prefix, from your worktree, so it runs against your worktree's environment and code (task verify runs every verify command the same way${E.prefix ? `, as \`${E.prefix} <command>\`` : ''}). Don't reinstall or change the environment yourself. If task start refuses with environment_broken, stop: run task built with \`--status blocked --reason environment_broken\` and reply blocked with that reason and its message as the summary.`
+    : '';
   const tasks = {};
   for (const t of pending) {
     const wt = taskWorktree(root, state.id, t.id);
     const fixNote = state.fix && (state.fix.tasks || []).includes(t.id)
       ? state.fix.kind === 'fix'
-        ? '- This is a fix round for confirmed review findings (`task show` lists them under fix_findings).'
+        ? `- This is a fix round for confirmed review findings (\`task show\` lists them under fix_findings).${Object.values(state.fix.owners || {}).includes('*') ? ' Findings marked `shared` have no single owner (no file, or a file no task owns): every reopened task gets them. Fix the part inside your allowed paths; if the fix needs other files, reply blocked with needs_paths.' : ''}`
         : '- This is a verify-fix round: commands failed on the integrated build (`task show` lists them under verify_failures).'
       : t.id && state.tasks[t.id] && state.tasks[t.id].needs_work === 'amendment'
         ? '- The contract or plan was amended; rebuild this task against the amended version.'
-        : '';
+        : t.id && state.tasks[t.id] && state.tasks[t.id].needs_work === 'integration'
+          ? '- The integrated build (the job branch with the other tasks\' work) failed after your last build: `task show` lists the failing commands and their output under integration_failures. task start brings the integrated branch into yours; fix your part there.'
+          : '';
+    const st = state.tasks[t.id] || {};
     tasks[t.id] = {
       id: t.id,
+      // Attempts already made (earlier realize runs): numbering continues, and what the last one
+      // left (task verify's raw failures, or the builder's reply) is the next one's input.
+      attempt_base: st.attempts || 0,
+      previous_failures: require('./tasks').lastFailures(st),
       // depends_on plus earlier-wave tasks on overlapping paths: a failed one skips this task.
-      depends_on: require('./plan').effectiveDeps(plan.tasks, t.id),
+      depends_on: require('./plan').effectiveDeps(plan.tasks, t.id, plan.interfaces),
       retry_limit: t.retry_limit || state.policy.limits.retry_limit,
       // Builders may move to a stronger model on retries (policy.agents.builder_escalation).
       builder: { ...agentSpec(state, 'builder'), escalate: ((state.policy.agents || {}).builder_escalation || []).slice() },
+      // The tester only runs `task verify` and relays its result: the CLI's exit code and evidence
+      // decide (factory record trusts the task's evidence in the job state, never this reply).
       tester: agentSpec(state, 'tester'),
       builder_prompt: prompt(
         'builder',
-        `${jc}\n- Task: **${t.id}** — ${t.objective}\n- Start: \`${cli(root)} task start ${t.id} --job ${state.id}\`\n- Show: \`${cli(root)} task show ${t.id} --job ${state.id}\`\n- Worktree: ${wt}\n- Allowed paths: ${t.allowed_paths.join(', ')}${fixNote ? `\n${fixNote}` : ''}`,
+        `${jc}\n- Task: **${t.id}** — ${t.objective}\n- Start: \`${cli(root)} task start ${t.id} --job ${state.id}\`\n- Show: \`${cli(root)} task show ${t.id} --job ${state.id}\` — its \`packet\` is your part of the approved design: the ADR's Decision and diagram, this task's rows of "How each acceptance criterion is met", the findings on your paths, the interfaces you own or consume, and the other tasks' objectives. Build to it.\n- Built (your last step): \`${cli(root)} task built ${t.id} --job ${state.id} --status done\` (or \`--status blocked --reason needs_paths|dependency_conflict|environment_broken\`)\n- Worktree: ${wt}\n- Allowed paths: ${t.allowed_paths.join(', ')}\n- Time: about ${minutes} minutes for this attempt. Commit each working increment as you go; if you stop before you are done, commit what you have as \`wip: …\` first (the next attempt continues from your branch).${envNote}${fixNote ? `\n${fixNote}` : ''}`,
         'builder',
-        'Attempt {{attempt}}. Previous tester failures, if any:\n{{failures}}',
+        'Attempt {{attempt}}. What the previous attempts left (task verify\'s failing commands, or the builder\'s reply; `task show` has the raw output under history and the last attempt\'s diff under previous_attempt), if any:\n{{failures}}',
       ),
       tester_prompt: prompt(
         'tester',
@@ -542,6 +572,18 @@ function realize(root, state, ctx, action) {
     waves,
     tasks,
     max_parallel_tasks: state.policy.limits.max_parallel_tasks,
+    // merge each wave into the job branch and run the job's checks before the next (P2.3): the
+    // CLI's `reconcile wave` does it, relayed by the integrator (a workflow cannot run it)
+    // A job whose policy snapshot predates the key (started before the upgrade) takes it from the
+    // live .factory/policy.json, so it can be turned off for a job already in flight.
+    integrate_each_wave: (state.policy.limits.integrate_each_wave !== undefined ? state.policy.limits.integrate_each_wave : (require('./policy').load(root).limits || {}).integrate_each_wave) !== false,
+    integrator: { ...agentSpec(state, 'integrator'), schema: schema('integrate-wave') },
+    integrate_prompt: prompt(
+      'integrator',
+      `${jc}\n- Wave integration: run the \`reconcile wave\` command given below your pointer to this file exactly once, and relay what it prints.\n- Job worktree: ${jobPaths(root, state.id).worktree}`,
+      'integrate-wave',
+      `Wave integration: \`${cli(root)} reconcile wave --tasks {{tasks}} --wave {{wave}} --job ${state.id}\``,
+    ),
     builder_schema: schema('builder'),
     tester_schema: schema('tester'),
   });

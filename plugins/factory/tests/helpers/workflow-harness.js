@@ -30,7 +30,14 @@ async function run(file, args, agentImpl) {
       throw new Error(`agent() called without a real factory agentType (got ${JSON.stringify(t)}) for "${opts && opts.label}"`);
     }
     calls.push({ prompt, opts });
-    return agentImpl(prompt, opts, calls.length);
+    const startedAt = new Date().toISOString();
+    const r = await agentImpl(prompt, opts, calls.length);
+    // A task builder's last step is `factory task built` with the status it replies (agents/builder.md):
+    // the harness plays that step for the fake builders, recording their reply (tasks.afterBuilder).
+    const brief = typeof args === 'string' ? JSON.parse(args) : args;
+    const bt = brief && brief.workflow === 'realize' && brief.root && /^build (\S+)/.exec((opts && opts.label) || '');
+    if (bt) return require('../../cli/core/tasks').afterBuilder(brief.root, brief.job, bt[1], r, { startedAt, label: opts.label });
+    return r;
   };
   const pipeline = async (items, f) => Promise.all(items.map((it) => f(it)));
   const forbidden = new Proxy({}, { get: () => () => { throw new Error('Date/Math.random are not allowed in workflows'); } });

@@ -8,7 +8,7 @@ const path = require('path');
 const { FactoryError, fail, readText, writeJson } = require('./lib/util');
 const { requireRoot, findRoot, PLUGIN_ROOT } = require('./lib/paths');
 
-const BOOL = new Set(['epic', 'local', 'check', 'json', 'plan-fields', 'help', 'threat-model', 'plan-critique', 'no-threat-model', 'accept-degraded', 'serve', 'default']);
+const BOOL = new Set(['epic', 'local', 'check', 'json', 'plan-fields', 'help', 'threat-model', 'plan-critique', 'no-threat-model', 'accept-degraded', 'serve', 'default', 'none', 'proposed']);
 
 function parseArgs(argv) {
   const pos = [];
@@ -57,8 +57,11 @@ Clarify    clarify status [--json]   (the issue ledger: id, subject, status, own
 Workflows  wfargs <ground|fanout-judge|decompose|realize|reconcile> [--config clarify|decide|challenge] [--mode m] [--scope s] [--lanes a,b]
            [--threat-model | --no-threat-model] [--plan-critique] [--accept-degraded] [--out file]
            record --file <envelope.json | ->
+Env        env show · env check [--proposed]   (the build environment each worktree runs in; read-only)
+           env propose --file f   (the main session's proposal) · env prepare <T|job>   (set it up in one worktree; task start does it)
 Plan       plan validate · plan from-contract
-Tasks      task start <T> · task show <T> · task verify <T> · task state <T> blocked|exhausted [--reason]
+Tasks      task start <T> · task show <T> · task verify <T> · task built <T> --status done|blocked [--reason r]   (the builder's last step)
+           task state <T> blocked|exhausted [--reason]
 Build      reconcile run|continue|abort · verify run · evidence add <AC> --type diff|doc [--path p] [--note n]
 Ship       report · ship [--local] · pr sync · ci verify [--manifest-dir d | --commit sha] · close
 Change     amend start --reason "…" [--by who] · amend submit · park --reason "…" · followup
@@ -72,7 +75,9 @@ Console    console [--out file.html] [--job J] [--label "…"] [--data data.json
 Human only (your terminal, or reply in chat):
            approve [gate] · deny --reason "…" · resume [step] · cancel · abandon · waive <floor> --reason "…"
            merged <commit> · confirm <AC> · lessons accept|reject <L> · lessons promote <L> --check "cmd" · reseal
+           env set [--file f | --none] [hash]   (confirm the build environment; chat: confirm environment <hash|none>)
            clarify split <U-n> <alias U-n>   (undo a wrong fold: the alias becomes its own clarify issue again)
+           finding accept|dismiss <id> --reason "…"   (a serious finding no verifier settled; chat: dismiss finding code-1 <reason>)
 Global     --root <repo> · --job <J-0001>`;
 
 const LONG_RUNNING = Symbol('long-running'); // the command reports for itself (console --serve)
@@ -201,23 +206,41 @@ function run(argv) {
     case 'task': {
       const t = C('tasks');
       const id = pos[2];
-      if (!id) fail('task <start|show|verify|state> <T1>', 'bad_input');
+      if (!id) fail('task <start|show|verify|built|state> <T1>', 'bad_input');
       if (sub === 'start') return t.start(R(), J, id);
       if (sub === 'show') return t.show(R(), J, id);
       if (sub === 'verify') {
-        const r = t.verify(R(), J, id);
+        const r = t.verifyRecorded(R(), J, id);
         if (!r.pass) process.exitCode = 1;
         return r;
       }
       if (sub === 'state') return t.setState(R(), J, id, pos[3], opt.reason);
-      return fail('task start | show | verify | state', 'bad_input');
+      if (sub === 'built') {
+        // The builder's last step: what this attempt's builder replies (the guard lets only a
+        // factory:builder agent run it). task verify counts only an attempt recorded done.
+        const status = String(opt.status || '');
+        if (!['done', 'blocked'].includes(status)) fail('task built <T1> --status done|blocked [--reason needs_paths|dependency_conflict|environment_broken] [--summary "…"]', 'bad_input');
+        if (opt.reason && !['needs_paths', 'dependency_conflict', 'environment_broken'].includes(opt.reason)) fail('--reason is needs_paths, dependency_conflict or environment_broken', 'bad_input');
+        const jid = C('job').resolve(R(), J).id;
+        t.afterBuilder(R(), jid, id, { status, summary: opt.summary || '', ...(status === 'blocked' && opt.reason ? { blocked_reason: opt.reason } : {}) }, { label: `build ${id}` });
+        return { job: jid, task: id, recorded: (C('job').load(R(), jid).tasks[id] || {}).builder || null };
+      }
+      return fail('task start | show | verify | built | state', 'bad_input');
     }
     case 'reconcile': {
       const r = C('reconcile');
       if (sub === 'run') return r.run(R(), J);
       if (sub === 'continue') return r.cont(R(), J);
       if (sub === 'abort') return r.abort(R(), J);
-      return fail('reconcile run | continue | abort', 'bad_input');
+      if (sub === 'wave') {
+        // after each realize wave (P2.3): run by the integrator, relayed to the workflow
+        const ids = String(opt.tasks || '').split(',').map((x) => x.trim()).filter(Boolean);
+        if (!ids.length) fail('reconcile wave --tasks T1,T2 [--wave n]', 'bad_input');
+        const res = r.integrateWave(R(), J, ids, { wave: opt.wave ? Number(opt.wave) : null });
+        if (!res.ok) process.exitCode = 1;
+        return res;
+      }
+      return fail('reconcile run | continue | abort | wave --tasks T1,T2', 'bad_input');
     }
     case 'verify':
       if (sub !== 'run') fail('verify run', 'bad_input');
@@ -350,8 +373,37 @@ function run(argv) {
       return C('human').merged(R(), { jobId: J, commit: sub, channel: tty });
     case 'confirm':
       return C('human').confirmAc(R(), { jobId: J, ac: sub, channel: tty });
+    case 'env': {
+      const E = C('environment');
+      if (sub === 'show') return E.show(R());
+      if (sub === 'check') {
+        const r = E.check(R(), { proposed: Boolean(opt.proposed) });
+        if (!r.ok) process.exitCode = 1;
+        return r;
+      }
+      if (sub === 'propose') return E.propose(R(), { file: opt.file });
+      if (sub === 'set') return C('human').setEnvironment(R(), { file: opt.file, none: Boolean(opt.none), expectHash: pos[2] || null, channel: tty });
+      if (sub === 'prepare') {
+        // the environment set up in one worktree (task start does this for its builder)
+        const root = R();
+        const state = C('job').resolve(root, J);
+        const id = pos[2];
+        if (!id) fail('env prepare <T1|job>', 'bad_input');
+        const conf = E.load(root);
+        if (!conf || conf.name === 'none' || (!(conf.setup || []).length && !conf.services && !Object.keys(conf.env || {}).length && !conf.prefix)) return { job: state.id, task: id, ok: true, none: true };
+        const wt = id === 'job' ? C('tasks').ensureJobWorktree(root, state) : C('tasks').prepareWorktree(root, state, id);
+        const r = E.ensure(root, state, { taskId: id === 'job' ? null : id, wt });
+        if (!r.ok) process.exitCode = 1;
+        return { job: state.id, task: id, ok: r.ok, ...(r.ok ? { cached: r.cached, ran: r.ran, name: r.env ? r.env.name || null : null, env: E.processEnv(r.env, r.vars) } : { broken: r.broken, message: r.broken.reason }) };
+      }
+      return fail('env show | check [--proposed] | propose --file f | set [--file f | --none] [hash]', 'bad_input');
+    }
+    case 'finding':
+      if (!['accept', 'dismiss'].includes(sub) || !pos[2]) fail('finding accept|dismiss <id> --reason "…"', 'bad_input');
+      return C('human').settleFinding(R(), { jobId: J, id: pos[2], decision: sub, reason: opt.reason || pos.slice(3).join(' '), channel: tty });
     case 'reseal':
       C('human').requireHumanChannel(tty);
+      if (J || C('job').current(R())) C('human').confirmTyped(tty, J || C('job').current(R()), 'reseal it');
       return C('job').reseal(R(), J || C('job').current(R()));
     default:
       return fail(`Unknown command "${cmd}". Run factory help.`, 'bad_input');

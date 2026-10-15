@@ -1,0 +1,12 @@
+{
+  "ok": false,
+  "kind": "commands",
+  "route": [
+    "T2"
+  ],
+  "reconciled": false,
+  "failures": [
+    "`node tests/report.test.js` exited 1"
+  ],
+  "message": "The integrated build failed after wave 1: routed to T2."
+}

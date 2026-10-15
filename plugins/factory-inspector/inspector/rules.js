@@ -160,7 +160,60 @@ function evidenceChain(job) {
     const fp = s.bound && s.bound.fingerprint;
     if (fp && (!has('prove', fp, s.at) || !has('challenge', fp, s.at))) out.push(f({ rule: 'R5.shipped_unverified', class: 'deviation', severity: 'high', subject: `${job.id}:ship@${fp.slice(0, 12)}`, job: job.id, summary: 'Shipped a build without both a passing proof and a passing review on that exact build.', evidence: [s.at], question: 'How did ship pass its floors?' }));
   }
-  return out;
+  return [...out, ...lostFindings(job), ...doneWithoutBuilder(job)];
+}
+
+// Outcome integrity: a blocker/major finding left unverified by a review round (verifier
+// timeout, "unverifiable") that no later round settled (confirmed or refuted), yet the job
+// shipped or a later round passed. Older factory versions let such a finding vanish when the next
+// reviewer did not raise it again; now it is carried until settled.
+function lostFindings(job) {
+  const rounds = job.ledger.filter((e) => e.kind === 'step' && e.step === 'challenge' && e.detail && Array.isArray(e.detail.findings)).sort((a, b) => (a.at < b.at ? -1 : 1));
+  const ships = job.ledger.filter((e) => e.kind === 'step' && e.step === 'ship' && e.ok).map((e) => e.at);
+  const lost = [];
+  rounds.forEach((r, i) => {
+    for (const x of r.detail.findings.filter((y) => SERIOUS.has(y.severity) && y.status === 'unverified')) {
+      const later = rounds.slice(i + 1);
+      if (!later.length) continue;
+      // The same finding in a later round: the same issue (file and rule, summary or nearby
+      // line), or the carried copy of this one (its id, possibly renamed "code-1@r1"). An id
+      // alone proves nothing: ids restart every round.
+      const from = x.carried ? x.carried.from_round : r.detail.round || 1;
+      const same = (y) => sameIssue(x, y, false) || (baseId(y.id) === baseId(x.id) && (y.carried ? y.carried.from_round === from : !x.file && !y.file && String(x.summary || '').toLowerCase() === String(y.summary || '').toLowerCase()));
+      // settled by a verifier, or by the human (factory finding accept|dismiss, with a reason)
+      const settled = later.some((e) => e.detail.findings.some((y) => same(y) && ['confirmed', 'refuted', 'accepted', 'dismissed'].includes(y.status)));
+      const carried = later[later.length - 1].detail.findings.some((y) => same(y) && y.status === 'unverified');
+      if (settled || carried) continue;
+      const passedAfter = later.find((e) => e.ok);
+      const shipped = ships.find((t) => t > r.at);
+      if (passedAfter || shipped) lost.push({ x, round: r.detail.round || 1, at: (passedAfter && passedAfter.at) || shipped, shipped: Boolean(shipped) });
+    }
+  });
+  if (!lost.length) return [];
+  const seen = new Set();
+  const uniq = lost.filter((l) => !seen.has(l.x.id) && seen.add(l.x.id));
+  return [f({ rule: 'R5.unverified_finding_lost', class: 'deviation', severity: 'high', subject: job.id, job: job.id, latest: latest(uniq, 'at'), summary: `${uniq.length} serious finding(s) left unverified in a review round were never settled, yet ${uniq.some((l) => l.shipped) ? 'the job shipped' : 'a later round passed'}: ${uniq.slice(0, 4).map((l) => `${l.x.id} [${l.x.severity}] ${l.x.file || ''}${l.x.line ? `:${l.x.line}` : ''} (round ${l.round})`).join('; ')}.`, evidence: uniq.slice(0, 6).map((l) => `round ${l.round}: ${l.x.id}`), question: 'Did the verifier time out and the next reviewer not raise it again? Was the bug real?' })];
+}
+
+// Outcome integrity: a task counted as done although its builder did not finish: a tester
+// ran after its builder returned nothing (or blocked) in the same realize run, or the state
+// records a done task whose latest builder reply was not "done".
+function doneWithoutBuilder(job) {
+  const hits = [];
+  for (const e of job.ledger.filter((x) => x.kind === 'agents' && x.workflow === 'realize')) {
+    const lastBuild = {};
+    for (const a of e.agents || []) {
+      const m = /^(build|test) (\S+)/.exec(a.label || '');
+      if (!m) continue;
+      if (m[1] === 'build') lastBuild[m[2]] = a.outcome;
+      else if (a.outcome === 'pass' && lastBuild[m[2]] && lastBuild[m[2]] !== 'done') hits.push({ task: m[2], why: `tested and passed after its builder came back ${lastBuild[m[2]]}`, at: e.at });
+    }
+  }
+  for (const [id, t] of Object.entries((job.state && job.state.tasks) || {})) {
+    if (t.outcome === 'done' && t.builder && t.builder.outcome !== 'done') hits.push({ task: id, why: `marked done, but its latest builder reply was ${t.builder.outcome}`, at: t.outcome_at || null });
+  }
+  if (!hits.length) return [];
+  return [f({ rule: 'R5.done_without_builder', class: 'deviation', severity: 'high', subject: job.id, job: job.id, latest: latest(hits.filter((h) => h.at), 'at'), summary: `${hits.length} task result(s) in ${job.id} counted work its builder did not finish: ${hits.slice(0, 4).map((h) => `${h.task} ${h.why}`).join('; ')}.`, evidence: [...new Set(hits.map((h) => h.task))], question: 'Was a stale branch verified (a crashed, timed-out or blocked builder)? Does the task branch hold its dependencies?' })];
 }
 
 // ---------------------------------------------------------------- R6 loop accounting
@@ -194,14 +247,14 @@ function loops(job) {
 
 // ---------------------------------------------------------------- R7 driver fidelity
 // clarify status only prints the clarify ledger.
-const READ_ONLY = new Set(['next', 'doc', 'why', 'job', 'contract', 'help', 'doctor', 'finalize', 'recipe', 'telemetry', 'use', 'lessons:list', 'task:show', 'distill:context', 'plan:validate', 'report', 'init', 'clarify:status']);
+const READ_ONLY = new Set(['next', 'doc', 'why', 'job', 'contract', 'help', 'doctor', 'finalize', 'recipe', 'telemetry', 'use', 'lessons:list', 'task:show', 'distill:context', 'plan:validate', 'report', 'init', 'clarify:status', 'env:show', 'env:check', 'env:propose']);
 // Human-only commands that went through (the CLI accepted your terminal): you acting, judged by
 // their human.* decision, not a driver deviation. A refused attempt is still judged.
-const HUMAN_CMDS = new Set(['clarify:split']);
-const MUTATING_IN_WAIT = new Set(['record', 'ship', 'task:start', 'task:verify', 'task:state', 'reconcile', 'verify', 'evidence', 'plan:from-contract', 'close', 'epic', 'amend', 'followup', 'distill:done', 'wfargs']);
+const HUMAN_CMDS = new Set(['clarify:split', 'finding', 'env:set']);
+const MUTATING_IN_WAIT = new Set(['record', 'ship', 'task:start', 'task:verify', 'task:built', 'task:state', 'reconcile', 'verify', 'evidence', 'plan:from-contract', 'close', 'epic', 'amend', 'followup', 'distill:done', 'wfargs']);
 
 function cmdKey(e) {
-  if (e.cmd === 'task' || e.cmd === 'plan' || e.cmd === 'distill' || e.cmd === 'lessons' || e.cmd === 'clarify') return `${e.cmd}:${e.sub}`;
+  if (['task', 'plan', 'distill', 'lessons', 'clarify', 'env', 'reconcile'].includes(e.cmd)) return `${e.cmd}:${e.sub}`;
   return e.cmd;
 }
 
@@ -209,7 +262,7 @@ function expectationsFor(d) {
   const wf = (workflow, config) => ({
     required: [(e) => e.cmd === 'wfargs' && e.workflow === workflow && (!config || e.config === config), (e) => e.cmd === 'record' && (e.workflow === workflow || !e.workflow) && (!config || !e.config || e.config === config)],
     requiredLabel: `factory wfargs ${workflow}${config ? ` --config ${config}` : ''} and factory record`,
-    allowed: new Set(['answer', 'clarify:note', 'park', 'task:start', 'task:verify', 'task:state', 'reconcile', 'evidence', 'plan:validate', 'contract', 'wfargs', 'record']),
+    allowed: new Set(['answer', 'clarify:note', 'park', 'task:start', 'task:verify', 'task:built', 'task:state', 'env:prepare', 'reconcile', 'evidence', 'plan:validate', 'contract', 'wfargs', 'record']),
   });
   if (d.action === 'workflow') return wf(d.workflow, d.config);
   if (d.action === 'skill') {
@@ -505,6 +558,7 @@ function jobHealth(job, L, now) {
 // a minor finding matches by rule or summary only.
 const SERIOUS = new Set(['blocker', 'major']);
 const reportedSerious = (x) => SERIOUS.has(x.severity) || (x.notes || []).some((n) => /^downgraded from (blocker|major)/.test(String(n)));
+const baseId = (id) => String(id || '').replace(/@r\d+$/, '');
 function sameIssue(a, b, minor) {
   if (!a.file || a.file !== b.file) return false;
   const rule = a.rule && a.rule === b.rule && a.lane === b.lane;

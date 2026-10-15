@@ -22,7 +22,7 @@ async function runWorkflow(root, next, agents) {
   if (next.scope) args.push('--scope', next.scope);
   const brief = F.cli(root, args, { allowFail: false });
   // The brief must survive being passed as a string, the way the Workflow tool passes args.
-  const { result } = await H.run(path.join(F.PLUGIN, 'workflows', `${next.workflow}.js`), JSON.stringify(brief), (prompt, opts) => agents(opts.agentType, instructions(prompt)));
+  const { result } = await H.run(path.join(F.PLUGIN, 'workflows', `${next.workflow}.js`), JSON.stringify(brief), (prompt, opts) => agents(opts.agentType, instructions(prompt), prompt));
   return F.record(root, result);
 }
 
@@ -32,7 +32,7 @@ test('bug@low through the real workflow scripts', async () => {
   fs.writeFileSync(path.join(F.jobDir(root, J), 'contract.md'), F.contractText());
 
   // Agents are told apart by the factory agent type the workflow started them as.
-  const agents = (type, full) => {
+  const agents = (type, full, raw) => {
     if (type === 'factory:intent-analyst') return { focus: 'x', questions: [] };
     if (type === 'factory:judge') return { questions: [], dismissed: [] };
     if (type === 'factory:god-eye') return { verdict: 'approve', items: [] };
@@ -47,6 +47,7 @@ test('bug@low through the real workflow scripts', async () => {
       const v = F.cli(root, ['task', 'verify', 'T1']);
       return { pass: v.pass, evidence_id: v.evidence_id, failures: v.failures.map((f) => f.cmd) };
     }
+    if (type === 'factory:integrator' && /reconcile wave/.test(raw)) return F.relayWave(root, raw);
     if (type === 'factory:integrator') {
       const r = F.cli(root, ['reconcile', 'run']);
       return { status: r.status === 'merged' ? 'merged' : 'failed', summary: r.status };
@@ -82,7 +83,8 @@ test('bug@low through the real workflow scripts', async () => {
   const state = F.cli(root, ['job', 'show']);
   assert.ok(state.counters.agent_runs >= 8, 'agent runs are counted from envelopes');
   const steps = F.cli(root, ['why']).decisions.map((d) => d.chosen);
-  for (const s of ['clarify', 'H1', 'ground', 'decompose', 'realize', 'reconcile', 'prove', 'challenge', 'ship']) assert.ok(steps.includes(s), `path includes ${s}`);
+  for (const s of ['clarify', 'H1', 'ground', 'decompose', 'realize', 'prove', 'challenge', 'ship']) assert.ok(steps.includes(s), `path includes ${s}`);
+  assert.ok(!steps.includes('reconcile'), 'realize integrated each wave and recorded reconcile itself');
   // every workflow run left a sealed roster of the agents it started
   const ledger = fs.readFileSync(path.join(F.jobDir(root, F.cli(root, ['job', 'show']).id), 'ledger.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
   const ran = ledger.filter((e) => e.kind === 'agents').flatMap((e) => e.agents.map((a) => a.agent_type));

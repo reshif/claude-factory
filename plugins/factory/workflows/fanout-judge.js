@@ -458,22 +458,27 @@ if (brief.config === 'decide') {
 if (brief.config === 'challenge') {
   const lanes = inputs.map((x) => ({ lane: x.id, findings: x.output.findings || [] }))
   const serious = lanes.flatMap((l) => l.findings.filter((f) => (brief.verifier.severities || ['blocker', 'major']).includes(f.severity)).map((f) => ({ ...f, lane: l.lane })))
+  // Findings an earlier round left unverified are re-verified every round until settled (a
+  // verifier that returns nothing is retried once, like every fanned-out agent). Claude Code's
+  // Workflow tool sets no agent time cap, so there is no cap to scale for them.
+  const carried = brief.carried || []
   let verifications = []
-  if (serious.length) {
-    phase(`challenge: verify ${serious.length} finding(s)`)
-    const items = serious.map((f) => ({
+  if (serious.length || carried.length) {
+    phase(`challenge: verify ${serious.length} finding(s)${carried.length ? ` + ${carried.length} carried` : ''}`)
+    const item = (f, label) => ({
       prompt: brief.verifier.prompt_template.replace('{{finding}}', JSON.stringify(f, null, 2)),
       schema: brief.verifier.schema,
       agent_type: brief.verifier.agent_type,
       model: brief.verifier.model,
-      label: `verify ${f.id}`,
-    }))
+      label,
+    })
+    const items = [...serious.map((f) => item(f, `verify ${f.id}`)), ...carried.map((f) => item(f, `verify ${f.id} (carried from round ${f.from_round})`))]
     const res = await fan(items)
-    verifications = res.map((r, i) => (r ? { ...r, finding_id: serious[i].id } : null)).filter(Boolean)
+    verifications = res.map((r, i) => (r ? (i < serious.length ? { ...r, finding_id: serious[i].id } : { ...r, finding_id: carried[i - serious.length].id, carried: true }) : null)).filter(Boolean)
   }
   const confirmed = verifications.filter((v) => v.status === 'confirmed').length
-  const unsure = verifications.filter((v) => v.status === 'unverifiable').length
-  const summary = `${lanes.length}/${brief.fanout.length} lane(s) reviewed; ${serious.length} serious finding(s), ${confirmed} confirmed${unsure ? `, ${unsure} unverifiable (still blocking)` : ''}.${degraded.length ? ` Missing lanes: ${degraded.join(', ')}.` : ''}`
+  const unverifiable = verifications.filter((v) => v.status === 'unverifiable').length
+  const summary = `${lanes.length}/${brief.fanout.length} lane(s) reviewed; ${serious.length} serious finding(s)${carried.length ? ` and ${carried.length} carried unverified` : ''}, ${confirmed} confirmed${unverifiable ? `, ${unverifiable} unverifiable (still blocking)` : ''}.${degraded.length ? ` Missing lanes: ${degraded.join(', ')}.` : ''}`
   return envelope(degraded.length ? 'degraded' : 'ok', summary, { lanes, degraded, verifications }, { fingerprint: brief.fingerprint || null, lanes_requested: brief.lanes_requested || null })
 }
 

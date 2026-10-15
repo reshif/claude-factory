@@ -3,7 +3,8 @@
 // vector, applies the decision table, and falls back to recipe order. It writes one
 // decision record per routing decision. No LLM decides the next step.
 
-const { sha256, stableStringify, nowIso } = require('../lib/util');
+const { sha256, stableStringify, nowIso, readJson } = require('../lib/util');
+const { jobPaths } = require('../lib/paths');
 const job = require('./job');
 const steps = require('./steps');
 const alignment = require('./alignment');
@@ -23,7 +24,10 @@ function park(root, state, reason, from) {
 // One owner per finding: the task whose commit last wrote the finding's line (git blame on
 // the job branch, then that commit's Factory-Task trailer, else the first task in build order
 // whose branch holds the commit); without a line, the first task in build order whose paths
-// cover the file. Only a finding no task's paths cover goes to every task.
+// cover the file. Only a finding no task's paths cover goes to every task, and to each of
+// their fix briefs (owner '*'): one integration task with widened paths would need an
+// amendment the human approves, so the reopened builders get it and say blocked
+// (needs_paths) when it lies outside their paths.
 function blameOwner(ctx, f, tasks) {
   const { root, state } = ctx;
   if (!f.file || !f.line || !state.branch) return null;
@@ -39,7 +43,7 @@ function blameOwner(ctx, f, tasks) {
 
 function ownersOfFindings(ctx, findings) {
   const all = steps.planTasks(ctx);
-  const order = require('./plan').buildOrder(all);
+  const order = require('./plan').buildOrder(all, (readJson(jobPaths(ctx.root, ctx.state.id).plan, {}) || {}).interfaces);
   const tasks = order.map((id) => all.find((t) => t.id === id)).filter(Boolean);
   const owners = new Set();
   const byFinding = {};
@@ -52,7 +56,12 @@ function ownersOfFindings(ctx, findings) {
     if (owner) {
       owners.add(owner);
       if (f.id) byFinding[f.id] = owner;
-    } else tasks.forEach((t) => owners.add(t.id));
+    } else {
+      // No owner (no file, or a file no task's paths cover): every task is reopened and the
+      // finding goes to every reopened builder ('*'), never to none of them.
+      tasks.forEach((t) => owners.add(t.id));
+      if (f.id) byFinding[f.id] = '*';
+    }
   }
   return { owners: [...owners], byFinding };
 }
@@ -243,6 +252,21 @@ function localReverify(ctx, s) {
 }
 
 function decide(root, jobId) {
+  const r = route(root, jobId);
+  // No build environment confirmed yet: the proposal rides along from H1 to the build, for
+  // the gate view to show and the human to confirm.
+  if (r.status === 'active' && (r.action === 'gate' || ['clarify', 'ground', 'decide', 'decompose', 'realize'].includes(r.step))) {
+    try {
+      const en = require('./environment').notice(root);
+      if (en) r.environment = en;
+    } catch {
+      /* the notice is advice; routing never depends on it */
+    }
+  }
+  return r;
+}
+
+function route(root, jobId) {
   let state = job.resolve(root, jobId);
   const out = (o) => ({ job: state.id, title: state.title, status: state.status, recipe: `${state.recipe.id}@v${state.recipe.version}`, risk: state.risk, ...o });
 

@@ -632,6 +632,7 @@ function split(root, { jobId, ref, alias, channel }) {
   const a = (parent.aliases || []).find((x) => x.id === aliasId);
   if (!a) fail(`${aliasId} is not folded into ${parent.id}${(parent.aliases || []).length ? ` (its aliases: ${parent.aliases.map((x) => x.id).join(', ')})` : ' (it has no aliases)'}.`, 'bad_input');
   if (data.issues.some((u) => u.id === aliasId)) fail(`${aliasId} is already an issue of its own.`, 'bad_input');
+  require('./human').confirmTyped(channel, state.id, `split ${aliasId} out of ${parent.id}`);
   const round = (state.counters.clarify_rounds || 0) + 1;
   parent.aliases = parent.aliases.filter((x) => x.id !== aliasId);
   event(parent, round, 'split', 'user', `${aliasId} is a different issue`);
