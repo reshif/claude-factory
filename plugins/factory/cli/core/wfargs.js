@@ -517,7 +517,7 @@ function realize(root, state, ctx, action) {
   const jc = jobContext(root, state);
   // A builder's time budget: guidance only (Claude Code's Workflow tool sets no agent time cap),
   // so it commits increments and leaves a `wip:` commit when it stops early.
-  const minutes = Math.max(1, Number((state.policy.limits || {}).builder_minutes) || 30);
+  const minutes = Math.max(1, Number((state.policy.limits || {}).builder_minutes !== undefined ? state.policy.limits.builder_minutes : (require('./policy').load(root).limits || {}).builder_minutes) || 30);
   // The build environment, as the builder should know it: task start sets it up in the worktree
   // (cached by its lockfiles) and prints the shell prefix that puts a command inside it; task
   // verify runs every verify command inside it.
@@ -574,7 +574,9 @@ function realize(root, state, ctx, action) {
     max_parallel_tasks: state.policy.limits.max_parallel_tasks,
     // merge each wave into the job branch and run the job's checks before the next (P2.3): the
     // CLI's `reconcile wave` does it, relayed by the integrator (a workflow cannot run it)
-    integrate_each_wave: state.policy.limits.integrate_each_wave !== false,
+    // A job whose policy snapshot predates the key (started before the upgrade) takes it from the
+    // live .factory/policy.json, so it can be turned off for a job already in flight.
+    integrate_each_wave: (state.policy.limits.integrate_each_wave !== undefined ? state.policy.limits.integrate_each_wave : (require('./policy').load(root).limits || {}).integrate_each_wave) !== false,
     integrator: { ...agentSpec(state, 'integrator'), schema: schema('integrate-wave') },
     integrate_prompt: prompt(
       'integrator',

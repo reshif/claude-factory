@@ -470,3 +470,28 @@ test('P2.3: a task whose branch only points into the job branch (blocked, restar
   const rec = core('ledger').lastStep(root, J, 'integrate');
   assert.deepEqual(rec.detail.commands.map((c) => c.cmd), ['node tests/add.test.js'], 'T2 is not integrated: its command does not run');
 });
+
+test('parallel task updates (builders\' task start, the runner\'s verify for several tasks) never lose each other: state writes are locked', async () => {
+  const root = F.makeRepo();
+  const J = grounded(root);
+  const ids = Array.from({ length: 24 }, (_, i) => `T${i + 1}`);
+  customPlan(root, J, ids.slice(0, 6).map((id) => ({ id, objective: `task ${id}`, allowed_paths: [`src/${id}.js`], criteria_ids: ['AC-1'], verify_commands: VC })));
+  const { spawn } = require('child_process');
+  const one = (id) => new Promise((res) => spawn('node', [F.BIN, 'task', 'state', id, 'exhausted', '--reason', `r-${id}`, '--job', J], { cwd: root, env: { ...process.env, FACTORY_ROOT: '' } }).on('close', res));
+  for (let round = 0; round < 3; round++) await Promise.all(ids.map(one));
+  const st = stateOf(root, J);
+  assert.deepEqual(ids.filter((id) => (st.tasks[id] || {}).outcome_reason === `r-${id}`), ids, 'every parallel update is kept');
+});
+
+test('upgrade: a job whose policy snapshot predates integrate_each_wave takes it from the live policy', () => {
+  const root = F.makeRepo();
+  const J = grounded(root);
+  customPlan(root, J, [T1]);
+  F.cli(root, ['next']);
+  const s = stateOf(root, J);
+  delete s.policy.limits.integrate_each_wave; // as a 0.5.3 job's snapshot
+  core('job').save(root, s);
+  assert.equal(F.cli(root, ['wfargs', 'realize']).integrate_each_wave, true, 'on by default');
+  fs.writeFileSync(path.join(root, '.factory', 'policy.json'), JSON.stringify({ limits: { integrate_each_wave: false } }));
+  assert.equal(F.cli(root, ['wfargs', 'realize']).integrate_each_wave, false, 'the live policy turns it off for the job in flight');
+});

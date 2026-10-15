@@ -20,7 +20,7 @@ The CLI is on your PATH as `factory` (from this plugin's `bin/`). If it isn't, u
 ## The loop
 Repeat until you reach a stop point:
 
-1. Run `factory next` and read `action`. Running it again from the same state is harmless (it returns the same decision, with `requery: true`), but don't poll it: run it when a step is finished or the user has replied.
+1. Run `factory next` and read `action`. Running it again from the same state is harmless (it returns the same decision, with `requery: true`), but don't poll it: run it when a step is finished or the user has replied. If it carries `environment` (no build environment is confirmed for this repository), show its `message` once; at a gate the gate skill shows the proposal in full. Never confirm it yourself: its setup runs on the user's machine.
 
 | action | what you do |
 |---|---|
