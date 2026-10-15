@@ -1,0 +1,9 @@
+{
+  "finding_id": "code-1",
+  "status": "unverifiable",
+  "evidence": [
+    "src/api/orders.js:42 reads req.body.items",
+    "The only route to the handler needs a live payment provider; no test reaches it here"
+  ],
+  "reason": "Whether items can be missing depends on the provider callback, which cannot be run or read here."
+}

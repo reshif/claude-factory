@@ -80,7 +80,9 @@ test('standard@medium: ADR → H2, plan → H3, three lanes, floors before ship'
   let brief = F.cli(root, ['wfargs', 'fanout-judge', '--config', 'decide']);
   assert.equal(brief.fanout.filter((f) => f.id.startsWith('option')).length, 3);
   assert.ok(!brief.fanout.some((f) => f.id === 'threat-modeler'));
-  assert.match(fs.readFileSync(brief.judge.prompt.split('\n')[1].trim(), 'utf8'), /templates\/docs\/adr\.md[\s\S]*Mermaid architecture diagram[\s\S]*doc check/, 'the architect is told which template to follow and how to check it');
+  // the brief names the template and the check command; the architect's own rules (agents/architect.md) say how
+  assert.match(fs.readFileSync(brief.judge.prompt.split('\n')[1].trim(), 'utf8'), /templates\/docs\/adr\.md[\s\S]*doc check/, 'the architect is told which template to follow and how to check it');
+  assert.match(fs.readFileSync(path.join(F.PLUGIN, 'agents', 'architect.md'), 'utf8'), /Architecture diagram[\s\S]*mermaid flowchart[\s\S]*doc check command the brief gives you/);
   // an ADR without the template's sections or an architecture diagram is sent back
   const adrPath = path.join(F.jobDir(root, J), 'adr-001-math.md');
   F.write(F.jobDir(root, J), 'adr-001-math.md', '# ADR 001\nDecision: separate modules.\n');
@@ -120,7 +122,10 @@ test('standard@medium: ADR → H2, plan → H3, three lanes, floors before ship'
   brief = F.cli(root, ['wfargs', 'fanout-judge', '--config', 'decide']);
   const optText = fs.readFileSync(brief.fanout[0].prompt.split('\n')[1].trim(), 'utf8');
   assert.match(optText, /not the first design round[^\n]*adr-001-math\.md/, 'a re-decide hands over the current design files');
-  assert.match(optText, /## Working with files[\s\S]*Never run python, node/, 'agents are told to use Read/Write/Edit, not scripts');
+  assert.match(optText, /## Your tools\n- You have Read, Grep and Glob, and nothing else\./, 'the brief names only the tools the role has');
+  assert.ok(!/\b(Write|Edit|Bash)\b/.test(optText.split('## Your tools')[1].split('## Your output')[0]), 'a read-only, shell-less role is never told to Write, Edit or use Bash');
+  const archText = fs.readFileSync(brief.judge.prompt.split('\n')[1].trim(), 'utf8');
+  assert.match(archText, /## Your tools[\s\S]*Change files only with Write and Edit[\s\S]*Never run python, node/, 'writers are told to use Write/Edit, not scripts');
   F.record(root, F.envelope(brief, 'ok', { options: [], degraded: [], judge: { kind: 'adr', paths: [path.join(F.jobDir(root, J), 'adr-001-math.md')], summary: 's' }, critiques: [{ verdict: 'approve', items: [] }] }));
   assert.equal(next(root).step, 'H2');
   F.reply(root, 'approve');
@@ -167,7 +172,8 @@ test('full@high: threat model required, H2 and H3 human, HS before ship, trial r
   assert.equal(n.threat_model, true);
   let brief = F.cli(root, ['wfargs', 'fanout-judge', '--config', 'decide']);
   assert.ok(brief.fanout.some((f) => f.id === 'threat-modeler'));
-  assert.match(fs.readFileSync(brief.fanout.find((f) => f.id === 'threat-modeler').prompt.split('\n')[1].trim(), 'utf8'), /templates\/docs\/threat-model\.md[\s\S]*subgraph[\s\S]*doc check/);
+  assert.match(fs.readFileSync(brief.fanout.find((f) => f.id === 'threat-modeler').prompt.split('\n')[1].trim(), 'utf8'), /templates\/docs\/threat-model\.md[\s\S]*doc check/);
+  assert.match(fs.readFileSync(path.join(F.PLUGIN, 'agents', 'threat-modeler.md'), 'utf8'), /trust boundary drawn as a subgraph[\s\S]*doc check command the brief gives you/);
   F.write(F.jobDir(root, J), 'adr-001-x.md', F.adrText({ job: J, acs: ['AC-1', 'AC-2'], threats: ['TH-1'] }));
   const noThreat = F.record(root, F.envelope(brief, 'ok', { options: [], degraded: [], judge: { kind: 'adr', paths: [path.join(F.jobDir(root, J), 'adr-001-x.md')], summary: 's' }, critiques: [{ verdict: 'approve', items: [] }] }, { threat_model: true }));
   assert.equal(noThreat.error, true);

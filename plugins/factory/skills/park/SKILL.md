@@ -1,6 +1,6 @@
 ---
 name: park
-description: Explain why a factory job is parked and what the user can do (resume with one more round, cancel, abandon). Used by factory:start when `factory next` returns parked.
+description: Explains why a factory job is parked and which replies move it on. Used by factory:start when `factory next` returns action parked.
 user-invocable: false
 ---
 # Parked
@@ -17,3 +17,10 @@ The CLI parked the job (`reason` in the `factory next` output). Parking is how t
      - **`waive ci_reverify <reason>`** — only when the CI re-verify floor can't be met (no `factory-gate` workflow and no local merge to re-verify)
      - or tell you what to change (you may then need **factory:amend**).
 3. **Stop.** After the hook applies their reply, continue with `factory next`.
+
+## Example
+For `reason: "Review rounds used up (2) with confirmed serious findings still open."`:
+
+> **J-0004 is parked.** Two review rounds ran and one confirmed major finding is still open: `src/cart/total.js` rounds before applying the discount (finding code-2).
+> I'd suggest one more round — the fix is a one-line change and the last round confirmed nothing else.
+> Reply **`resume`** to give the review one more round, **`cancel job`** or **`abandon job`** to stop (files are kept), or tell me what to change.

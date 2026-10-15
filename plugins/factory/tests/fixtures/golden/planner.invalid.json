@@ -1,0 +1,8 @@
+{
+  "valid": false,
+  "errors": [
+    "AC-2 is not covered by any task"
+  ],
+  "path": ".factory/jobs/J-0007/plan.json",
+  "summary": "2 tasks; AC-2 still has no task after three validate runs."
+}

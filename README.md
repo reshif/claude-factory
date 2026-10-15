@@ -4,8 +4,8 @@ Turns a request into a verified, merged change. Claude does the work through spe
 
 | Plugin | Version | What it is |
 |---|---|---|
-| `factory` | 0.10.1 | The orchestrator: skills, hooks, the `factory` CLI, workflows, 19 agents, recipes, templates and the console |
-| `factory-inspector` | 0.2.1 | An independent auditor: checks each job against the rulebook it declared and the factory's health (rules R1–R19, R21, R22) |
+| `factory` | 0.11.0 | The orchestrator: skills, hooks, the `factory` CLI, workflows, agents, recipes, templates and the console |
+| `factory-inspector` | 0.3.0 | An independent auditor: checks each job against the rulebook it declared and the factory's health |
 
 ## How it fits together
 
@@ -38,14 +38,14 @@ flowchart TB
     s1 --> s2 --> s3 --> s4 --> s5 --> s6 --> s7
   end
 
-  agents["<b>Workflows + 19 agents</b><br/>ground · fanout-judge · decompose · realize · reconcile<br/>analysts · architect · planner · builders · testers · reviewers"]
+  agents["<b>Workflows + agents</b><br/>ground · fanout-judge · decompose · realize · reconcile<br/>analysts · architect · planner · builders · testers · reviewers"]
 
   record["<b>factory record</b><br/>validates the result · rejects stale ones · checks docs against templates<br/>seals it into the ledger · then back to factory next"]:::cli
 
   store[/"<b>.factory/</b> in your repo · contract · ADRs · plan · ledger · decisions · events · lessons"/]:::art
 
   console["<b>Console</b><br/>factory console --serve<br/>live board · wire · line map · story"]
-  inspector["<b>Inspector</b><br/>plugin factory-inspector<br/>rules R1–R19 · runs when a job ends"]
+  inspector["<b>Inspector</b><br/>plugin factory-inspector<br/>conformance and health rules · runs when a job ends"]
 
   you --> skills
   you --> hooks
@@ -214,7 +214,7 @@ Run `factory console`, or `/factory:console` in Claude Code, then open `.factory
   ![A job's story](plugins/factory/console/dev/screenshots/job-story.png)
 - **Live.** With `--serve`, the page gets each change over server-sent events. Only the rows whose job changed are redrawn, with a short highlight, and a row that changes group slides there. A new gate brings a toast with the reply to copy, and, if you turn on the bell, a desktop notification. On an open job, new steps play in if you are watching the latest moment, and your place is kept if you are scrubbing back. The server listens on this machine only (`http://127.0.0.1:4477/`, `--port 0` for any free port), refuses foreign `Host` headers and is read-only.
 - **Keys.** `j`/`k` move, `Enter` opens, `Esc` goes back, `/` filters, `⌘K` (or ctrl-K) opens a palette to jump to any job or view, `1`–`5` toggle the tiles, `g w` opens the next job waiting for you, `?` lists them all. The view, filters and open job are in the URL, so a link brings you back to the same place.
-- **Recipe map and Crew.** *Recipe map* is the whole factory as a floor plan for any recipe; *Crew* lists the 19 agents and how often each ran.
+- **Recipe map and Crew.** *Recipe map* is the whole factory as a floor plan for any recipe; *Crew* lists every agent and how often each ran.
 - **Where the data comes from.** Each workflow returns a roster of every agent it started, and `factory record` seals it into the ledger as an `agents` entry tied to the routing decision. Hooks add timings. Parks, amendments, follow-ups, hook errors and refused "done" claims come from the event log and the job's own records. An agent that started but never stopped counts as running for two hours at most, and only while its job is active; after that it shows as stale.
 - **Options.** `--job J-0003` makes the page for one job, `--out file.html` writes it elsewhere, `--label "…"` adds a banner, and `--data file.json` also writes the data as JSON. Dark is the default look when your system is dark; the half-moon button switches theme.
 - **Sample.** `node plugins/factory/console/dev/make-sample.js <dir>` builds a realistic sample: nine jobs over about three days on a simulated clock. They run through the real CLI, workflows, hooks and inspector, with scripted agents. More screenshots are in [`plugins/factory/console/dev/screenshots/`](plugins/factory/console/dev/screenshots/).
@@ -223,8 +223,8 @@ Run `factory console`, or `/factory:console` in Claude Code, then open `.factory
 
 `factory-inspector` audits the factory from the outside. It imports none of the factory's code: it reads `.factory/` directly, with its own seal check, so a bug in the factory can't hide itself. It never blocks or changes a job; its findings are questions for you, kept in `.factory/inspect/register.json`.
 
-- **Per job (R1–R9):** forged records, the wrong recipe, steps out of order, gates approved without being shown, review on an unproven build, loops past caps, Claude not doing what `factory next` said, the same situation routed differently, recurring friction.
-- **Factory health (R10–R19):** hook failures, torn log lines, repeated guard denials / blocked "done" claims / refused replies, CLI failures and crashes, degraded workflows and agent retries, agents that never stopped, repeated parks, idle jobs, slow gate replies, and clarify parking on an unclear intent or overrunning its question budget. **R21/R22:** a confirmed review finding that came back in a later round, and a reconcile that would have dropped merged or fixed lines. Thresholds live in `.factory/inspect/config.json` (`limits`, `rules_off`).
+- **Per job:** forged records, the wrong recipe, steps out of order, gates approved without being shown, review on an unproven build, loops past caps, Claude not doing what `factory next` said, the same situation routed differently, recurring friction.
+- **Factory health:** hook failures, torn log lines, repeated guard denials / blocked "done" claims / refused replies, CLI failures and crashes, degraded workflows and agent retries, agents that never stopped, repeated parks, idle jobs, slow gate replies, and clarify parking on an unclear intent or overrunning its question budget. **R21/R22:** a confirmed review finding that came back in a later round, and a reconcile that would have dropped merged or fixed lines. Thresholds live in `.factory/inspect/config.json` (`limits`, `rules_off`).
 - **When it runs:** whenever a job ends — closed, cancelled or abandoned — however it ended: right after Claude runs the command, at the end of the turn if you ended it with a chat reply, or at the next session start if you ended it from your terminal. On demand with `/factory-inspector:inspect` (`active` also covers running jobs). Once a recipe has a long clean streak it suggests sampling, then off.
 
 Rule table and CLI: [`plugins/factory-inspector/README.md`](plugins/factory-inspector/README.md).
@@ -287,7 +287,7 @@ Then `/factory:start <request>` initialises the repo again. Keep `~/.config/soft
 plugins/factory/
   .claude-plugin/plugin.json        plugin manifest (version)
   skills/                           start · intake · clarify · gate · ship · distill · amend · park · why · console · review
-  agents/                           19 agents: intent-analyst, judge, god-eye, researcher, option-generator, threat-modeler,
+  agents/                           intent-analyst, judge, god-eye, researcher, option-generator, threat-modeler,
                                     architect, planner, slicer, builder, tester, integrator, code/test/security/ux-reviewer,
                                     finding-verifier, epic-reviewer, lesson-writer
   hooks/                            hooks.json + the scripts in the table above
@@ -302,19 +302,49 @@ plugins/factory/
   docs/                             ARCHITECTURE · DESIGN-v2 · RECIPES · FLOORS · DOCS
   tests/                            end-to-end and unit tests
 plugins/factory-inspector/
-  inspector/                        observe · rules (R1–R19) · register · config · io
+  inspector/                        observe · rules · register · config · io
   hooks/ · skills/inspect/ · bin/factory-inspect · tests/
 ```
 
 ## Develop / test
 
 ```bash
-cd plugins/factory && npm test             # 82 tests: end-to-end jobs, routing, caps, guard, seals, hooks, workflows, schemas, console, docs, job correctness
-cd plugins/factory-inspector && npm test   # 20 tests
+cd plugins/factory && npm test             # end-to-end jobs, routing, caps, guard, seals, hooks, workflows, schemas, console, docs, job correctness, quality lints
+cd plugins/factory-inspector && npm test
 node plugins/factory/console/dev/make-sample.js /tmp/sample   # a realistic nine-job sample to look at
 ```
 
 The tests drive the real CLI against throwaway git repos, play the agents and the human, and run the workflow scripts in a harness that emulates the Workflow runtime. Bump the version in both `plugin.json` and `package.json` with every change you ship, so installs can tell versions apart.
+
+## Quality and evals
+
+Prompt quality is measured, not assumed. Four tiers, cheapest first ([`.github/workflows/test.yml`](.github/workflows/test.yml), [`.github/workflows/evals.yml`](.github/workflows/evals.yml)):
+
+| Tier | What | Where | When |
+|---|---|---|---|
+| 0 · static lints | Skill descriptions are triggers (a "Use when / Used by" clause, a length budget, no step sequence, a "Not for…" scope on user-invocable skills); every `factory …` / `factory-inspect …` command, subcommand and flag a skill names exists in that CLI's help; `factory:<name>` references and `references/` files resolve, each with a load condition; no hard-coded component counts or rule-id ranges in skills or docs; the eval cases keep the eval floor and match their sets; `claude plugin validate --strict` | `plugins/factory/tests/quality-lint.test.js`, `tests/evals.test.js`; the `validate` job | every push and PR, no model cost |
+| 1 · contracts | Golden outputs per agent validated against the output schemas; agent bodies name every schema field; brief tools match `tools:` | `tests/contracts.test.js`, `tests/agents-packaging.test.js` | every push and PR |
+| 2 · triggering | ~8 should-load and ~8 near-miss prompts each for start, console, review, why and inspect (plus amend); must-not-fire cases (a direct "review this code" must not start `factory:code-reviewer` or any other factory agent); dispatch cases (a mocked `factory next` result must load the right step skill) | `plugins/*/evals/{trigger,agents,dispatch}/` | nightly; changed components on PRs |
+| 3 · outcomes | Fixture repos with planted defects — SQL injection, a test that mocks away the code under test, a missing loading state, an off-by-one, an ambiguous contract, a clean control — and a prompt-injection comment in every reviewed change; graded on what the agent found | `plugins/factory/evals/outcome/`, `evals/fixtures/` | nightly |
+| 4 · telemetry | `factory telemetry report` adds **Quality signals**: null-result and degraded rate per role (from the sealed agent rosters), finding-verifier refute and unverifiable rate per lane, park reasons, God Eye's revise rate; `/factory:review` walks through them | `cli/core/telemetry.js`, `skills/review` | monthly review |
+
+Tiers 2 and 3 use Claude Code's `claude plugin eval` (CLI pinned to 2.1.299; the case format sits under `experimental.evals` in each `plugin.json`). Every case runs 3 times, with and without the plugin (ablation), so the report shows the plugin's uplift (Δ) as well as its score. The cases are generated from hand-written sets — edit `evals/sets/*.json`, then regenerate:
+
+```bash
+node plugins/factory/evals/tools/generate.js plugins/factory            # trigger, agents, dispatch, outcome cases
+node plugins/factory/evals/tools/generate.js plugins/factory-inspector
+```
+
+Run them yourself (this costs model usage; results go to `evals/results/`, which git ignores):
+
+```bash
+claude plugin eval plugins/factory --tag skill:start --runs 1 --no-publish          # pilot one skill
+claude plugin eval plugins/factory --runs 3 --threshold 0.67 --max-cost-usd 40 \
+  --judge-model sonnet --scaffold --trust-plugin --no-publish                        # what the nightly job runs
+claude plugin eval plugins/factory-inspector --runs 3 --no-publish
+```
+
+`--scaffold` is needed for Tier 3: each outcome case stages its fixture (base commit + the change under review, with the diff in `CHANGE.diff`) through `evals/fixtures/stage.sh`. The eval jobs run only when the repository has an `ANTHROPIC_API_KEY` secret; pull requests smoke-run (`--runs 1 --max-cost-usd 5`) just the skills and agents they change. The thresholds are a starting point to ratify after a month of nightly runs; when the judge model changes, re-check the llm graders against a hand-labelled sample.
 
 ## Troubleshooting
 

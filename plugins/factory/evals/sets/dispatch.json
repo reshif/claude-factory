@@ -1,0 +1,43 @@
+{
+  "about": "Tier 2 dispatch-correctness set: the step skills are reached through factory:start, so each case hands the model a mocked `factory next` result and checks that the right step skill is loaded. Source of truth for evals/dispatch/**; regenerate with `node evals/tools/generate.js`.",
+  "preamble": "I'm in the middle of a Software Factory job (J-0004, recipe standard@medium). I just ran `factory next` and it printed:",
+  "postamble": "Carry on from here. (I can't run commands for you right now; tell me what happens next.)",
+  "cases": [
+    {
+      "skill": "gate",
+      "next": { "action": "gate", "gate": { "id": "H1", "hash": "4be1c09f2a7d31e05c66b2a9", "docs": [".factory/jobs/J-0004/contract.md"] }, "decision_id": "J-0004-D0007" },
+      "extra": "The contract says: Goal — discounted carts show the same total as checkout. AC-1: cart total equals checkout total for a 10% code (evidence: test). AC-2: totals are rounded to the cent once, after the discount (evidence: test). Allowed paths: src/cart/**, tests/cart/**. Verify: `npm test -- cart` (AC-1, AC-2).",
+      "outcome": { "pattern": "H1[\\s\\S]{0,200}(approve|deny)", "flags": "i", "about": "Ends by presenting gate H1 with the exact approve / deny replies." }
+    },
+    {
+      "skill": "park",
+      "next": { "action": "parked", "reason": "Review rounds used up (2) with confirmed serious findings still open.", "rule": "cap.review_rounds", "decision_id": "J-0004-D0019" },
+      "outcome": { "pattern": "\\bresume\\b[\\s\\S]*\\b(cancel job|abandon job)\\b|\\b(cancel job|abandon job)\\b[\\s\\S]*\\bresume\\b", "flags": "i", "about": "Explains the park and offers the exact replies resume / cancel job / abandon job." }
+    },
+    {
+      "skill": "clarify",
+      "next": { "action": "skill", "skill": "clarify", "decision_id": "J-0004-D0002" },
+      "outcome": { "pattern": "contract", "flags": "i", "about": "Talks about writing or settling the outcome contract." }
+    },
+    {
+      "skill": "ship",
+      "next": { "action": "skill", "skill": "ship", "decision_id": "J-0004-D0024" },
+      "outcome": { "pattern": "\\b(PR|pull request|merge)\\b", "flags": "i", "about": "Talks about the PR or the merge the user has to do." }
+    },
+    {
+      "skill": "distill",
+      "next": { "action": "skill", "skill": "distill", "decision_id": "J-0004-D0027" },
+      "outcome": { "pattern": "lesson", "flags": "i", "about": "Talks about lessons from the job." }
+    },
+    {
+      "skill": "amend",
+      "next": { "action": "skill", "skill": "amend", "reason": "contract.md changed after H1 was approved", "decision_id": "J-0004-D0011" },
+      "outcome": { "pattern": "amend|approved|intended", "flags": "i", "about": "Treats the drift as an amendment question for the user." }
+    },
+    {
+      "skill": "intake",
+      "prompt": "Use the factory for this: shoppers with a discount code see the wrong cart total. (I already ran `factory doctor`: the repo is initialised, and there is no active factory job.)",
+      "outcome": { "pattern": "\\b(bug|risk)\\b", "flags": "i", "about": "Restates the intent and proposes a work type and risk for confirmation." }
+    }
+  ]
+}

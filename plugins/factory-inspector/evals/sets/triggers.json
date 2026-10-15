@@ -1,0 +1,28 @@
+{
+  "about": "Tier 2 trigger set for the inspector's inspect skill: prompts that should load it and realistic near-misses that should not. Source of truth for evals/trigger/**; regenerate with `node ../factory/evals/tools/generate.js .` from this plugin's folder.",
+  "skills": {
+    "inspect": {
+      "fires": "The reply audits the factory with the inspector (runs or offers `factory-inspect run` / `report` / `health` / `status`, or explains inspector findings), not a generic code review or system health check.",
+      "positive": [
+        "Is the factory behaving?",
+        "Any inspector findings I should look at?",
+        "Audit the last factory jobs against the recipes they declared.",
+        "Check the factory's health — hook errors, guard denials, that kind of thing.",
+        "What does inspector finding F3 mean, and is it serious?",
+        "How is the running factory job going? Have the inspector look at it.",
+        "bug@low has been clean for weeks — should we sample inspections instead of checking every job?",
+        "Did the factory do what the router told it to on J-0006?"
+      ],
+      "negative": [
+        { "prompt": "Inspect this function for bugs:\n```js\nfunction avg(xs) { return xs.reduce((a, b) => a + b) / xs.length }\n```", "expect": "Reviews the function (empty array, no initial value)." },
+        { "prompt": "Audit our npm dependencies for known vulnerabilities.", "expect": "Deals with dependency auditing (npm audit or similar)." },
+        { "prompt": "Check the health endpoint of our API returns 200 when the database is down.", "expect": "Deals with the application's health endpoint." },
+        { "prompt": "Review this diff:\n```diff\n-if (user) {\n+if (user && user.active) {\n```", "expect": "Reviews the diff." },
+        { "prompt": "Why did the factory park J-0004?", "expect": "Explains the routing decision rather than running an audit." },
+        { "prompt": "How much did the factory cost us last month, per recipe?", "expect": "Deals with factory telemetry or cost, not an inspector audit." },
+        { "prompt": "Show me the factory console.", "expect": "Deals with the console page." },
+        { "prompt": "Lint the codebase and fix what you can.", "expect": "Deals with linting." }
+      ]
+    }
+  }
+}

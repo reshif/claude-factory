@@ -1,0 +1,13 @@
+{
+  "lane": "security",
+  "findings": [
+    {
+      "id": "security-1",
+      "severity": "blocker",
+      "file": "src/api/limiter.js",
+      "line": 12,
+      "summary": "The limiter keys on the X-Forwarded-For header, so any client can dodge its limit by changing that header.",
+      "rule": "TH-1"
+    }
+  ]
+}

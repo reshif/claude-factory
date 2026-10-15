@@ -1,0 +1,10 @@
+{
+  "pass": false,
+  "evidence_id": "T1-2-1760000000000",
+  "failures": [
+    "`node tests/add.test.js` exited 1 and printed add(2,3) = -1: src/add.js still subtracts."
+  ],
+  "swept_checked": [
+    "src/sum.js:4: same operator, already fixed"
+  ]
+}

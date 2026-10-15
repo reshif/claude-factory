@@ -1,0 +1,9 @@
+{
+  "finding_id": "code-1",
+  "status": "refuted",
+  "evidence": [
+    "src/api/orders.js:38 calls validate(req.body) before line 42",
+    "Ran the handler test with {} in a temp dir: HTTP 400, no crash"
+  ],
+  "reason": "The body is validated four lines earlier, so items is always present at line 42."
+}

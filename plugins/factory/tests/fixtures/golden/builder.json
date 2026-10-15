@@ -1,0 +1,11 @@
+{
+  "status": "done",
+  "summary": "add() now returns a + b; tests/add.test.js covers negatives and floats.",
+  "commits": [
+    "3f2c1ab"
+  ],
+  "swept": [
+    "src/add.js",
+    "src/sum.js:4"
+  ]
+}

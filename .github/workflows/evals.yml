@@ -1,0 +1,120 @@
+name: evals
+
+# Tier 2 (trigger, must-not-fire, dispatch) and Tier 3 (planted-defect outcome) evals with
+# `claude plugin eval`, each case run with and without the plugin (ablation on, the default).
+#   nightly / manual: the full suites, --runs 3, a threshold gate and a cost ceiling;
+#   pull requests:    a smoke run (--runs 1) of only the skills and agents the PR changes.
+# Every job is skipped unless the repository has an ANTHROPIC_API_KEY secret.
+
+on:
+  schedule:
+    - cron: '17 3 * * *'
+  workflow_dispatch:
+    inputs:
+      runs:
+        description: Runs per case (the floor is 3)
+        default: '3'
+      threshold:
+        description: Fail if any case scores below this (0..1)
+        default: '0.67'
+      max_cost_usd:
+        description: Hard cost ceiling per plugin suite (USD)
+        default: '40'
+  pull_request:
+    paths:
+      - 'plugins/*/skills/**'
+      - 'plugins/factory/agents/**'
+      - 'plugins/*/evals/**'
+
+permissions:
+  contents: read
+
+env:
+  CLAUDE_CODE_VERSION: 2.1.299 # case format is experimental.evals: keep the CLI pinned
+  JUDGE_MODEL: sonnet # never the model under test; re-calibrate the llm graders when it changes
+
+jobs:
+  full:
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    env:
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      HAS_KEY: ${{ secrets.ANTHROPIC_API_KEY != '' }}
+      RUNS: ${{ inputs.runs || '3' }}
+      THRESHOLD: ${{ inputs.threshold || '0.67' }}
+      MAX_COST: ${{ inputs.max_cost_usd || '40' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        plugin: [factory, factory-inspector]
+    steps:
+      - name: No API key — skipping
+        if: env.HAS_KEY != 'true'
+        run: echo "::notice::ANTHROPIC_API_KEY is not set; evals skipped."
+      - uses: actions/checkout@v4
+        if: env.HAS_KEY == 'true'
+      - uses: actions/setup-node@v4
+        if: env.HAS_KEY == 'true'
+        with:
+          node-version: 22
+      - if: env.HAS_KEY == 'true'
+        run: npm install -g @anthropic-ai/claude-code@${{ env.CLAUDE_CODE_VERSION }}
+      - name: claude plugin eval (${{ matrix.plugin }})
+        if: env.HAS_KEY == 'true'
+        run: |
+          git config --global user.email ci@example.com
+          git config --global user.name CI
+          claude plugin eval plugins/${{ matrix.plugin }} \
+            --runs "$RUNS" --threshold "$THRESHOLD" --max-cost-usd "$MAX_COST" \
+            --judge-model "$JUDGE_MODEL" --concurrency 4 \
+            --trust-plugin --scaffold --no-publish \
+            --json "plugins/${{ matrix.plugin }}/evals/results/ci.json"
+      - uses: actions/upload-artifact@v4
+        if: always() && env.HAS_KEY == 'true'
+        with:
+          name: eval-results-${{ matrix.plugin }}
+          path: plugins/${{ matrix.plugin }}/evals/results/
+          if-no-files-found: ignore
+
+  smoke:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      HAS_KEY: ${{ secrets.ANTHROPIC_API_KEY != '' }}
+    steps:
+      - name: No API key — skipping
+        if: env.HAS_KEY != 'true'
+        run: echo "::notice::ANTHROPIC_API_KEY is not set (or this PR comes from a fork); smoke evals skipped."
+      - uses: actions/checkout@v4
+        if: env.HAS_KEY == 'true'
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        if: env.HAS_KEY == 'true'
+        with:
+          node-version: 22
+      - if: env.HAS_KEY == 'true'
+        run: npm install -g @anthropic-ai/claude-code@${{ env.CLAUDE_CODE_VERSION }}
+      - name: Smoke-run the changed components
+        if: env.HAS_KEY == 'true'
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+        run: |
+          git config --global user.email ci@example.com
+          git config --global user.name CI
+          changed=$(git diff --name-only "$BASE"...HEAD)
+          for plugin in factory factory-inspector; do
+            tags=$(printf '%s\n' "$changed" | sed -nE \
+              -e "s#^plugins/$plugin/skills/([^/]+)/.*#skill:\1#p" \
+              -e "s#^plugins/$plugin/agents/([^/.]+)\.md#agent:\1#p" | sort -u)
+            # A changed eval set or fixture: smoke the whole tier it feeds, one run each.
+            if printf '%s\n' "$changed" | grep -q "^plugins/$plugin/evals/"; then tags="$tags tier2 tier3"; fi
+            [ -z "$(echo $tags)" ] && { echo "$plugin: nothing to smoke"; continue; }
+            echo "$plugin: --tag $tags"
+            claude plugin eval "plugins/$plugin" --tag $tags \
+              --runs 1 --threshold 0.5 --max-cost-usd 5 --judge-model "$JUDGE_MODEL" \
+              --trust-plugin --scaffold --no-publish --concurrency 4
+          done

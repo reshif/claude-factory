@@ -2,7 +2,7 @@
 // Closing jobs, follow-ups, distill bookkeeping and `factory why`.
 
 const { readJson, nowIso, fail } = require('../lib/util');
-const { jobPaths, taskWorktree } = require('../lib/paths');
+const { jobPaths, taskWorktree, pluginPath } = require('../lib/paths');
 const git = require('../lib/git');
 const job = require('./job');
 const steps = require('./steps');
@@ -74,13 +74,45 @@ function distillContext(root, { jobId }) {
     review_fix_rounds: state.counters.review_rounds,
     already_proposed: lessons,
     cap: state.policy.lessons_max_per_job,
+    // What the distill step hands the lesson writer: its agent, the command that records a
+    // lesson, and the JSON its final message must match (checked by `distill done --result`).
+    lesson_writer: {
+      agent_type: 'factory:lesson-writer',
+      record_command: `factory lessons add --job ${state.id} --text "<lesson>" --scope "<glob>,<glob>" --why "<finding id: what went wrong>"`,
+      reply_schema: readJson(pluginPath('schemas', 'agent-outputs', 'lesson.json')),
+    },
   };
 }
 
-function distillDone(root, { jobId }) {
+// The lesson writer's final message, checked against what it actually recorded: every id it
+// names must be a lesson of this job, and "nothing to learn" means it named none.
+function checkLessonReply(root, state, reply) {
+  const { validate } = require('../lib/schema');
+  const errs = validate(readJson(pluginPath('schemas', 'agent-outputs', 'lesson.json')), reply);
+  if (errs.length) fail(`The lesson writer's reply does not match its schema:\n- ${errs.join('\n- ')}`, 'bad_input', errs);
+  const mine = new Set(require('./lessons').load(root).lessons.filter((l) => l.source_job === state.id).map((l) => l.id));
+  const unknown = reply.lessons.map((l) => l.id).filter((id) => !mine.has(id));
+  if (unknown.length) fail(`The lesson writer names lessons ${state.id} never recorded: ${unknown.join(', ')}. Record each with factory lessons add first.`, 'bad_input');
+  if (reply.nothing_to_learn && reply.lessons.length) fail('The lesson writer says there is nothing to learn but lists lessons.', 'bad_input');
+  return reply.lessons.map((l) => l.id);
+}
+
+// `result` (optional) is the lesson writer's final message; without it, distill done records
+// the step as before.
+function distillDone(root, { jobId, result }) {
   const state = job.resolve(root, jobId);
-  ledger.append(root, state.id, { kind: 'step', step: 'distill', ok: true, bound: {} });
-  return { job: state.id, ok: true };
+  const reply = result === undefined || result === null ? null : typeof result === 'string' ? parseReply(result) : result;
+  const ids = reply ? checkLessonReply(root, state, reply) : null;
+  ledger.append(root, state.id, { kind: 'step', step: 'distill', ok: true, bound: {}, ...(reply ? { detail: { lessons: ids, nothing_to_learn: reply.nothing_to_learn } } : {}) });
+  return { job: state.id, ok: true, ...(reply ? { lessons: ids, nothing_to_learn: reply.nothing_to_learn } : {}) };
+}
+
+function parseReply(text) {
+  try {
+    return JSON.parse(text);
+  } catch {
+    return fail('distill done --result needs the lesson writer\'s JSON reply (a file, - for stdin, or the JSON itself).', 'bad_input');
+  }
 }
 
 function followup(root, { jobId, findings, workType }) {

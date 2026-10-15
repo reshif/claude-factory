@@ -1,0 +1,12 @@
+{
+  "path": ".factory/jobs/J-0007/threat-model.md",
+  "threats": [
+    {
+      "id": "TH-1",
+      "stride": "Spoofing",
+      "threat": "A client sets X-Forwarded-For to dodge its rate limit.",
+      "mitigation": "Key the limiter on the authenticated client id, never on request headers.",
+      "severity": "high"
+    }
+  ]
+}

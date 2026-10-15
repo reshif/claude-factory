@@ -1,0 +1,6 @@
+{ "type": "object", "required": ["lessons", "nothing_to_learn"], "properties": {
+  "lessons": { "type": "array", "items": { "type": "object", "required": ["id", "text"], "properties": {
+    "id": { "type": "string", "pattern": "^L\\d+$" }, "text": { "type": "string" },
+    "scope": { "type": "array", "items": { "type": "string" } }, "why": { "type": "string" } } } },
+  "nothing_to_learn": { "type": "boolean" },
+  "note": { "type": "string" } } }

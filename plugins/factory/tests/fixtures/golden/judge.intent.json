@@ -1,0 +1,22 @@
+{
+  "questions": [
+    {
+      "question": "Who sees the wrong totals: shoppers at checkout, or only the nightly report?",
+      "category": "intent",
+      "why": "It decides whether the fix must ship as a hotfix and what proves success.",
+      "default": "No safe default: the factory will not guess who has the problem.",
+      "options": [
+        "Shoppers at checkout",
+        "Only the nightly report",
+        "Both"
+      ]
+    }
+  ],
+  "held": [
+    {
+      "question": "Should add() accept numeric strings?",
+      "category": "scope"
+    }
+  ],
+  "dismissed": []
+}

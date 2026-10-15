@@ -1,0 +1,13 @@
+{
+  "lane": "conformance",
+  "findings": [
+    {
+      "id": "conformance-1",
+      "severity": "blocker",
+      "file": "src/api/orders.ts",
+      "line": 31,
+      "summary": "createOrder now requires currency, but contracts.md froze it as optional in v1.",
+      "rule": "contracts.md#orders-api"
+    }
+  ]
+}

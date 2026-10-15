@@ -1,0 +1,23 @@
+{
+  "topic": "codebase",
+  "claims": [
+    {
+      "claim": "add is exported as a single arrow function",
+      "source": "src/add.js:1"
+    },
+    {
+      "claim": "Only src/cart.js calls add",
+      "source": "grep -rn \"require('./add')\" src → 1 match, src/cart.js:3"
+    },
+    {
+      "claim": "No benchmark covers add",
+      "source": "UNVERIFIED"
+    }
+  ],
+  "unknowns": [
+    {
+      "question": "Must add() accept numeric strings such as \"2\"?",
+      "blocking": false
+    }
+  ]
+}

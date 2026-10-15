@@ -1,0 +1,24 @@
+{
+  "title": "Fix the operator in place",
+  "summary": "Change - to + in src/add.js and extend its test; nothing else moves.",
+  "approach": "Edit the one expression in src/add.js:1 and add cases for negatives and floats to tests/add.test.js.",
+  "criteria": [
+    {
+      "id": "AC-1",
+      "how": "tests/add.test.js asserts add(2, 3) === 5"
+    }
+  ],
+  "touches": [
+    "src/add.js (export unchanged)",
+    "tests/add.test.js"
+  ],
+  "pros": [
+    "One-line change with no new interface"
+  ],
+  "cons": [
+    "Non-number inputs stay unhandled"
+  ],
+  "risks": [
+    "A caller that compensated for the bug (none found: src/cart.js:3 is the only caller)"
+  ]
+}
