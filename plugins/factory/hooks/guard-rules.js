@@ -167,7 +167,8 @@ function checkReadTool(root, tool, ti, absFile, cwd, policy) {
 
 const HUMAN_ONLY = new Set(['approve', 'deny', 'resume', 'proceed', 'cancel', 'abandon', 'waive', 'merged', 'confirm', 'reseal', 'finding']);
 // Mirrors cli/main.js parseArgs: --k=v, --k v (unless the flag is boolean or v starts with --), and --.
-const CLI_BOOL = new Set(['h1', 'epic', 'local', 'check', 'json', 'plan-fields', 'help', 'threat-model', 'plan-critique', 'no-threat-model', 'accept-degraded', 'serve', 'default']);
+// the CLI's own boolean-flag list (cli/lib/args.js): the guard reads a command exactly as the CLI parses it
+const CLI_BOOL = require('../cli/lib/args').BOOL;
 const TTY_FAKERS = /^(script|unbuffer|expect|socat|faketty|ptyexec|zpty|empty)$/;
 const SHELLS = /^(bash|sh|zsh|dash|ksh|mksh|fish|csh|tcsh|ash|busybox)$/;
 const PWSH = /^(pwsh|powershell|powershell\.exe|pwsh\.exe)$/i;
@@ -175,7 +176,7 @@ const INTERPRETER = /^(node|nodejs|python[0-9.]*|ruby|perl|php|deno|bun|osascrip
 // Factory state and CLI internals. STRICT: code that loads the CLI's internals or the seal
 // secret could forge state, whatever it does. STATE: the job files; reading them is fine.
 const INTERNALS_STRICT = /cli\/core\/|cli\/lib\/(seal|util)|software-factory\/secret|\.config\/software-factory/;
-const STATE = /\.factory\/(jobs|log|lessons|project\.json|policy\.json|environment\.json|current)/;
+const STATE = /\.factory\/(jobs|log|lessons|project\.json|project\.md|project-brief\.proposals\.json|drive\.json|policy\.json|environment\.json|current)/;
 const INTERNALS = new RegExp(`${INTERNALS_STRICT.source}|${STATE.source}`);
 const WRITE_OPS = /writeFile|appendFile|createWriteStream|\bunlink|\brename|\brmSync|\brmdir|\bcopyFile|truncate|\.write\(|open\([^)]*['"][wax+]|json\.dump\(|os\.remove|os\.replace|shutil\.|Path\([^)]*\)\.write_|File\.write|>>?\s*['"]?\.factory/;
 const SECRET_FILE = /software-factory[\\/]secret|\.config[\\/]software-factory/;
@@ -183,8 +184,14 @@ const SECRET_FILE = /software-factory[\\/]secret|\.config[\\/]software-factory/;
 const KNOWN_VARS = /^(HOME|PWD|OLDPWD|PATH|TMPDIR|TMP|TEMP|USER|SHELL|VIRTUAL_ENV|CONDA_PREFIX|PYENV_ROOT|NVM_DIR|GOPATH|GOROOT|CARGO_HOME|JAVA_HOME|ANDROID_HOME|XDG_\w+|CI|GITHUB_\w+|RUNNER_\w+|npm_\w+|env:\w+)$/;
 
 function isHumanOnly(a, b) {
-  return HUMAN_ONLY.has(a) || (a === 'lessons' && ['accept', 'reject', 'promote'].includes(b)) || (a === 'ci' && b === 'install') || (a === 'env' && b === 'set');
+  return HUMAN_ONLY.has(a) || (a === 'lessons' && ['accept', 'reject', 'promote'].includes(b)) || (a === 'ci' && b === 'install') || (a === 'env' && b === 'set') || (a === 'drive' && b === 'takeover');
 }
+
+// The main session's own verbs: factory drive steps the job's router, factory inbox lists what
+// waits on the user. A factory agent runs neither (the CLI refuses them too while a factory agent
+// is at work: cli/core/agents-open.js).
+const MAIN_ONLY = new Set(['drive', 'inbox']);
+const mainOnlyMessage = (a) => `"factory ${a}" is the main session's (it steps the job, lists what waits on the user or records what the user said), never a factory agent's. Return your result in your final message.`;
 
 // The user's relay, never a factory agent's: answers, clarify replies, redirects and notes come
 // from the main session (what the user said), so a subagent may not record them (opts.agent: the
@@ -636,12 +643,24 @@ function checkCommand(cmd, pipeline, ctx, depth, collect) {
           const w = fed.find((x) => HUMAN_ONLY.has(x));
           if (w) return humanMessage(w);
           if (fed.includes('lessons') && ['accept', 'reject', 'promote'].some((x) => fed.includes(x))) return humanMessage('lessons', ['accept', 'reject', 'promote'].find((x) => fed.includes(x)));
+          // the main session's verbs, fed on stdin or after ::: (review M4)
+          if (ctx.agent && !fed.some((x) => /^[a-z][\w-]*$/.test(x) && !['factory', 'xargs', 'parallel', 'node'].includes(x) && !/(^|\/)factory$/.test(x))) return 'A factory command whose verb arrives on stdin from a file or command the guard cannot read is not allowed for factory agents: write the command itself.';
+          if (ctx.agent) {
+            const v = fed.find((x) => MAIN_ONLY.has(x)) || (fed.includes('clarify') && ['reply', 'redirect', 'note'].find((x) => fed.includes(x)) ? 'clarify' : null);
+            if (v) return mainOnlyMessage(v);
+          }
         }
       }
       if (a && isHumanOnly(a, b)) return humanMessage(a, b);
+      // An agent's factory call whose verb is computed ($(…), backticks, a variable we can't
+      // resolve) can't be read here: refuse it rather than guess (review M4).
+      if (ctx.agent && [a, b].some((x) => typeof x === 'string' && /[$`]/.test(x))) return 'A factory command whose verb is computed ($(…), backticks or a variable) is not allowed for factory agents: write the verb itself.';
       // `task built` is a builder's own last step (its reply for this attempt): nobody else may
       // vouch that a builder finished, not the main session and not another agent.
       if (a === 'task' && b === 'built' && ctx.agentType !== 'factory:builder') return '"factory task built" records a task builder\'s own reply; only that builder (factory:builder) runs it. Builds happen through the realize workflow.';
+      // factory drive and factory inbox are the main session's: drive steps the job's router, the
+      // inbox lists what waits on the human. A factory agent runs neither.
+      if (a && ctx.agent && MAIN_ONLY.has(a)) return mainOnlyMessage(a);
       if (a && ctx.agent && isUserRelay(a, b)) return `"factory ${a}${a === 'clarify' ? ` ${b}` : ''}" records what the user said; it is the main session's, never a factory agent's. Return what you found in your final message instead.`;
     } else if (!collect) {
       const why = unknownExpansionHuman(head, ctx);
@@ -750,4 +769,4 @@ function normalise(cmd) {
   return parse(cmd).map((c) => c.words.map((w) => w.text).join(' ')).join('; ');
 }
 
-module.exports = { checkWrite, checkRead, checkReadTool, READ_TOOLS, checkBash, checkContent, normalise, deny, loadPolicy, isSecret, HUMAN_ONLY };
+module.exports = { CLI_BOOL, isHumanOnly, MAIN_ONLY, checkWrite, checkRead, checkReadTool, READ_TOOLS, checkBash, checkContent, normalise, deny, loadPolicy, isSecret, HUMAN_ONLY };

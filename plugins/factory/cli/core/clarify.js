@@ -2351,5 +2351,6 @@ module.exports = {
   startRedirect, applyRedirect, confirmRedirect, redirectScreen, sentences,
   applyWriter, writeSections, sectionLines, deterministic, applyCheck,
   stagePlan, stageContractHash, record, reply, redirect, chatReply, sync, ready, nextInfo, waitingForUser, notePrompt, promptHeard, runWhy,
+  promptKey, promptArgs, ACCEPT_HEAD,
   h1View, h1Summary: (root, state) => h1View(root, state), view, status, statusText, onResume, proceed, briefText, deferredText, inClarify, consoleBlock, split, ACCEPT,
 };

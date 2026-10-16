@@ -279,10 +279,33 @@ function ciInstall(root) {
       for (const f of fs.readdirSync(src)) copy(path.join(src, f), path.join(dst, f));
     } else fs.copyFileSync(src, dst);
   };
-  for (const d of ['bin', 'cli', 'policy', 'recipes']) copy(pluginPath(d), path.join(dest, d));
+  // Every directory the CLI reads at run time (pluginPath: schemas, templates, config, agents,
+  // policy, recipes; hooks/guard-rules for the shared human-only list), not only its code: a
+  // vendored CLI without schemas fails in CI ("Cannot find module …/schemas/…"). A copy left from
+  // an older install is replaced whole.
+  fs.rmSync(dest, { recursive: true, force: true });
+  for (const d of VENDORED) copy(pluginPath(d), path.join(dest, d));
+  mkdirp(path.join(dest, '.claude-plugin'));
+  fs.copyFileSync(pluginPath('.claude-plugin', 'plugin.json'), path.join(dest, '.claude-plugin', 'plugin.json'));
+  writeText(path.join(dest, 'factory-cli.json'), `${JSON.stringify({ version: pluginVersion(), dirs: VENDORED, installed_at: nowIso() }, null, 2)}\n`);
   const wf = readText(pluginPath('templates', 'github', 'factory-gate.yml'));
   writeText(path.join(root, '.github', 'workflows', 'factory-gate.yml'), wf);
-  return { ok: true, files: ['.github/factory-cli/', '.github/workflows/factory-gate.yml'], next: 'Commit these on your base branch and mark "factory-gate" as a required check.' };
+  return { ok: true, version: pluginVersion(), files: ['.github/factory-cli/', '.github/workflows/factory-gate.yml'], next: 'Commit these on your base branch and mark "factory-gate" as a required check.' };
 }
 
-module.exports = { ship, prSync, ciVerify, ciInstall, report, prBody };
+const VENDORED = ['bin', 'cli', 'policy', 'recipes', 'schemas', 'templates', 'config', 'agents', 'hooks'];
+const pluginVersion = () => (readJson(pluginPath('.claude-plugin', 'plugin.json'), {}) || {}).version || null;
+
+// What factory doctor says about the vendored CLI in .github/factory-cli: null when there is none,
+// else whether it is complete and the same version as this plugin.
+function vendoredCheck(root) {
+  const dest = path.join(root, '.github', 'factory-cli');
+  if (!fs.existsSync(dest)) return null;
+  const stamp = readJson(path.join(dest, 'factory-cli.json'), null);
+  const missing = VENDORED.filter((d) => !fs.existsSync(path.join(dest, d)));
+  const version = stamp ? stamp.version : (readJson(path.join(dest, '.claude-plugin', 'plugin.json'), {}) || {}).version || null;
+  const ok = !missing.length && version === pluginVersion();
+  return { ok, version, plugin_version: pluginVersion(), missing, message: ok ? `.github/factory-cli is factory ${version}, complete` : `.github/factory-cli is ${version ? `factory ${version}` : 'from an older factory'}${missing.length ? ` and lacks ${missing.join(', ')}` : ''}${version !== pluginVersion() ? ` (this plugin is ${pluginVersion()})` : ''}: CI's re-verify may fail. Run factory ci install in your own terminal and commit the result on your base branch` };
+}
+
+module.exports = { ship, prSync, ciVerify, ciInstall, vendoredCheck, VENDORED, report, prBody };

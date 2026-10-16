@@ -36,6 +36,12 @@ function roleStats(ledgerEntries) {
 function parkReasons(decs, state) {
   const out = {};
   decs.forEach((d, i) => {
+    // a typed park row (a workflow's park, factory park, an epic gate: action "park", rule park.<kind>)
+    if (d.action === 'park') {
+      const k = d.rule || `park.${(d.park && d.park.kind) || 'other'}`;
+      out[k] = (out[k] || 0) + 1;
+      return;
+    }
     if (d.action !== 'parked') return;
     let reason = d.rule;
     if (!reason) {
@@ -131,6 +137,51 @@ function clarifyMetrics(root, state) {
   };
 }
 
+// Every park of a job, from every record that says so (P4.5): the router's parked decisions,
+// typed park rows (action "park"), a workflow result that parked it, a park by hand. One park
+// written by two records at once counts once. The inspector counts parks the same way (parksOf).
+function parkRecords(root, state, decs) {
+  const out = decs.filter((d) => d.action === 'parked' || d.action === 'park').map((d) => ({ ts: d.ts }));
+  for (const e of readEvents(root)) {
+    if (e.job !== state.id || e.event !== 'cli' || e.ok === false) continue;
+    if ((e.cmd === 'record' && e.status === 'park') || e.cmd === 'park') out.push({ ts: e.ts });
+  }
+  out.sort((a, b) => String(a.ts || '').localeCompare(String(b.ts || '')));
+  return out.filter((p, i) => !out.slice(0, i).some((q) => q.ts && p.ts && Math.abs(Date.parse(p.ts) - Date.parse(q.ts)) < 5000));
+}
+
+// The event log, read once per report.
+let EVENTS = null;
+function readEvents(root) {
+  if (EVENTS && EVENTS.root === root) return EVENTS.list;
+  EVENTS = { root, list: require('../lib/util').readJsonl(project(root).eventsFile).filter(Boolean) };
+  return EVENTS.list;
+}
+
+// Usage per job (P4.1): what each agent's own transcript reported (SubagentStop events carry it,
+// cli/core/transcripts.js): agent time, tool calls, tokens. Runs that reported nothing are counted
+// as unreported, never as zero. Claude Code reports no cost.
+function costMetrics(root, state) {
+  const T = require('./transcripts');
+  const evs = readEvents(root).filter((e) => e.job === state.id);
+  const start = {};
+  for (const e of evs) if (e.event === 'SubagentStart' && e.agent_id) start[e.agent_id] = Date.parse(e.ts);
+  const runs = evs.filter((e) => e.event === 'SubagentStop').map((e) => ({ ...e, ms: start[e.agent_id] ? Date.parse(e.ts) - start[e.agent_id] : null }));
+  if (!runs.length) return null;
+  const byRole = {};
+  for (const r of runs) {
+    const role = r.role || String(r.agent_type || '').replace(/^factory:/, '') || 'unknown';
+    (byRole[role] = byRole[role] || []).push(r);
+  }
+  return {
+    ...T.totals(runs),
+    by_role: Object.fromEntries(Object.entries(byRole).map(([role, list]) => {
+      const t = T.totals(list);
+      return [role, { runs: t.agent_runs, agent_seconds: t.agent_seconds, tool_calls: t.tool_calls, input_tokens: t.input_tokens, output_tokens: t.output_tokens, unreported_runs: t.unreported_runs }];
+    })),
+  };
+}
+
 function jobMetrics(root, state, all) {
   const entries = ledger.all(root, state.id);
   const steps = entries.filter((e) => e.kind === 'step');
@@ -166,7 +217,8 @@ function jobMetrics(root, state, all) {
     clarify: clarifyMetrics(root, state),
     gate_denials: (state.denials || []).length,
     amendments: state.amendments_count || 0,
-    parked: decs.filter((d) => d.action === 'parked').length,
+    parked: parkRecords(root, state, decs).length,
+    cost: costMetrics(root, state),
     decisions: decs.length,
     lanes: byLane,
     roles: roleStats(entries),
@@ -176,6 +228,7 @@ function jobMetrics(root, state, all) {
 }
 
 function report(root, { sinceDays = 30 } = {}) {
+  EVENTS = null; // the event log is read fresh for every report
   const cutoff = Date.now() - sinceDays * DAY;
   const all = job
     .listJobIds(root)
@@ -237,6 +290,14 @@ function toMarkdown(r) {
   for (const [id, x] of Object.entries(r.by_recipe)) {
     for (const [lane, l] of Object.entries(x.lanes)) L.push(`| ${id} | ${lane} | ${l.raised} | ${l.confirmed} | ${l.refuted} | ${l.unverified} | ${l.minor} | ${l.precision ?? '—'} | ${l.refute_rate ?? '—'} |`);
   }
+  const fmt = (v) => (v === null || v === undefined ? '—' : String(v));
+  L.push('', '## Usage', '', 'Per job, from each agent\'s own transcript (Claude Code keeps them; the SubagentStop hook records where and what they report): agent time, tool calls, and tokens summed per model call. "—" means nothing reported it (unknown, not zero); "Runs without usage" counts the agent runs whose transcript reported none. Claude Code reports no cost.', '', '| Job | Recipe | Agent runs | Agent time (s) | Tool calls | Input tokens | Output tokens | Cache read tokens | Runs without usage | Top roles by time |', '|---|---|---|---|---|---|---|---|---|---|');
+  for (const m of r.per_job || []) {
+    const c = m.cost;
+    if (!c) continue;
+    const top = Object.entries(c.by_role || {}).sort((a, b) => b[1].agent_seconds - a[1].agent_seconds).slice(0, 3).map(([role, x]) => `${role} ${x.agent_seconds}s`).join(', ');
+    L.push(`| ${m.job} | ${m.recipe} | ${c.agent_runs} | ${c.agent_seconds} | ${fmt(c.tool_calls)} | ${fmt(c.input_tokens)} | ${fmt(c.output_tokens)} | ${fmt(c.cache_read_tokens)} | ${c.unreported_runs} | ${top || '—'} |`);
+  }
   const q = r.quality;
   if (q) {
     L.push('', '## Quality signals', '', 'How reliably the agents and reviewers work, not how much they cost. Read a few transcripts before acting on a number.', '');
@@ -253,4 +314,4 @@ function toMarkdown(r) {
   return L.join('\n');
 }
 
-module.exports = { report, toMarkdown, jobMetrics, clarifyMetrics, quality, roleStats, parkReasons };
+module.exports = { report, toMarkdown, jobMetrics, clarifyMetrics, quality, roleStats, parkReasons, parkRecords, costMetrics };

@@ -18,6 +18,8 @@ function observe(root) {
   const decisionsAll = readLog(L.decisions);
   const eventsAll = readLog(L.events);
   const jobs = {};
+  // looks at what waits (factory inbox, factory drive status) belong to no job: every job sees them (R25)
+  const looks = eventsAll.filter((e) => e.sealed && e.rec && ['inbox_viewed', 'drive_status_viewed'].includes(e.rec.event)).map((e) => e.rec);
   for (const id of jobIds(root)) {
     const p = L.job(id);
     const state = readJson(p.state, null);
@@ -31,6 +33,9 @@ function observe(root) {
       id,
       state,
       lock,
+      root, // for the outcome rules' read-only git (R23, R24) and the prompt log (R25)
+      dir: p.dir,
+      plan: readJson(p.plan, null),
       stateSealed: state ? sealOk(state) !== false : false,
       lockSealed: lock ? sealOk(lock) !== false : false,
       clarify,
@@ -42,6 +47,7 @@ function observe(root) {
       decisions: decisions.filter((d) => d.sealed).map((d) => d.rec),
       events: events.filter((e) => e.sealed).map((e) => e.rec),
       eventLines: events,
+      globalEvents: looks,
     };
   }
   return {

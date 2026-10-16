@@ -192,6 +192,8 @@ function snapshot(root, state, gate, hash) {
 function approve(root, { jobId, gate, channel, via }) {
   requireHumanChannel(channel);
   const state = job.resolve(root, jobId);
+  // Only a gate the router presented can be approved: an amendment is approvable once
+  // `factory next` (or the drive) has shown gate A, never straight after `amend submit`.
   const pending = state.pending_gate;
   if (!pending || pending.id === 'P') fail(`${state.id} has no gate waiting for approval${pending && pending.id === 'P' ? ' (it is parked: reply "resume", "cancel job" or "abandon job")' : ''}.`, 'no_gate');
   if (gate && gate !== pending.id) fail(`${state.id} is waiting at ${pending.id}, not ${gate}.`, 'wrong_gate');
@@ -210,9 +212,16 @@ function approve(root, { jobId, gate, channel, via }) {
   state.approvals[pending.id] = { hash: now, at: nowIso(), via: via || channel, snapshot: snapshot(root, state, pending.id, now) };
   state.pending_gate = null;
   if (pending.id === 'A') require('./amend').applyApproved(root, state);
+  // An amendment submitted while the job was parked pre-empts the park (factory next presents gate
+  // A): approving it is the human's decision to move on, so it resumes the job too (no separate
+  // "resume"). It does exactly what `resume` does (one more round of the cap that parked it, the
+  // budget raised, clarify's onResume …), so the job doesn't park again on the same cap at once.
+  const resumed = pending.id === 'A' && state.status === 'parked';
+  if (resumed) applyResume(root, state, { step: null, via: 'amendment' });
   job.save(root, state);
   log(root, state, 'approve', { gate: pending.id, hash: now });
-  return { job: state.id, gate: pending.id, hash: now, message: `Approved ${pending.id} for ${state.id} (hash ${now.slice(0, 12)}).` };
+  if (resumed) log(root, state, 'resume', { from: state.resumed.from, step: null, via: 'amendment' });
+  return { job: state.id, gate: pending.id, hash: now, ...(resumed ? { resumed: true } : {}), message: `Approved ${pending.id} for ${state.id} (hash ${now.slice(0, 12)}).${resumed ? ' The job was parked: approving the amendment resumed it.' : ''}` };
 }
 
 function deny(root, { jobId, reason, channel }) {
@@ -236,6 +245,16 @@ function resume(root, { jobId, step, channel }) {
   const state = job.resolve(root, jobId);
   if (state.status !== 'parked') fail(`${state.id} is not parked (status: ${state.status}).`, 'not_parked');
   confirmTyped(channel, state.id, 'resume it');
+  applyResume(root, state, { step });
+  job.save(root, state);
+  log(root, state, 'resume', { from: state.resumed.from, step });
+  return { job: state.id, message: `Resumed ${state.id}${state.resumed.from ? ` (one more ${state.resumed.from} round allowed)` : ''}. Claude continues with factory next.` };
+}
+
+// What un-parking does, whoever decides it (resume, or approving an amendment on a parked job):
+// one more round of whatever ran out, the repeat guard cleared, the job active again. Mutates
+// state; the caller saves and logs.
+function applyResume(root, state, { step = null, via = null } = {}) {
   const from = state.park && state.park.from;
   // One more round of whatever ran out.
   const L = state.policy.limits;
@@ -251,12 +270,10 @@ function resume(root, { jobId, step, channel }) {
   if (from === 'budget') state.policy.limits.max_agent_runs_per_job = Math.ceil(state.policy.limits.max_agent_runs_per_job * 1.5);
   state.repeat = { key: null, count: 0 };
   state.status = 'active';
-  state.resumed = { at: nowIso(), from, step: step || null };
+  state.resumed = { at: nowIso(), from, step: step || null, ...(via ? { via } : {}) };
   state.park = null;
   state.pending_gate = null;
-  job.save(root, state);
-  log(root, state, 'resume', { from, step });
-  return { job: state.id, message: `Resumed ${state.id}${from ? ` (one more ${from} round allowed)` : ''}. Claude continues with factory next.` };
+  return state;
 }
 
 function stop(root, { jobId, kind, channel, reason }) {
@@ -377,6 +394,7 @@ function parseReply(text) {
   if ((m = t.match(new RegExp(`^(accept|dismiss)\\s+finding(?:\\s+${J})?\\s+([a-z][\\w.@-]*-\\d+(?:@r\\d+)?)(?:\\s*[:\u2014\u2013-]?\\s+(.*))?$`, 'i')))) return { cmd: 'settle_finding', decision: m[1].toLowerCase(), jobId: m[2] && m[2].toUpperCase(), id: m[3], reason: (m[4] || '').trim() };
   if ((m = t.match(/^confirm\s+environment(?:\s+(none|[0-9a-f]{8}))?$/i))) return { cmd: 'set_environment', none: Boolean(m[1] && m[1].toLowerCase() === 'none'), hash: m[1] && m[1].toLowerCase() !== 'none' ? m[1].toLowerCase() : null };
   if ((m = t.match(/^(accept|reject)\s+lesson\s+(L\d+)(?:\s+(.*))?$/i))) return { cmd: `${m[1].toLowerCase()}_lesson`, lessonId: m[2].toUpperCase(), reason: (m[3] || '').trim() };
+  if ((m = t.match(/^(accept|reject)\s+brief\s+(P\d+)(?:\s+(.*))?$/i))) return { cmd: `${m[1].toLowerCase()}_brief`, proposalId: m[2].toUpperCase(), reason: (m[3] || '').trim() };
   if ((m = t.match(new RegExp(`^waive(?:\\s+${J})?\\s+([a-z_:]+)\\s+(.+)$`, 'i')))) return { cmd: 'waive', jobId: m[1] && m[1].toUpperCase(), floor: m[2], reason: m[3].trim() };
   if ((m = t.match(new RegExp(`^merged(?:\\s+${J})?\\s+([0-9a-f]{7,40})$`, 'i')))) return { cmd: 'merged', jobId: m[1] && m[1].toUpperCase(), commit: m[2] };
   if ((m = t.match(new RegExp(`^confirm\\s+((?:E-)?AC-\\d+)(?:\\s+${J})?$`, 'i')))) return { cmd: 'confirm', ac: m[1], jobId: m[2] && m[2].toUpperCase() };
@@ -386,7 +404,7 @@ function parseReply(text) {
 }
 
 // The exact forms, for "that was not applied" hints.
-const REPLY_FORMS = ['approve [J-0001] [H1]', 'deny [J-0001] <reason>', 'resume [J-0001] [step]', 'proceed [J-0001]', 'cancel job [J-0001] [reason]', 'abandon job [J-0001] [reason]', 'waive [J-0001] <floor> <reason>', 'merged [J-0001] <sha>', 'confirm AC-1 [J-0001]', 'accept lesson L4', 'reject lesson L4 [reason]', 'accept finding code-1 <reason>', 'dismiss finding code-1 <reason>', 'confirm environment [hash|none]'];
+const REPLY_FORMS = ['approve [J-0001] [H1]', 'deny [J-0001] <reason>', 'resume [J-0001] [step]', 'proceed [J-0001]', 'cancel job [J-0001] [reason]', 'abandon job [J-0001] [reason]', 'waive [J-0001] <floor> <reason>', 'merged [J-0001] <sha>', 'confirm AC-1 [J-0001]', 'accept lesson L4', 'reject lesson L4 [reason]', 'accept brief P1', 'reject brief P1 [reason]', 'accept finding code-1 <reason>', 'dismiss finding code-1 <reason>', 'confirm environment [hash|none]'];
 const VERBS = ['approve', 'approved', 'deny', 'denied', 'resume', 'proceed', 'cancel', 'abandon', 'waive', 'merged', 'merge', 'confirm', 'accept', 'reject', 'dismiss', 'lgtm'];
 
 function editDistance(a, b) {
@@ -428,6 +446,9 @@ function applyReply(root, parsed, channel = 'chat') {
       return lessons.decide(root, { id: parsed.lessonId, accept: true, channel });
     case 'reject_lesson':
       return lessons.decide(root, { id: parsed.lessonId, accept: false, reason: parsed.reason, channel });
+    case 'accept_brief':
+    case 'reject_brief':
+      return require('./project-brief').decide(root, { id: parsed.proposalId, accept: parsed.cmd === 'accept_brief', reason: parsed.reason, channel });
     case 'waive':
       return waive(root, { jobId: parsed.jobId, floor: parsed.floor, reason: parsed.reason, channel });
     case 'merged':
@@ -445,4 +466,4 @@ function applyReply(root, parsed, channel = 'chat') {
   }
 }
 
-module.exports = { snapshot, GATE_IDS, requireHumanChannel, confirmTyped, confirmationCode, CODE_ALPHABET, agentContext, testToken, AGENT_ENV, approve, deny, resume, stop, waive, merged, confirmAc, settleFinding, setEnvironment, parseReply, nearMiss, REPLY_FORMS, applyReply, sha256 };
+module.exports = { applyResume, snapshot, GATE_IDS, requireHumanChannel, confirmTyped, confirmationCode, CODE_ALPHABET, agentContext, testToken, AGENT_ENV, approve, deny, resume, stop, waive, merged, confirmAc, settleFinding, setEnvironment, parseReply, nearMiss, REPLY_FORMS, applyReply, sha256 };

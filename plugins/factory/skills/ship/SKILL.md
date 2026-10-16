@@ -5,6 +5,8 @@ user-invocable: false
 ---
 # Ship
 
+Under `factory drive` the drive runs `factory ship` itself and stops at the merge wait (`wait`, with the ship result under `ship`); you do step 2 from that. With `policy.drive.stop_before_ship` the drive stops before (`ship`) and you run step 1 when the user says to.
+
 1. Run `factory ship`. It refuses unless every pre-ship floor is met (it lists the missing ones — then run `factory next`, which routes to the missing step).
    - With a GitHub remote and an authenticated `gh`, it pushes the job branch and opens a PR whose body is the completion report (templates/docs/ship-report.md: what changed, AC → evidence, design record, risk, rollout and rollback). It also refreshes the job's `docs-index.md` (contract → design → plan → evidence traceability).
    - Otherwise it prepares a **local** merge.

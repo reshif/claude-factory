@@ -34,7 +34,21 @@ safe((input) => {
     }
   }
   else if (READ_TOOLS.has(tool)) why = checkReadTool(root, tool, ti, absFile, cwd, policy);
-  else if (tool === 'Bash' && root) why = checkBash(root, ti.command, policy, { job: jobInScope(root, cwd), agent: Boolean(input.agent_id || input.agent_type), agentType: input.agent_type || null });
+  else if (tool === 'Bash' && root) {
+    // a subagent's call carries agent_id; agent_type alone also marks a main session started
+    // with --agent (code.claude.com/docs/en/hooks, common input fields), which is not an agent here
+    why = checkBash(root, ti.command, policy, { job: jobInScope(root, cwd), agent: Boolean(input.agent_id), agentType: input.agent_id ? input.agent_type || null : null });
+    // posting to this session's own inbox socket: it arrives as a prompt, as if the user typed it
+    if (!why && require('../cli/core/reply-origin').SOCKET.test(String(ti.command || ''))) why = 'Posting to this Claude Code session\'s inbox socket is not allowed in a factory repository: the text would arrive as a prompt the factory cannot tell from the user\'s own reply. Tell the user instead.';
+  } else if (root && require('../cli/core/reply-origin').PROMPT_TOOLS.test(String(tool || ''))) {
+    // Scheduling or sending text that comes back as a prompt (a cron firing, a message): never a
+    // factory reply, which only the user types (review B1). What is let through is noted, so the
+    // prompt hook refuses it if it still reads as a reply when it arrives.
+    const O = require('../cli/core/reply-origin');
+    const leaves = O.texts(ti);
+    if (leaves.some((t) => O.looksLikeReply(t))) why = `${tool} would deliver a factory reply (approve, deny, resume, ok, accept brief …) as a prompt: replies are the user's own words, typed by them. Show the user the stop and let them reply.`;
+    else for (const t of leaves) O.record(root, t, { tool, agent: input.agent_id || null });
+  }
   if (why) {
     // Say what was seen, so a block can be traced to the exact command.
     if (tool === 'Bash' && ti.command) {

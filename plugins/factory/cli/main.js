@@ -8,7 +8,7 @@ const path = require('path');
 const { FactoryError, fail, readText, writeJson } = require('./lib/util');
 const { requireRoot, findRoot, PLUGIN_ROOT } = require('./lib/paths');
 
-const BOOL = new Set(['h1', 'epic', 'local', 'check', 'json', 'plan-fields', 'help', 'threat-model', 'plan-critique', 'no-threat-model', 'accept-degraded', 'serve', 'default', 'none', 'proposed']);
+const { BOOL } = require('./lib/args'); // shared with the guard hook's command reader
 
 function parseArgs(argv) {
   const pos = [];
@@ -50,6 +50,11 @@ const HELP = `factory — Software Factory CLI (plugin at ${PLUGIN_ROOT})
 Setup      init [--base <branch>] · doctor · ci install
 Jobs       job new --title "…" --type <work type> --risk low|medium|high [--epic] [--request "<the user's words>"] · job show · job list · use <job>
 Routing    next · why [--format md] · finalize [--mode before_ship|full] [--check]
+Drive      drive [--record <envelope.json>] [--lessons <reply.json>] [--max-seconds 480] [--max-steps 200]
+           (steps the job itself: CLI steps, briefs, records, ship, distill, evidence it can check; returns a typed stop:
+           a workflow or the lesson writer for the main session, or a gate, clarify turn, park or done for you, notified)
+           drive status · inbox [--format md]   (everything waiting on you, across jobs)
+           drive takeover   (human only: release a drive record you know is gone)
 Contract   contract show · contract check [--plan-fields]
            answer "<the user's words>"   (during clarify: the same as clarify reply; after H1: answer --question "…" --answer "…")
 Clarify    clarify reply "<the user's words>"   (read-back ok or edit, sheet answers, a redirect's ok; not a gate verb)
@@ -76,7 +81,8 @@ Console    console [--out file.html] [--job J] [--label "…"] [--data data.json
            console --serve [--port 4477] [--job J]   (the same page, live: updates as Claude works)
 Human only (your terminal, or reply in chat):
            approve [gate] · deny --reason "…" · resume [step] · proceed (after a clarify cap: go on, gaps shown) · cancel · abandon · waive <floor> --reason "…"
-           merged <commit> · confirm <AC> · lessons accept|reject <L> · lessons promote <L> --check "cmd" · reseal
+           merged <commit> · confirm <AC> · lessons accept|reject <L|P> · lessons promote <L> --check "cmd" · reseal
+           (a P<n> is a project brief change distill proposed; chat: accept brief P1 · reject brief P1 <why>)
            env set [--file f | --none] [hash]   (confirm the build environment; chat: confirm environment <hash|none>)
            finding accept|dismiss <id> --reason "…"   (a serious finding no verifier settled; chat: dismiss finding code-1 <reason>)
 Global     --root <repo> · --job <J-0001>`;
@@ -132,8 +138,30 @@ function run(argv) {
       C('job').setCurrent(root, sub);
       return { current: sub };
     }
-    case 'next':
-      return C('decision-table').decide(R(), J);
+    case 'next': {
+      // While factory drive steps the job, anyone else's factory next would race it: say so.
+      const root = R();
+      const live = C('drive').liveFor(root);
+      if (live && !C('drive').isDriveChild(live)) {
+        const id = J || C('job').current(root);
+        if (!id || !live.job || live.job === id) return C('drive').drivingAnswer(live, id);
+      }
+      return C('decision-table').decide(root, J);
+    }
+    case 'drive': {
+      if (sub !== 'status' && sub !== 'takeover') C('agents-open').refuseWhileAgentsWork(R(), 'drive');
+      const D = C('drive');
+      if (sub === 'status') return D.status(R());
+      if (sub === 'takeover') return D.takeover(R(), { channel: tty }); // human-only
+      if (sub !== undefined) return fail('drive [--record <envelope.json>] [--lessons <reply.json>] | drive status | drive takeover', 'bad_input');
+      const file = (k) => (typeof opt[k] === 'string' ? opt[k] : opt[k] === true ? fail(`--${k} needs a file`, 'bad_input') : null);
+      return D.drive(R(), { jobId: J, record: file('record'), lessons: file('lessons'), maxSteps: opt['max-steps'], maxSeconds: opt['max-seconds'] });
+    }
+    case 'inbox': {
+      C('agents-open').refuseWhileAgentsWork(R(), 'inbox');
+      const r = C('inbox').list(R());
+      return opt.format === 'md' ? C('inbox').markdown(r) : r;
+    }
     case 'why': {
       const w = C('lifecycle').why(R(), { jobId: J });
       return opt.format === 'md' ? C('lifecycle').whyMarkdown(w) : w;
@@ -157,6 +185,7 @@ function run(argv) {
       return fail('contract show | check', 'bad_input');
     }
     case 'answer': {
+      C('agents-open').refuseWhileAgentsWork(R(), 'answer');
       // factory answer "<the user's words>" | <n|D-n.n> "<words>" | --default | --question "…" --answer "…"
       const idLike = (x) => x && /^([UQ]-\d+|D-\d+\.\d+|\d{1,2})$/i.test(x);
       const ref = idLike(sub) ? sub : opt.id;
@@ -164,6 +193,7 @@ function run(argv) {
       return C('record').answer(R(), { jobId: J, ref, question: opt.question, answer: text, acceptDefault: Boolean(opt.default) });
     }
     case 'clarify':
+      if (['reply', 'note', 'redirect'].includes(sub)) C('agents-open').refuseWhileAgentsWork(R(), `clarify ${sub}`);
       if (sub === 'status') return C('clarify').status(R(), { jobId: J, json: Boolean(opt.json), h1: Boolean(opt.h1) });
       if (sub === 'reply' || sub === 'note') return C('clarify').reply(R(), { jobId: J, text: opt.text || pos.slice(2).join(' ') });
       if (sub === 'redirect') return C('clarify').redirect(R(), { jobId: J, text: opt.text || pos.slice(2).join(' ') });
@@ -263,7 +293,12 @@ function run(argv) {
       if (sub !== 'sync') fail('pr sync', 'bad_input');
       return C('ship').prSync(R(), { jobId: J });
     case 'ci': {
-      if (sub === 'install') return C('ship').ciInstall(R());
+      if (sub === 'install') {
+        // human-only, as the guard and the help say: it writes CI files the user commits
+        C('human').requireHumanChannel(tty);
+        C('human').confirmTyped(tty, 'ci', 'install the CI gate');
+        return C('ship').ciInstall(R());
+      }
       if (sub === 'verify') {
         const r = opt['manifest-dir'] ? C('ship').ciVerify(null, { manifestDir: opt['manifest-dir'] }) : C('ship').ciVerify(R(), { jobId: J, commit: opt.commit });
         if (!r.ok) process.exitCode = 1;
@@ -316,6 +351,8 @@ function run(argv) {
       const l = C('lessons');
       if (sub === 'list') return l.load(R());
       if (sub === 'add') return l.add(R(), { jobId: J || C('job').current(R()), text: opt.text, scope: opt.scope, why: opt.why });
+      // a project brief proposal (P<n>, from distill) is accepted like a lesson: human-only
+      if ((sub === 'accept' || sub === 'reject') && /^P\d+$/i.test(pos[2] || '')) return C('project-brief').decide(R(), { id: pos[2], accept: sub === 'accept', reason: opt.reason, channel: tty });
       if (sub === 'accept' || sub === 'reject') return l.decide(R(), { id: pos[2], accept: sub === 'accept', reason: opt.reason, channel: tty });
       if (sub === 'promote') return l.promote(R(), { id: pos[2], check: opt.check, channel: tty });
       return fail('lessons list | add | accept | reject | promote', 'bad_input');
@@ -421,7 +458,10 @@ const PROSE = new Set(['reason', 'text', 'question', 'answer', 'title', 'note', 
 function logCommand(argv, res, err) {
   try {
     const { pos, opt } = parseArgs(argv);
-    if (['help', 'console', undefined].includes(pos[0])) return; // console is read-only: it leaves no trace (doc is logged; the inspector counts it read-only)
+    // console is read-only: it leaves no trace (doc is logged; the inspector counts it read-only);
+    // inbox and drive log their own events (inbox_viewed, drive_start / drive_stop), and every step
+    // the drive runs is its own command line, logged with via "drive"
+    if (['help', 'console', 'inbox', 'drive', undefined].includes(pos[0])) return;
     const root = findRoot(opt.root ? path.resolve(opt.root) : process.cwd());
     if (!root) return;
     const events = require('./core/events');
@@ -447,6 +487,7 @@ function logCommand(argv, res, err) {
       decision_id: r.decision_id || ctx.decision_id,
       ok: !err && process.exitCode !== 1 && process.exitCode !== 2,
       code: err ? err.code || 'internal' : null,
+      ...(process.env.FACTORY_DRIVE ? { via: 'drive' } : {}),
       ...extra,
     });
   } catch {
@@ -475,4 +516,4 @@ function main(argv) {
   logCommand(argv, res, err);
 }
 
-module.exports = { main, run, parseArgs, findRoot };
+module.exports = { main, run, parseArgs, findRoot, BOOL };
