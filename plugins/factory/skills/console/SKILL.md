@@ -17,4 +17,6 @@ When the user asks what something on the page means or how to find something (a 
 ## Watching live
 If the user wants to watch a job as it runs (or asks for the console while a job is active), serve it instead: run `factory console --serve` **in the background** (it keeps running; with the Bash tool, set `run_in_background`). Its first output line gives the `serving` URL (`http://127.0.0.1:4477/` by default; `--port 0` picks a free port). Give the user that URL and say the page updates by itself as the job runs. It listens on this machine only and is still read-only. Don't start a second one if one is already serving.
 
+Above the board, **Waiting on you** lists what `factory inbox` lists (gates, clarify turns, parks, merges, project brief proposals) with the reply for each, and the last `factory drive` stop. Each agent row links to its transcript (where Claude Code keeps it; served only by `--serve`) with its tool calls and tokens, and a job's page has a **Usage** panel (what the transcripts report; Claude Code reports no cost).
+
 A written file says **snapshot** instead of live. Never edit the page or `.factory/` to change what it shows. Re-run `factory console` to refresh a static page.

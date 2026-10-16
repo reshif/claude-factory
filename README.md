@@ -66,7 +66,7 @@ flowchart TB
   style line fill:#f8f9fa,stroke:#adb5bd
 ```
 
-**The one rule that holds it together:** agents *propose*, the CLI *decides*. Claude never chooses the next step. The `start` skill runs `factory next`, does exactly what it returns (a workflow, a skill, a gate, a CLI command), hands the result to `factory record`, and asks `factory next` again. Hooks enforce the parts Claude could get wrong: your replies are applied by the CLI before Claude sees them, the guard blocks edits to protected files, and the Stop hook refuses "it's done" while floors are unmet.
+**The one rule that holds it together:** agents *propose*, the CLI *decides*. Claude never chooses the next step. The `start` skill runs `factory drive`, which asks `factory next`, runs the CLI's own steps and returns only what Claude must do (a workflow, the lesson writer) or what you must answer (a gate, a clarify turn, a park); Claude runs the workflow, hands the result back with `factory drive --record`, and the loop goes on. Hooks enforce the parts Claude could get wrong: your replies are applied by the CLI before Claude sees them, the guard blocks edits to protected files, and the Stop hook refuses "it's done" while floors are unmet.
 
 ## Install
 
@@ -130,13 +130,14 @@ The `UserPromptSubmit` hook applies these **before Claude sees them**; nothing e
 |---|---|
 | `approve` | Approve the waiting gate. Bound to the document's hash: if it changed since you saw it, the approval is refused. |
 | `deny <what must change>` | Send it back with your reason. |
-| `resume` | Un-park; the cap that stopped it gets one more round. |
+| `resume` | Un-park; the cap that stopped it gets one more round. (An amendment submitted while parked is shown as gate A; approving it resumes the job too.) |
 | `proceed` | Clarify parked at its research, contract or readiness cap: go on to H1 with the gaps and God Eye's objections shown (never as approval). Yours only, like `resume`. |
 | `cancel job` · `abandon job` | Stop for good; files are kept. |
 | `merged <commit>` | Record a local merge (when there's no GitHub PR). |
 | `confirm AC-3` | Confirm a criterion whose evidence type is `human`. |
 | `waive ci_reverify <reason>` · `waive ship_size <reason>` | The only waivable floors. |
 | `accept lesson L4` · `reject lesson L4 <why>` | Decide on a proposed lesson. |
+| `accept brief P1` · `reject brief P1 <why>` | Decide on a change distill proposed to the project brief (`.factory/project.md`, which every later agent reads). Nothing changes there until you accept. |
 | `ack finding F3` · `fixed finding F3` · `wontfix finding F3 <why>` | Settle an inspector finding. |
 | `inspect mode <recipe\|all> on\|off\|sample <N>` | How often the inspector runs. |
 | `ok` · `ok, but 2 b` · `1 a, 3: other: …` · `2 defer` · `fact 1: <correction>` | While clarify waits on you: `ok` on its read-back (or a redirect read-back), or one answer to its decision sheet. Any other words you type there are recorded **word for word** by Claude (`factory clarify reply`), and the interviewer maps them to the sheet; it never answers for you. |
@@ -168,6 +169,14 @@ Clarify is a few short stages, each a rule in the CLI, and usually costs you **t
 Every item clarify settles is in one sealed record (`jobs/<J>/clarify.json`; `factory clarify status` prints it) with who decided it: **you** > **evidence** > **accepted** (you took the recommendation) > **assumption**. You can reopen anything at any time; an agent overturns your words only with stronger evidence, and then the sheet asks you first. You may edit `contract.md` by hand at any time: the readiness check runs on your text, and the next writer keeps your edits. To change direction, deny at H1 or say so at any stage (`factory clarify redirect "…"`): the interviewer reads it back as tracked items, and H1 reports each one done or not done. Clarify parks at fixed caps (2 research passes, 5 decisions per sheet, 2 writer attempts, 3 readiness cycles) or when an agent returns nothing; `resume` tries again, and at a research, contract or readiness cap `proceed` goes on with the gaps shown. H1 shows the contract checked against what you said, the decisions and who made them, what design may choose, the research gaps, what was dropped (who, why) and God Eye's objections.
 
 ## How a job runs
+
+**`factory drive`.** The start skill runs `factory drive`: the CLI steps the job's router itself (its CLI steps, each workflow's brief and record, ship, distill's bookkeeping, the evidence it can check) and returns one typed stop: a workflow, or the lesson writer, for Claude to run with the Workflow tool (it never starts agents itself), or a point where you are needed (a gate, a clarify turn, a park with its kind and the suggested next step, a merge, done), which also sends a desktop notification (`notify-send`, a WSL or Windows toast, `osascript`, or a terminal bell; `policy.notify: false` turns them off). It never answers for you. `factory inbox` lists everything waiting on you across jobs, with the reply and the terminal command. Details: [`DRIVE.md`](plugins/factory/docs/DRIVE.md).
+
+**Recovery by type.** Every park names its kind and the step that moves it on (`factory why` lists them). A task whose dependencies don't merge is rebuilt once on the integrated job branch, and a task whose merge dropped already-merged lines is rebuilt once on the merged code, before either parks.
+
+**Build by dependency.** Realize starts each task as soon as its own dependencies are integrated (up to `limits.max_parallel_tasks` at a time) and integrates done tasks as they finish; no attempt starts or retries while an integration runs or a broken one is repaired, and tasks start from the last integration whose checks passed.
+
+**The project brief.** `.factory/project.md` (yours to edit) holds the repository's conventions, module map, test and lint commands, environment, what ground found and an index of earlier jobs' ADRs and accepted lessons. Every agent brief carries it, trimmed, as data; distill can only propose changes to it (`accept brief P1`).
 
 **Recipes.** The CLI picks one by rule from work type and risk ([`recipes/_selection.json`](plugins/factory/recipes/_selection.json)) and locks it into the job (`recipe.lock.json`). Recipes are human-authored and versioned; agents can't edit them.
 
@@ -331,13 +340,17 @@ Project overrides go in `.factory/policy.json` (you edit it; agents can't). Defa
 {
   "base_branch": "main",
   "checks": [{ "cmd": "npm run lint" }],
-  "agents": { "models": { "researcher": "haiku", "builder": "sonnet" }, "builder_escalation": ["opus"] },
+  "agents": { "models": { "researcher": "sonnet", "god-eye": "default" }, "builder_escalation": ["opus"], "builder_escalation_from_attempt": 3 },
+  "notify": true,
+  "drive": { "stop_before_ship": false },
   "protected_paths": [".factory/**", ".git/**", ".github/workflows/**", "migrations/**"],
   "limits": { "max_review_rounds": 3, "max_parallel_tasks": 4, "max_agent_runs_per_job": 400 }
 }
 ```
 
-Every workflow agent runs as its real factory agent (`agents/<role>.md`), so each role's tools and model apply. `agents.models` sets a model per role; `agents.builder_escalation` moves a builder to a stronger model from its second attempt.
+Every workflow agent runs as its real factory agent (`agents/<role>.md`), so each role's tools apply. `agents.models` sets a model per role as a Claude Code alias (`haiku`, `sonnet`, `opus`) or a model id, passed per agent call; the defaults are haiku for the interviewer, researchers, finding verifier and tester, sonnet for builders, writers, reviewers, planners and the integrator, and opus for the architect and God Eye. `"default"` (or `null`) runs a role on your main conversation's model, and `agents.models_enabled: false` does that for every role (also for jobs already running). `agents.builder_escalation` moves a builder to a stronger model from attempt `builder_escalation_from_attempt` (3), counted across realize runs. `factory doctor` lists the roles by model. `drive.stop_before_ship` makes `factory drive` stop before `factory ship` (the push or PR) for your go.
+
+**Usage.** Claude Code keeps each agent's transcript; the SubagentStop hook records where, with the tool calls and tokens it reports (Claude Code reports no cost). `factory telemetry report --format md` has a *Usage* table per job, and the console links each agent row to its transcript.
 
 ## Start over in a repo
 
@@ -436,7 +449,8 @@ claude plugin eval plugins/factory-inspector --runs 3 --no-publish
 
 - Covered by the automated tests above, but young in live use: try a `bug@low` job first, and run `claude plugin validate plugins/factory` after installing.
 - The guard and seals are defence in depth, not a sandbox: agents run as your OS user. CI re-verify and your own merge are the hard backstops (ARCHITECTURE.md §6a).
-- Budgets count agent runs and wall time, not tokens.
+- Budgets count agent runs and wall time, not tokens (tokens are reported, from the agents' transcripts, not budgeted).
+- Desktop notifications were exercised with a `notify-send` stub on Linux; the WSL, macOS and Windows notifiers are covered by unit tests of the command each would run.
 - Not included in this build: standards packs (`python@1`, `typescript@1`); project checks go in `policy.checks`.
 
-More: [`ARCHITECTURE.md`](plugins/factory/docs/ARCHITECTURE.md) · [`DESIGN-v2.md`](plugins/factory/docs/DESIGN-v2.md) · [`RECIPES.md`](plugins/factory/docs/RECIPES.md) · [`FLOORS.md`](plugins/factory/docs/FLOORS.md) · [`DOCS.md`](plugins/factory/docs/DOCS.md)
+More: [`ARCHITECTURE.md`](plugins/factory/docs/ARCHITECTURE.md) · [`DRIVE.md`](plugins/factory/docs/DRIVE.md) · [`DESIGN-v2.md`](plugins/factory/docs/DESIGN-v2.md) · [`RECIPES.md`](plugins/factory/docs/RECIPES.md) · [`FLOORS.md`](plugins/factory/docs/FLOORS.md) · [`DOCS.md`](plugins/factory/docs/DOCS.md)

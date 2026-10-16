@@ -7,7 +7,9 @@ user-invocable: false
 
 The CLI parked the job (`reason` in the `factory next` output). Parking is how the factory stops instead of guessing: budgets, round caps, no-progress loops, scope drift, conflicts, failed epic gates.
 
-1. Run `factory why --format md` and look at the last few rows to understand how it got here.
+The park is typed: `park.kind` names the cause (budget, scope_violation, review_rounds, needs_paths, dependency_conflict, regression, environment_broken, clarify, …) and `park.next` the step that moves it on; both are in the `factory next` output (and in the drive's `parked` stop). A regression or a dependency conflict was already rebuilt once on the integrated branch before the job parked.
+
+1. Run `factory why --format md` and look at the last few rows (each park row shows its kind, its reason and the suggested next step) to understand how it got here.
 2. Tell the user, in a few lines:
    - what stopped it and why (plain words, not the rule id),
    - what you'd suggest (e.g. "one more review round is reasonable — the last round confirmed only one small issue", or "this needs a plan change: T2 needs files outside its paths"),
@@ -16,8 +18,8 @@ The CLI parked the job (`reason` in the `factory next` output). Parking is how t
      - **`proceed`** — only for a clarify park at a research, contract-writer or readiness cap (the reason says so; never after an agent failed): go on with the gaps shown, and H1 lists God Eye's open objections as objections, not approval
      - **`cancel job`** or **`abandon job`** — stop for good; files are kept
      - **`waive ci_reverify <reason>`** — only when the CI re-verify floor can't be met (no `factory-gate` workflow and no local merge to re-verify)
-     - or tell you what to change (you may then need **factory:amend**).
-3. **Stop.** After the hook applies their reply, continue with `factory next`.
+     - or tell you what to change (you may then need **factory:amend**). An amendment submitted while the job is parked is shown as gate A (`factory next` or `factory drive`); approving it also resumes the job, exactly as `resume` would, so no separate `resume` is needed.
+3. **Stop.** After the hook applies their reply, continue with `factory drive` (or `factory next`).
 
 ## Example
 For `reason: "Review rounds used up (2) with confirmed serious findings still open."`:

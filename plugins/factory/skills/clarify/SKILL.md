@@ -24,6 +24,8 @@ Clarify is a short sequence of stages, each a rule in the factory CLI. Agents ru
 It lives at `.factory/jobs/<job>/contract.md`. Before the first stage you may draft it from the request (Intent first: Problem, Who, Outcome, Why now, Success signal; then Goal, Non-goals, Acceptance criteria `- AC-1: <observable behaviour> (evidence: test)`, Constraints, Allowed paths, Verify commands ``- `cmd` (AC-1)``, Assumptions) and run `factory contract check`. After that the contract writer writes it from what clarify settled, and the CLI adds its own sections (`## Decisions`, `## Facts relied on`, `## Design may choose`, `## Research gaps`); don't edit those. **The user may edit `contract.md` at any time**; the CLI checks their text again before H1, the next writer keeps their edits, and if an edit takes out what honoured something they said (an AC they deleted) the sheet asks them whether to put it back or leave it out. Don't state facts about the outside world from memory: research settles them against the confirmed versions.
 
 ## Each turn
+Under `factory drive` (the start skill), the drive does steps 1 and 2's CLI parts itself: it hands you the clarify workflow's brief (stop `workflow`), records its result (`factory drive --record`), and stops with `clarify` (the `screen`) when clarify waits on the user, with `parked` at a cap, or at H1 (`gate`). The status rules below are what it applies; you show what the stop carries.
+
 1. `factory next` returns skill clarify with a `clarify` block: `stage`, and either `run` (agents work) or `waiting_for_user` with a `screen`. If it has `error` (the clarify record fails its seal), say it to the user as given and stop: only their `factory reseal` in their own terminal moves it.
 2. **When `run` is set**, run the stage as factory:start runs any workflow ("Running a workflow"): `factory wfargs clarify` → Workflow **`factory:clarify`** with that brief, unchanged → write the result to `.factory/scratch/envelope.json` → `factory record --file .factory/scratch/envelope.json`. Act on the record result's `status`:
    - `needs_user`: clarify now waits on the user. Show its `screen` **as it is** (do not summarise, reorder or add questions) and **stop**.
@@ -66,4 +68,4 @@ Sources for another version than the one confirmed, or a moving page (stable, la
 >
 > Reply **ok** to start research, or tell me in your own words what to change.
 
-The user replies "ok": the reply hook records it and says so; run `factory next` (research runs). The user replies "also round to the cent": run `factory clarify reply "also round to the cent"`, then `factory next` (the read-back runs again with their words).
+The user replies "ok": the reply hook records it and says so; run `factory drive` (or `factory next`): research runs. The user replies "also round to the cent": run `factory clarify reply "also round to the cent"`, then `factory drive` (the read-back runs again with their words).

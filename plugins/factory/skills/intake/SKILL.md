@@ -17,4 +17,4 @@ user-invocable: false
    `factory job new --title "<short title>" --type <type> --risk <risk> --request "<the user's request, word for word>" [--epic]`
    `--request` keeps the user's own words, exactly as they typed them: clarify's read-back quotes them, and version pins come only from them or from a repo file. Tell the user the job id and the recipe the CLI chose (one line). If `risk_raised_by_policy` is true, say so. Write the confirmed restatement into the contract's **Intent** section (Problem, Who, Outcome) straight away.
    Write only what the user said and what you read in the repo: facts about libraries, vendors or standards are researched by clarify, with sources, for the versions the user confirms.
-8. Return to the factory:start loop (`factory next`).
+8. Return to the factory:start loop (`factory drive`).
