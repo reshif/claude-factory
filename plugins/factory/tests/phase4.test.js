@@ -112,14 +112,11 @@ test('P4.1: console --serve serves a transcript only from Claude Code\'s transcr
 
 // ------------------------------------------------------------------------------ P4.2
 
-test('P4.2: per-role models: fast, standard and strongest tiers ship in the policy as Claude Code aliases; a project overrides a role; one switch puts every role on the main conversation\'s model; builders step up on attempt 3', () => {
+test('P4.2 (review M3): per-role models: only the interviewer and the tester run on haiku by default, every judgement role and the builder inherit the main conversation\'s model; a project names a tier on purpose; one switch; builders step up on attempt 3', () => {
   const pol = core('policy').defaults();
   const m = pol.agents.models;
-  for (const r of ['interviewer', 'researcher', 'finding-verifier', 'tester']) assert.equal(m[r], 'haiku', r);
-  for (const r of ['builder', 'contract-writer', 'code-reviewer', 'planner', 'integrator', 'lesson-writer']) assert.equal(m[r], 'sonnet', r);
-  for (const r of ['architect', 'god-eye']) assert.equal(m[r], 'opus', r);
-  const agents = fs.readdirSync(path.join(F.PLUGIN, 'agents')).map((x) => x.replace(/\.md$/, ''));
-  assert.deepEqual(Object.keys(m).sort(), agents.sort(), 'a tier for every agent');
+  assert.deepEqual(m, { interviewer: 'haiku', tester: 'haiku' });
+  for (const r of ['researcher', 'finding-verifier', 'security-reviewer', 'god-eye', 'architect', 'contract-writer', 'builder']) assert.equal(core('wfargs').roleModel(pol, r), null, `${r} inherits`);
   assert.deepEqual([pol.agents.builder_escalation, pol.agents.builder_escalation_from_attempt, pol.agents.models_enabled], [['opus'], 3, true]);
   const root = F.makeRepo();
   fs.writeFileSync(path.join(root, '.factory', 'policy.json'), JSON.stringify({ agents: { models: { researcher: 'sonnet', interviewer: 'default' } } }));
@@ -133,10 +130,11 @@ test('P4.2: per-role models: fast, standard and strongest tiers ship in the poli
   assert.ok(F.cli(root, ['wfargs', 'ground']).probes.every((p) => p.model === undefined));
   const W = core('wfargs');
   assert.deepEqual(W.builderSpec({ policy: { agents: { models: { builder: 'sonnet' }, builder_escalation: ['opus'] } } }), { role: 'builder', agent_type: 'factory:builder', model: 'sonnet', escalate: ['opus'], escalate_from: 3 });
+  assert.deepEqual(W.builderSpec({ policy: pol }), { role: 'builder', agent_type: 'factory:builder', escalate: ['opus'], escalate_from: 3 }, 'the shipped builder inherits, then steps up');
   assert.equal(W.roleModel({ agents: { models: 'default' } }, 'builder'), null);
   const doc = F.cli(root, ['doctor']);
   assert.match(JSON.stringify(doc), /models_enabled is false/);
-  assert.ok(stateOf(root, J).policy.agents.models.builder === 'sonnet', 'the job keeps its snapshot; the switch overrides it');
+  assert.equal(stateOf(root, J).policy.agents.models.researcher, 'sonnet', 'the job keeps its snapshot; the switch overrides it');
 });
 
 // ------------------------------------------------------------------------------ P4.3

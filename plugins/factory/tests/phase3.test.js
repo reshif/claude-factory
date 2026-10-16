@@ -109,6 +109,8 @@ test('P3.1: factory drive steps a whole bug@low job; the main session runs only 
       F.sh(root, `git checkout -q ${st.base_branch} && git merge -q --no-ff -m "merge ${J}" ${st.branch}`);
       assert.equal(F.say(root, `merged ${F.sh(root, 'git rev-parse --short HEAD').trim()}`).status, 'applied');
       s = drive(root);
+    } else if (s.kind === 'yield') {
+      s = drive(root);
     } else if (s.kind === 'agent') {
       assert.equal(s.agent_type, 'factory:lesson-writer');
       fs.writeFileSync(path.join(root, '.factory', 'scratch', 'lessons.json'), JSON.stringify({ lessons: [], nothing_to_learn: true }));
@@ -149,9 +151,16 @@ test('P3.1: while a drive is live, factory next answers "driving" and a second d
   const D = core('drive');
   const file = path.join(root, '.factory', 'drive.json');
   // a live drive: this test's own node process stands in for it
-  fs.writeFileSync(file, JSON.stringify({ pid: process.pid, host: os.hostname(), job: J, status: 'running', started_at: new Date().toISOString(), heartbeat_at: new Date(Date.now() - 3600e3).toISOString() }));
+  fs.writeFileSync(file, JSON.stringify({ pid: process.pid, pid_start: D.procStart(process.pid), host: os.hostname(), job: J, status: 'running', started_at: new Date().toISOString(), heartbeat_at: new Date(Date.now() - 3600e3).toISOString() }));
   const n = F.cli(root, ['next']);
-  assert.equal(n.action, 'driving', 'a live drive on this host is live however old its last step');
+  assert.equal(n.action, 'driving', 'a live drive on this host (pid and start time match) is live however old its last step');
+  // the same pid with another start time: reused by another process, so dead (review M2)
+  fs.writeFileSync(file, JSON.stringify({ pid: process.pid, pid_start: 'proc:1', host: os.hostname(), job: J, status: 'running', started_at: new Date().toISOString(), heartbeat_at: new Date(Date.now() - 3600e3).toISOString() }));
+  assert.notEqual(F.cli(root, ['next']).action, 'driving', 'a reused pid holds nothing');
+  // no start time recorded (an older record): only a recent step counts
+  fs.writeFileSync(file, JSON.stringify({ pid: process.pid, host: os.hostname(), job: J, status: 'running', started_at: new Date().toISOString(), heartbeat_at: new Date(Date.now() - 3600e3).toISOString() }));
+  assert.notEqual(F.cli(root, ['next']).action, 'driving');
+  fs.writeFileSync(file, JSON.stringify({ pid: process.pid, pid_start: D.procStart(process.pid), host: os.hostname(), job: J, status: 'running', started_at: new Date().toISOString() }));
   assert.equal(drive(root).code, 'drive_in_progress');
   // a dead pid
   fs.writeFileSync(file, JSON.stringify({ pid: 999999, host: os.hostname(), job: J, status: 'running', started_at: new Date().toISOString() }));

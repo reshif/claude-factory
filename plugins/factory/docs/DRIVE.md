@@ -46,7 +46,8 @@ shows. A drive needs a few hundred milliseconds per step and returns before `--m
 | `agent` | the main session: start factory:lesson-writer with `context`, save its reply, run `factory drive --lessons .factory/scratch/lessons.json` | no |
 | `evidence` | the main session: check the build, run the evidence line with the real path | no |
 | `skill`, `yield` | the main session: follow the skill / run `factory drive` again | no |
-| `gate`, `clarify`, `questions`, `parked`, `wait`, `amend`, `ship`, `done` | the user | yes |
+| `gate`, `clarify`, `questions`, `parked`, `wait`, `amend`, `ship`, `step_too_long`, `done` | the user | yes |
+| `superseded` | nobody: another drive took this one over | no |
 | `error`, `limit` | the user (exit code 1) | yes |
 
 Every stop is a `drive_stop` event (`kind`, `handoff`, the gate, the park kind, the clarify
@@ -57,23 +58,64 @@ command for a human-only one (`command`; it asks for a code shown on that termin
 the last record's result (`recorded`). A rerun that stops at the same gate, park or clarify turn
 tells the user once only (`notified: "repeat"`).
 
+### Replies are the user's own: scheduled and sent prompts
+
+The reply hook (UserPromptSubmit) also fires on a scheduled task firing (CronCreate,
+ScheduleWakeup, `/loop`), a background subagent reporting back, and a message from another
+session or from this session's own Bash command or hook through its inbox socket; its input has
+`prompt` (and `session_title`) and nothing saying where the prompt came from
+(code.claude.com/docs/en/hooks, *UserPromptSubmit*; code.claude.com/docs/en/cross-session-messaging).
+A cron prompt fires verbatim, so a scheduled `approve` would read as the user's. So:
+
+- the guard also runs on `CronCreate`, `ScheduleWakeup`, `RemoteTrigger`, `SendMessage` and MCP
+  tools named like `send_message`, `send_later`, `create_trigger`, `update_trigger`,
+  `fire_trigger`, and refuses any text that the reply hook's own parsers would take as a reply
+  (`cli/core/reply-origin.js`); it refuses a Bash command that names this session's inbox socket
+  (`CLAUDE_CODE_MESSAGING_SOCKET`, `CLAUDE_CODE_MESSAGING_TOKEN`, `cc-socks-`);
+- every text it lets through is noted as a sealed hash in `.factory/log/agent-prompts.jsonl`, and
+  the reply hook refuses a prompt with a matching hash (each note counts once, for 7 days);
+- a prompt wrapped in an envelope tag (a task notification, a teammate or peer message) is never
+  applied and never noted as heard from the user.
+
+The limit: text that reaches the session some other way (a script file Claude wrote and ran that
+posts to the socket, an MCP tool named otherwise, a background subagent whose final text is a
+bare reply) is not seen by the guard, and the hook can't tell it from typing. Setting
+`crossSessionInbound` to `refuse` in your settings closes the socket path.
+
 ### What the drive never does
 
 It runs no human-only verb (approve, deny, resume, proceed, cancel, abandon, waive, merged,
 confirm, reseal, finding, lessons accept/reject), no `clarify reply` or `redirect`, no `answer`.
 Its children run in Claude Code's agent environment with no terminal, where the CLI's human
-channel refuses anyway, and the guard refuses `factory drive` and `factory inbox` to factory
-agents. The user's replies arrive through the prompt hook as before.
+channel refuses anyway. The guard refuses `factory drive` and `factory inbox` (and relays of the
+user's words) to factory agents, also fed on stdin through xargs or parallel, and refuses any
+agent factory command whose verb is computed (`$(…)`, backticks, a variable). Below the guard,
+the CLI refuses `drive`, `inbox`, `answer` and `clarify reply|redirect|note` while a factory agent
+is at work (a `SubagentStart` with no `SubagentStop`, in the last 30 minutes), which also covers a
+script file an agent wrote and ran. The user's replies arrive through the prompt hook as before.
 
 ### One drive at a time
 
-`drive.json` holds the drive's pid and host. While it is live, `factory next` from anyone else
-answers `action: "driving"` and a second `factory drive` is refused (`drive_in_progress`). On
-this machine a live node/factory pid is alive however long its step takes; a drive started on
-another host (a container, a renamed machine) counts only for 15 minutes after its last step. A
-drive killed mid-step (a tool timeout) leaves `status: running` with a dead pid: `factory drive
-status` says `crashed`, and the next drive takes over (`drive_start.recovered_from`) and continues
-from `factory next`.
+`drive.json` holds the drive's pid, the process's start time (`/proc/<pid>/stat` field 22, or
+`ps -o lstart=`) and its host. While it is live, `factory next` from anyone else answers
+`action: "driving"` and a second `factory drive` is refused (`drive_in_progress`). On this machine
+the recorded pid alive with the recorded start time is alive however long its step takes; a pid
+reused by another process is dead; where the start time can't be read, and for a drive on
+another host, only a step in the last 30 minutes counts. A drive killed mid-step (a tool
+timeout) leaves `status: running`: `factory drive status` says `crashed`, and the next drive
+takes over (`drive_start.recovered_from`) and continues from `factory next`. If a record still
+holds the repository and you know its drive is gone, `factory drive takeover` (human-only, from
+your terminal; it asks for a code shown there) releases it without signalling anything.
+
+### Long steps
+
+A drive call returns within `--max-seconds`, but a step can't be cut in half: a step that may
+run long (`verify run`, `ci verify`, `reconcile`, `pr`, `ship`, `epic`, `close`) starts only in a
+fresh drive (one that has spent under 30 s; otherwise the drive returns `yield` first). The drive
+remembers how long each such step took and the step a drive was cut off in: a step that was cut
+off twice, or that last took 85% of the Bash tool's ceiling (`BASH_MAX_TIMEOUT_MS`, else 600 s),
+comes back as **`step_too_long`** with the command for the user to run in their own terminal
+(it is not human-only, only long), never as an endless run-and-take-over loop.
 
 ## factory inbox and notifications
 
@@ -152,26 +194,34 @@ no cost into transcripts, so the factory reports tokens and tool calls only, and
 where nothing was reported. `factory telemetry report` has a **Usage** section per job; the
 console's job page has a **Usage** panel and each agent row links to its transcript (a `file://`
 link in a snapshot; `factory console --serve` serves `/transcript?path=…` only for a `.jsonl`
-inside Claude Code's transcript folders, after symlinks, that an event of this project names).
+inside Claude Code's transcript folders, after symlinks, that a factory agent's event of this
+project names; the page and the route listen on 127.0.0.1, so another user on a shared machine
+could read them, as they can the page). Where one run had several agents of a role (parallel
+builders), a row lists that role's transcripts instead of claiming one, since the hooks name an
+agent by id and the roster by label.
 Transcripts can hold tool output (a printed `.env`, test logs): they stay where Claude Code wrote
 them, under your home folder.
 
 ## Models
 
 `policy.agents.models` names a model per role, as a Claude Code alias (`haiku`, `sonnet`,
-`opus`) or a full model id; the factory passes it as the agent call's own `model` (the Workflow
-tool's per-call option, or the Agent tool's per-invocation `model`), which Claude Code puts
-before an agent file's `model:` (code.claude.com/docs/en/sub-agents, *Choose a model*). The
-agent files set none, so a role with no model runs on the main conversation's model. The shipped
-tiers: haiku for the interviewer, researchers, finding verifier and tester; sonnet for the
-builder, contract writer, brief writer, reviewers, option generator, threat modeler, planner,
-slicer, integrator and lesson writer; opus for the architect and God Eye. Builders step up
-through `builder_escalation` (`["opus"]`) from `builder_escalation_from_attempt` (3), counted
-across realize runs. Override a role in `.factory/policy.json` (`null` or `"default"`: the main
-conversation's model); `agents.models_enabled: false` (or `models: "default"`) puts every role on
+`opus`, `fable`) or a full model id; the factory passes it as the agent call's own `model` (the
+Workflow tool's per-call option, or the Agent tool's per-invocation `model`), which Claude Code
+puts before an agent file's `model:` (code.claude.com/docs/en/sub-agents, *Choose a model*). The
+agent files set none, so a role with no model runs on the main conversation's model.
+
+The shipped default never runs a judgement role below the main conversation's model: only the
+interviewer (it reads the user's words back) and the tester (it runs `task verify` and relays
+it) are on `haiku`. Researchers (their claims become the contract's facts and the project brief),
+the finding verifier (it settles serious findings, security ones included), every reviewer, God
+Eye, the architect, the contract writer and the builder inherit the main conversation's model.
+Builders step up through `builder_escalation` (`["opus"]`) from `builder_escalation_from_attempt`
+(3), counted across realize runs. Name a tier per role in `.factory/policy.json` to trade quality
+for cost on purpose (`null` or `"default"`: the main conversation's model);
+`agents.models_enabled: false` (or `models: "default"`) puts every role, escalation included, on
 the main conversation's model, read from the live policy so it covers jobs already in flight.
-`factory doctor` lists the roles by model. A family alias follows the main conversation's model
-when it is in that family (the same page).
+`factory doctor` lists every role by the model it runs on, and warns about a full id (the
+Agent-tool path, used without the Workflow tool and for the lesson writer, documents aliases).
 
 ## The project brief
 

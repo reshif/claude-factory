@@ -317,20 +317,20 @@ Rule table and CLI: [`plugins/factory-inspector/README.md`](plugins/factory-insp
 | Plugin | Event | Script | What it does |
 |---|---|---|---|
 | factory | SessionStart | `session-start.js` | Tells Claude about the current job and what's waiting |
-| factory | UserPromptSubmit | `prompt.js` | Applies your replies through the CLI, and records an unmistakable clarify reply (`ok`, a structured sheet answer) itself; notes a hash (never the text) of each message you type, so words Claude relays to clarify exactly as you typed them count as yours; flags look-alikes as not applied |
-| factory | PreToolUse (Write, Edit, Bash, Read, Grep, Glob …) | `guard.js` | Blocks writes to protected paths, recipes and policy, and reads of secrets (`.env`, keys, the seal key; `.env.example` and other templates are fine); keeps builders inside their task's allowed paths; refuses hand edits of a job's contract while it is in clarify (its contract editor is the one writer) and `factory answer` / `factory clarify note` from a subagent; reads shell commands like a shell, so a human-only `factory` verb is caught where it runs, never in prose, patterns or commit messages; each deny quotes the command |
+| factory | UserPromptSubmit | `prompt.js` | Applies your replies through the CLI, and records an unmistakable clarify reply (`ok`, a structured sheet answer) itself; notes a hash (never the text) of each message you type, so words Claude relays to clarify exactly as you typed them count as yours; flags look-alikes as not applied; never applies a prompt Claude scheduled or sent itself, or one wrapped as a notification or message (the hook also fires on scheduled tasks, background subagents and messages from other sessions) |
+| factory | PreToolUse (Write, Edit, Bash, Read, Grep, Glob …; CronCreate, ScheduleWakeup, RemoteTrigger, SendMessage and send-later style MCP tools) | `guard.js` | Refuses scheduling or sending a factory reply (`approve`, `ok`, `accept brief P1` …) as a later prompt, and posting to the session's inbox socket; Blocks writes to protected paths, recipes and policy, and reads of secrets (`.env`, keys, the seal key; `.env.example` and other templates are fine); keeps builders inside their task's allowed paths; refuses hand edits of a job's contract while it is in clarify (its contract editor is the one writer) and `factory answer` / `factory clarify note` from a subagent; reads shell commands like a shell, so a human-only `factory` verb is caught where it runs, never in prose, patterns or commit messages; each deny quotes the command |
 | factory | PostToolUse (tools that change things), SubagentStart | `activity.js` | Appends a sealed line per event to `.factory/log/events.jsonl` |
 | factory | SubagentStop | `subagent-stop.js` | Records that an agent finished |
 | factory | Stop | `stop.js` | Blocks "it's done" while any job it names has unmet floors (not while the job waits on you) |
 | inspector | PostToolUse (Bash) | `after-close.js` | Inspects right after `factory close / cancel / abandon` |
 | inspector | Stop · SessionStart | `catch-up.js` · `session-start.js` | Inspects jobs that ended any other way |
-| inspector | UserPromptSubmit · PreToolUse | `prompt.js` · `guard.js` | Applies your finding replies; keeps marking and modes human-only |
+| inspector | UserPromptSubmit · PreToolUse | `prompt.js` · `guard.js` | Applies your finding replies (never one Claude scheduled or sent); keeps marking and modes human-only |
 
 A hook that fails never breaks Claude Code, but it leaves a `hook_error` event, which the inspector reports.
 
 ## CI re-verify (recommended)
 
-From your own terminal, once per repo: `factory ci install` (human-only). It copies a self-contained CLI to `.github/factory-cli/` and adds `.github/workflows/factory-gate.yml`, which re-runs every shipped job's verify commands on the PR's merge result. Add your project's setup steps, commit both on your base branch, and make `factory-gate` a required check. Without GitHub, `factory ci verify` re-verifies a local merge.
+From your own terminal, once per repo: `factory ci install` (human-only). It copies a self-contained CLI to `.github/factory-cli/` (its code and every folder it reads at run time: schemas, templates, config, agents, policy, recipes; stamped with the factory version) and adds `.github/workflows/factory-gate.yml`, which re-runs every shipped job's verify commands on the PR's merge result. Add your project's setup steps, commit both on your base branch, and make `factory-gate` a required check. Without GitHub, `factory ci verify` re-verifies a local merge. `factory doctor` warns when the copy is incomplete or from another factory version (`ci cli`): run `factory ci install` again after updating the plugin, and commit the result.
 
 ## Configure
 
@@ -340,7 +340,7 @@ Project overrides go in `.factory/policy.json` (you edit it; agents can't). Defa
 {
   "base_branch": "main",
   "checks": [{ "cmd": "npm run lint" }],
-  "agents": { "models": { "researcher": "sonnet", "god-eye": "default" }, "builder_escalation": ["opus"], "builder_escalation_from_attempt": 3 },
+  "agents": { "models": { "interviewer": "haiku", "tester": "haiku" }, "builder_escalation": ["opus"], "builder_escalation_from_attempt": 3 },
   "notify": true,
   "drive": { "stop_before_ship": false },
   "protected_paths": [".factory/**", ".git/**", ".github/workflows/**", "migrations/**"],
@@ -348,7 +348,7 @@ Project overrides go in `.factory/policy.json` (you edit it; agents can't). Defa
 }
 ```
 
-Every workflow agent runs as its real factory agent (`agents/<role>.md`), so each role's tools apply. `agents.models` sets a model per role as a Claude Code alias (`haiku`, `sonnet`, `opus`) or a model id, passed per agent call; the defaults are haiku for the interviewer, researchers, finding verifier and tester, sonnet for builders, writers, reviewers, planners and the integrator, and opus for the architect and God Eye. `"default"` (or `null`) runs a role on your main conversation's model, and `agents.models_enabled: false` does that for every role (also for jobs already running). `agents.builder_escalation` moves a builder to a stronger model from attempt `builder_escalation_from_attempt` (3), counted across realize runs. `factory doctor` lists the roles by model. `drive.stop_before_ship` makes `factory drive` stop before `factory ship` (the push or PR) for your go.
+Every workflow agent runs as its real factory agent (`agents/<role>.md`), so each role's tools apply. `agents.models` sets a model per role as a Claude Code alias (`haiku`, `sonnet`, `opus`) or a model id, passed per agent call; by default only the interviewer and the tester (it relays `task verify`) run on haiku, and every other role, the judgement roles (researchers, the finding verifier, reviewers, God Eye, the architect, the contract writer) and the builder included, inherits your main conversation's model. `"default"` (or `null`) runs a role on your main conversation's model, and `agents.models_enabled: false` does that for every role (also for jobs already running). `agents.builder_escalation` moves a builder to a stronger model from attempt `builder_escalation_from_attempt` (3), counted across realize runs. `factory doctor` lists the roles by model. `drive.stop_before_ship` makes `factory drive` stop before `factory ship` (the push or PR) for your go.
 
 **Usage.** Claude Code keeps each agent's transcript; the SubagentStop hook records where, with the tool calls and tokens it reports (Claude Code reports no cost). `factory telemetry report --format md` has a *Usage* table per job, and the console links each agent row to its transcript.
 
