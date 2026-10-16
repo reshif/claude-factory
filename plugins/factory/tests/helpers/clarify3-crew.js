@@ -718,7 +718,18 @@ function verdict(objections) {
 // c: { role, prompt, env: { FACTORY_ROOT, FACTORY_JOB, CREW } }. Returns the agent's reply, or
 // { __none: true } for an agent that returns nothing (it died, or was stopped: the Workflow tool
 // hands the script null).
+// The calls this crew answered, per project root (in order): `earlier(ctx, pred)` counts the
+// ones before the current call that match pred ({ agent }).
+const CALLS = new Map();
+let CURRENT = null;
+function earlier(_ctx, pred) {
+  const list = CALLS.get(CURRENT) || [];
+  return list.slice(0, -1).filter(pred).length;
+}
+
 module.exports = (c) => {
+  CURRENT = (c.env && c.env.FACTORY_ROOT) || '';
+  CALLS.set(CURRENT, [...(CALLS.get(CURRENT) || []), { agent: `factory:${c.role}` }]);
   const C = (() => {
     try {
       return JSON.parse((c.env && c.env.CREW) || process.env.CREW || '{}');

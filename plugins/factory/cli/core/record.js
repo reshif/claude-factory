@@ -497,6 +497,15 @@ function apply(root, { jobId, file, envelope }) {
   if (env.status === 'error') {
     recordRoster(root, state, env);
     ledger.append(root, state.id, { kind: 'error', workflow: env.workflow, config: env.config || null, summary: env.summary });
+    // a loop's diagnosis that failed: the loop records a fallback diagnosis that asks the human, so
+    // the router does not ask for a diagnosis forever (the next factory next stops with a question)
+    if (env.workflow === 'fanout-judge' && env.config === 'diagnose' && env.mode) {
+      try {
+        require('./loop').fallbackDiagnosis(root, state.id, env.mode, `the diagnosis workflow failed: ${String(env.summary || 'no result').slice(0, 200)}`);
+      } catch {
+        /* the repeat guard still ends it */
+      }
+    }
     return { job: state.id, status: 'error', message: `Workflow reported an error: ${env.summary}. factory next will retry once, then park.` };
   }
   const expected = wfargs.currentInputHash(root, state, env);

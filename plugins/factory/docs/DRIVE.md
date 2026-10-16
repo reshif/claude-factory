@@ -58,6 +58,14 @@ command for a human-only one (`command`; it asks for a code shown on that termin
 the last record's result (`recorded`). A rerun that stops at the same gate, park or clarify turn
 tells the user once only (`notified: "repeat"`).
 
+Since the 0.10.0 port: a `parked` stop carries the park's `question` and `options` (the specific
+thing the factory needs from the user, after one escalation to a stronger model has not settled
+it), so the user answers in the same reply instead of a bare `resume`; a `wait` stop carries
+`ship_review` (the criteria to confirm, findings to accept or fix, and whether the push needs
+`approve ship`, all in one reply) or `environment` (the planner's proposed environment, when it
+is not confirmed by a combined gate); the `done` stop carries the job's `digest`. A medium job's
+`gate` stop names what its one approval covers (design + plan + environment).
+
 ### Replies are the user's own: scheduled and sent prompts
 
 The reply hook (UserPromptSubmit) also fires on a scheduled task firing (CronCreate,
@@ -253,3 +261,7 @@ like a lesson. The inbox and the drive's `done` stop list open proposals.
 | model ids, a refused-model fallback, a CLI version check | aliases per call, one switch | aliases follow the main conversation's model family; a workflow agent that cannot start returns null, so a refusal can't be told apart (the switch is the escape hatch) |
 | the dead-hook notice fix (`reply-watch.js`) | not applicable | claude-factory has no dead-hook notice |
 | `factory run`'s `drive_in_progress` refusal | `factory next` answers `driving` | there is no `factory run` |
+| the loop engine (`cli/core/loop.js`) required by the runner | the same engine copied inline into `workflows/fanout-judge.js` (between `LOOP ENGINE BEGIN`/`END`, no clock), and `cli/core/loop.js` used by `factory record` | a workflow script cannot require modules or read the clock; a fuzz test keeps the copy identical in behaviour |
+| the plan probe run by the runner between planner and God Eye | `factory record` runs it after the decompose workflow's `plan` phase, then hands back a `critique` phase | only the CLI can run commands; decompose costs one more hand-off |
+| the ground ledger's second look run inside the runner | `factory record` checks the ledger, writes `ground.reask.json` and returns `retry`; the ground workflow runs again with only those probes | the same: the ledger check needs the fetched files |
+| `task grant` run by the runner for a builder's `needs_paths` | the builder asks with `task built --status blocked --reason needs_paths --paths …`; the CLI checks the grant (exact files, inside allowed paths, no other task's files) and the workflow retries without spending an attempt | there is no runner; `task grant`, `deps fetch` and `plan probe` stay refused to agents |

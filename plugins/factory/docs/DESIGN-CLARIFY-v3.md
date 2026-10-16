@@ -320,7 +320,7 @@ checks repo quotes and versions itself; there is no evidence-verifier agent.
 | `factory answer "<words>"` | main session | the same as `clarify reply` during clarify |
 | `factory clarify redirect "<words>"` | main session, for the user | a redirect at any time during clarify |
 | `factory clarify status [--json] [--h1]` | anyone | the stage, items, sheet, failures, checks; `--h1` prints the H1 view |
-| `factory proceed` / chat `proceed` | human only | after a cap park: go on with the gaps explicit |
+| `factory proceed` / chat `proceed` | human only | after a cap park recorded by an older factory: go on with the gaps explicit |
 | `factory clarify split` | — | kept for migrated jobs: says that v3 has no folded issues |
 
 `clarify reply` and `answer` are not gate verbs, so the main session runs them on the user's
@@ -443,23 +443,28 @@ v2 spent a full round (mapper, scouts, verifier, the analyst panel, judge, God E
 minutes) on every reply. v3 spends the long research once; every other turn is one or two short
 calls.
 
-## Caps (fixed, no progress arithmetic)
+## Caps and stop rules (since the 0.10.0 port: progress first, counts as ceilings)
 
-| Cap | Default | When reached |
+| Loop or cap | Default | When reached |
 |---|---|---|
-| research passes per entry into research | 2 | park: `resume` one more pass, `proceed` to the sheet with gaps marked |
+| research passes per entry into research | 2 | go on: the items are research gaps, the sheet asks without a researched recommendation |
 | decisions per sheet | 5 | the rest wait for the next sheet |
-| writer attempts per readiness cycle | 2 | park: `resume` one more attempt, `proceed` to H1 with the blockers shown |
-| readiness checks that send work back (to the writer, the sheet, research or the read-back) | 3 | park where the work would have gone: `resume` one more cycle, `proceed` to H1 with the blockers shown |
+| the readiness loop (writer and God Eye) | while the open blockers shrink; 2 rounds without progress: the stronger model; 1 more: the diagnosis; 1 more: the end; ceiling `limits.clarify_writer_rounds` (5) | **H1** with the open objections and the diagnosis shown (or the diagnosis's question on the sheet) |
+| readiness checks that send work back to the user's stages (the sheet, research, the read-back) | 3 | **H1** with the open objections shown |
 | `ok` on a sheet whose open decisions have no recommendation | the second `ok` | those decisions are deferred to design, recorded as the user's (the sheet warned after the first) |
-| an agent that returns nothing | retried once in the same run (a researcher is tried once: its time box is spent; its plan items become gaps) | park with the failure named |
+| an agent that returns nothing | retried once in the same run (a researcher is tried once: its time box is spent; its plan items become gaps) | park with the failure named (the only clarify park left) |
 
-While a job is parked, `clarify reply` and `clarify redirect` are refused: only the user's `resume`
-or `proceed` moves it.
+While a job is parked, `clarify reply` and `clarify redirect` **store the words** (never refused):
+the user's own chat reply is resume plus content, and the words are read back as a redirect once
+the job resumes. Resume stays the user's alone. The read-back is shown, not waited on
+(`clarify.readback: "show"`; `"wait"` restores the old turn).
 
-Policy keys: `clarify.max_research_passes`, `clarify.max_sheet_decisions`,
-`clarify.max_writer_attempts`, `clarify.max_readiness_cycles`, `clarify.research_minutes.{low,medium,high}`. The web switch and
-search tool stay `intent_research.web` and `intent_research.search_mcp`.
+Policy keys: `clarify.readback` (`show` | `wait`), `clarify.facts_sheet`, `clarify.tiebreak`,
+`clarify.max_research_passes`, `clarify.max_sheet_decisions`, `clarify.max_readiness_cycles`,
+`clarify.research_minutes.{low,medium,high}`, `limits.clarify_writer_rounds`, and the shared loop
+engine's `loops.{ceiling, stall_rounds, escalate_model, diagnose}`. The web switch and search tool
+stay `intent_research.web` and `intent_research.search_mcp`. (`clarify.max_writer_attempts` is
+gone: the writer's rounds are the loop's.)
 
 ## Who said it
 

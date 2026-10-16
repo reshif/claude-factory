@@ -45,7 +45,7 @@ async function runStage(root, J, crewEnv, calls) {
   if (brief.error) throw new Error(`wfargs clarify: ${JSON.stringify(brief).slice(0, 600)}`);
   const { result } = await H.run(WORKFLOW, JSON.stringify(brief), async (prompt, opts) => {
     const role = opts.agentType.replace(/^factory:/, '');
-    calls.push({ role, label: opts.label, model: opts.model || null });
+    calls.push({ role, label: opts.label, model: opts.model || null, prompt });
     const r = crew({ role, prompt, env: { FACTORY_ROOT: root, FACTORY_JOB: J, CREW: crewEnv } });
     if (r && r.__none) return null;
     // the Workflow tool's StructuredOutput: an agent's reply always matches the schema it was given
@@ -175,7 +175,7 @@ async function drive(scen, { log = () => {} } = {}) {
   rec.final = status();
   rec.ledger = JSON.parse(fs.readFileSync(path.join(JD, 'clarify.json'), 'utf8'));
   rec.contract = fs.readFileSync(path.join(JD, 'contract.md'), 'utf8');
-  rec.calls = calls.map((c) => ({ agent: `factory:${c.role}`, label: c.label, model: c.model }));
+  rec.calls = calls.map((c) => ({ agent: `factory:${c.role}`, label: c.label, model: c.model, prompt: c.prompt }));
   // how each agent came back, as the workflow's roster recorded it (sealed in the job's ledger)
   rec.agentRuns = fs.readFileSync(path.join(JD, 'ledger.jsonl'), 'utf8').trim().split('\n').map((l) => JSON.parse(l)).filter((e) => e.kind === 'agents' && e.workflow === 'clarify').flatMap((e) => e.agents.map((a) => ({ role: String(a.agent_type).replace(/^factory:/, ''), label: a.label, outcome: a.outcome })));
   rec.cli = cli;
