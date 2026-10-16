@@ -299,7 +299,12 @@ function jobData(root, id, all, checker, nowMs = Date.now()) {
         const i = timed.findIndex((x) => x.agent_type === a.agent_type);
         const hit = i >= 0 ? timed.splice(i, 1)[0] : null;
         const { agent_type: _t, ms: _m, ...extras } = hit || {};
-        return { label: short(a.label, 100), role: roleOf(a.agent_type), model: a.model || null, retry: Boolean(a.retry), outcome: a.outcome || null, ms: hit ? hit.ms : null, ...extras };
+        // The hooks name an agent by its id, the roster by its label: with one agent of a role in
+        // this run the two are the same agent; with several (parallel builders) they can't be paired,
+        // so the row lists the role's transcripts instead of claiming one is its own (minor 8).
+        const same = (hookAgents[e.decision_id] || []).filter((x) => x.agent_type === a.agent_type);
+        const own = same.length <= 1 ? extras : { role_transcripts: same.filter((x) => x.transcript).map((x) => x.transcript) };
+        return { label: short(a.label, 100), role: roleOf(a.agent_type), model: a.model || null, retry: Boolean(a.retry), outcome: a.outcome || null, ms: hit ? hit.ms : null, ...own };
       });
       push({ t: e.at, type: 'agents', step, workflow: e.workflow, config: e.config, mode: e.mode, decision_id: e.decision_id, status: e.status, runs: e.agent_runs || agents.length, agents });
     } else if (e.kind === 'clarify') {
@@ -553,7 +558,8 @@ function serve(root, { port = 4477, job, label, interval = 400, onReady } = {}) 
       let file = null;
       try { file = new URLSearchParams(String(req.url).slice(String(req.url).indexOf('?') + 1)).get('path'); } catch { file = null; }
       const real = file ? require('./transcripts').safePath(file) : null;
-      const named = real && readJsonl(p.eventsFile).some((e) => e.event === 'SubagentStop' && typeof e.transcript === 'string' && (e.transcript === file || require('./transcripts').safePath(e.transcript) === real));
+      // a factory agent's only: the transcripts of the user's own subagents (Explore …) are not served
+      const named = real && readJsonl(p.eventsFile).some((e) => e.event === 'SubagentStop' && /^factory:/.test(String(e.agent_type || '')) && typeof e.transcript === 'string' && (e.transcript === file || require('./transcripts').safePath(e.transcript) === real));
       if (!named) { res.writeHead(404); res.end('not found'); return; }
       res.writeHead(200, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store', 'x-content-type-options': 'nosniff' });
       res.end(fs.readFileSync(real));

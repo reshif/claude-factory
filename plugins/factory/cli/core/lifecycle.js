@@ -85,7 +85,16 @@ function troubleOf(root, state) {
     ...evs.filter((e) => typeof e.event === 'string' && e.event !== 'cli' && ((/park/i.test(e.event) && !/unpark|resume/i.test(e.event)) || (e.event === 'drive_stop' && TROUBLE_STOPS.has(e.kind)))).map((e) => ({ at: e.ts, source: e.event, type: typed(e), reason: clip(e.reason || e.summary || e.message || null) })),
   ]
     .sort((a, b) => String(a.at || '').localeCompare(String(b.at || '')))
-    .filter((p, i, all) => !all.slice(0, i).some((q) => q.at && p.at && Math.abs(Date.parse(p.at) - Date.parse(q.at)) < 5000));
+    .filter((p, i, all) => !all.slice(0, i).some((q) => q.at && p.at && Math.abs(Date.parse(p.at) - Date.parse(q.at)) < 5000))
+    // a drive rerun on a job still parked stops "parked" again, minutes later: the same park, not
+    // a new one (review minor 7). A drive stop counts only when no park came before it since the
+    // last resume.
+    .filter((p, i, all) => {
+      if (p.source !== 'drive_stop') return true;
+      const prev = all.slice(0, i).filter((q) => q.at && p.at && q.at <= p.at).pop();
+      if (!prev) return true;
+      return decs.some((d) => d.action === 'human.resume' && d.ts > prev.at && d.ts <= p.at);
+    });
   if (state.park && !parks.some((p) => p.reason && state.park.reason && p.reason === clip(state.park.reason))) parks.push({ at: state.park.at, source: 'current', type: clip(state.park.kind || state.park.from || null, 80), reason: clip(state.park.reason) });
   const resumes = decs.filter((d) => d.action === 'human.resume').map((d) => ({ at: d.ts, from: d.from || null, via: d.via || null }));
   // agent retries, from the workflows' rosters (a retried call, or a builder's attempt #2 and later)

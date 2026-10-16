@@ -279,7 +279,18 @@ function loadProposals(root) {
   return { version: 1, proposals: Array.isArray(d.proposals) ? d.proposals : [], added: Array.isArray(d.added) ? d.added : [] };
 }
 
-function propose(root, edits, { job, why } = {}) {
+// the proposals file is read and written whole under its own short lock (two jobs' distill, or a
+// decision racing a proposal, never mint the same P<n> or lose one)
+const withProposals = (root, fn) => {
+  fs.mkdirSync(path.dirname(proposalsFile(root)), { recursive: true });
+  return require('./job').withLock(`${proposalsFile(root)}.lock`, fn, { waitMs: 10000, staleMs: 30000, what: 'the project brief proposals' });
+};
+
+function propose(root, edits, opts = {}) {
+  return withProposals(root, () => proposeLocked(root, edits, opts));
+}
+
+function proposeLocked(root, edits, { job, why } = {}) {
   const out = { id: null, edits: [], refused: [] };
   if (!Array.isArray(edits) || !edits.length) return out;
   const doc = loadProposals(root);
@@ -340,6 +351,13 @@ function decide(root, { id, accept, reason, channel }) {
   if (!p) fail(`Project brief proposal ${id} not found`, 'bad_input');
   if (p.status !== 'proposed') fail(`Project brief proposal ${p.id} is already ${p.status}`, 'bad_input');
   human.confirmTyped(channel, p.id, `${accept ? 'accept' : 'reject'} it`);
+  return withProposals(root, () => decideLocked(root, { id: p.id, accept, reason }));
+}
+
+function decideLocked(root, { id, accept, reason }) {
+  const doc = loadProposals(root);
+  const p = doc.proposals.find((x) => x.id === id);
+  if (!p || p.status !== 'proposed') fail(`Project brief proposal ${id} is no longer open (${p ? p.status : 'gone'})`, 'bad_input');
   let applied = [];
   if (accept) {
     ensure(root);

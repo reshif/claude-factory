@@ -91,6 +91,8 @@ function doctor(cwd) {
     add('git identity', id.code === 0 && Boolean(id.stdout), id.stdout || 'set git config user.name / user.email (merges and commits need it)');
     const ci = exists(path.join(root, '.github', 'workflows', 'factory-gate.yml'));
     add('ci', ci, ci ? 'factory-gate workflow present' : 'no CI re-verify workflow: run factory ci install (or re-verify locally with factory ci verify)', 'warning');
+    const vc = require('./ship').vendoredCheck(root);
+    if (vc) add('ci cli', vc.ok, vc.message, 'warning');
     const cur = job.current(root);
     add('current job', true, cur || '(none)');
     // the build environment every worktree is set up with (factory env show / check)
@@ -114,9 +116,16 @@ function doctor(cwd) {
     if (require('./wfargs').modelsOff(pol)) add('agent models', true, 'policy.agents.models_enabled is false: every role runs on the main conversation\'s model', 'warning');
     else {
       const byModel = {};
-      for (const [r, m] of Object.entries(a.models && typeof a.models === 'object' ? a.models : {})) (byModel[m && m !== 'default' ? m : 'main conversation model'] = byModel[m && m !== 'default' ? m : 'main conversation model'] || []).push(r);
+      const set = a.models && typeof a.models === 'object' ? a.models : {};
+      const roles = require('fs').readdirSync(require('../lib/paths').pluginPath('agents')).filter((f) => f.endsWith('.md')).map((f) => f.replace(/\.md$/, ''));
+      for (const r of roles) {
+        const m = typeof set[r] === 'string' && set[r].trim() && set[r] !== 'default' ? set[r].trim() : 'main conversation model';
+        (byModel[m] = byModel[m] || []).push(r);
+      }
       const esc = (a.builder_escalation || []).length ? `; builders step up to ${a.builder_escalation.join(' → ')} from attempt ${a.builder_escalation_from_attempt || 3}` : '';
-      add('agent models', true, `${Object.entries(byModel).map(([m, rs]) => `${m}: ${rs.join(', ')}`).join(' · ') || 'every role on the main conversation\'s model'}${esc}. If your account or provider can't use one, set agents.models_enabled: false in .factory/policy.json`, 'warning');
+      // a full model id may not be accepted by the Agent tool's per-call model (the docs list aliases)
+      const ids = [...new Set([...Object.values(set), ...(a.builder_escalation || [])].filter((m) => typeof m === 'string' && m !== 'default' && !['haiku', 'sonnet', 'opus', 'fable', 'inherit'].includes(m)))];
+      add('agent models', !ids.length, `${Object.entries(byModel).map(([m, rs]) => `${m}: ${rs.join(', ')}`).join(' · ')}${esc}.${ids.length ? ` ${ids.join(', ')} ${ids.length > 1 ? 'are' : 'is'} not a Claude Code alias (haiku, sonnet, opus, fable): the Workflow tool takes a full id, but the Agent-tool path (no Workflow tool, the lesson writer) may not.` : ''} Roles not named in agents.models run on the main conversation's model; agents.models_enabled: false puts every role there`, 'warning');
     }
   } catch {
     /* no policy */

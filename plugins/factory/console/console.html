@@ -3567,7 +3567,7 @@ function agentRowsHtml(list) {
     const fam = modelFamily(a.model);
     const u = a.usage && a.usage.reported ? ` · ${fmtNum(a.usage.input_tokens)}/${fmtNum(a.usage.output_tokens)} tok` : '';
     const tools = typeof a.tool_calls === 'number' ? ` · ${a.tool_calls} tool${a.tool_calls === 1 ? '' : 's'}` : '';
-    const link = fileLink(a.transcript, 'transcript');
+    const link = a.role_transcripts && a.role_transcripts.length ? `${esc(a.role)} transcripts: ${a.role_transcripts.map((t, n) => fileLink(t, String(n + 1))).join(' ')}` : fileLink(a.transcript, 'transcript');
     return `<div class="arow"><span class="mdot ${fam}" title="${esc(a.model || (a.models_used || []).join(', ') || 'session model')}">${esc(modelLetter(a.model))}</span><b title="${esc(a.label)}">${esc(a.label)}</b><span class="o ${outcomeClass(a.outcome)}">${esc(a.outcome || '')}${a.ms ? ` · ${fmtDur(a.ms)}` : ''}${esc(tools)}${esc(u)}${link ? ` · ${link}` : ''}</span></div>`;
   }).join('')}</div>`;
 }

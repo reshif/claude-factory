@@ -176,8 +176,9 @@ function jobContext(root, state, gates = []) {
 }
 
 // Which factory agent runs an item, and on which model: policy.agents.models, one Claude Code
-// model alias (haiku, sonnet, opus) or full model id per role. default-policy.json ships a tier
-// per role (fast, standard, strongest); a project overrides any role in .factory/policy.json, and
+// model alias (haiku, sonnet, opus) or full model id per role. default-policy.json names haiku
+// for the interviewer and the tester only (no judgement role runs below the main conversation's
+// model; review M3); a project overrides any role in .factory/policy.json, and
 // null or "default" runs that role on the main conversation's model. The model travels as the
 // workflow's per-call `model` option (the Agent tool's per-invocation model), which Claude Code
 // puts before an agent file's own `model:` (code.claude.com/docs/en/sub-agents, "Choose a
