@@ -807,4 +807,4 @@ function problemKey(p) {
   return sha256(stableStringify([...((p && p.problems) || [])].map((x) => String(x).replace(/Output \(tail\):.*$/, '')).sort()));
 }
 
-module.exports = { ownDirs, splitLogin, cleanNetValue, urlCarriesToken, stripCreds, PROXY, runManaged, runChild, readStarted, procStat, sameProcess, STARTED, MAX_INTERRUPTED, mode, probeEnv, redact, survivors, sweep, NETWORK_SETUP, enabled, run, current, classify, lintCommand, greenfield, planOwns, problemKey, FILE, LINT };
+module.exports = { callerDeadline, ownDirs, splitLogin, cleanNetValue, urlCarriesToken, stripCreds, PROXY, runManaged, runChild, readStarted, procStat, sameProcess, STARTED, MAX_INTERRUPTED, mode, probeEnv, redact, survivors, sweep, NETWORK_SETUP, enabled, run, current, classify, lintCommand, greenfield, planOwns, problemKey, FILE, LINT };

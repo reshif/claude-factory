@@ -455,6 +455,16 @@ function asPreDesignDepthJob(root, J) {
   });
 }
 
+// Record an env_repair workflow result as factory drive does: factory record, then (when the
+// candidate is to be run) the long CLI step factory env check --repair, whose result ends the round
+// (0.11 port review M-1). Returns the round's result: { status, park, … }.
+function recordRepair(root, J, brief, data, opts = {}) {
+  const rec = record(root, envelope(brief, 'ok', data));
+  if (!rec || !rec.pending_check) return rec;
+  // (the router names it next unless something earlier is due, e.g. a plan edited meanwhile)
+  return cli(root, ['env', 'check', '--repair', '--job', J], opts);
+}
+
 function jobDir(root, id) {
   return path.join(root, '.factory', 'jobs', id);
 }
@@ -474,4 +484,4 @@ function nextPast(root) {
   return n;
 }
 
-module.exports = { asPreDesignDepthJob, layoutLines, probe, nextPast, PLUGIN, BIN, sh, write, makeRepo, cli, reply, say, built, clarify, relayVerify, relayWave, contractText, envelope, record, jobDir, adrText, noAdrText, threatModelText, recommendationText, contractsDocText, DIAGRAM };
+module.exports = { recordRepair, asPreDesignDepthJob, layoutLines, probe, nextPast, PLUGIN, BIN, sh, write, makeRepo, cli, reply, say, built, clarify, relayVerify, relayWave, contractText, envelope, record, jobDir, adrText, noAdrText, threatModelText, recommendationText, contractsDocText, DIAGRAM };

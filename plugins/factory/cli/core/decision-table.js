@@ -587,8 +587,11 @@ function route(root, jobId) {
         advice = null;
       }
     }
-    const next = (advice && advice.upgraded && advice.next) || p.next || parkNext(p.kind || parkKind(p.reason, p.from));
-    return out({ action: 'parked', reason: p.reason, park: { kind: p.kind || parkKind(p.reason, p.from), next, from: p.from || null, at: p.at || null, ...(advice ? { clarify: { upgraded: advice.upgraded, findings: advice.findings } } : {}) }, instructions: 'Wait for the human: resume <step> · cancel job · abandon job.' });
+    const kind = p.kind || parkKind(p.reason, p.from);
+    // a repaired environment waits for its seal: the reply names its hash (copilot-factory 0.11.1)
+    const seal = kind === 'environment_repair' ? (state.env_repair || {}).short || null : null;
+    const next = (advice && advice.upgraded && advice.next) || p.next || parkNext(kind);
+    return out({ action: 'parked', reason: p.reason, park: { kind, next: seal ? String(next).replace('"approve environment <hash>" (the hash the question names)', `"approve environment ${seal}"`) : next, from: p.from || null, at: p.at || null, ...(seal ? { seal } : {}), ...(advice ? { clarify: { upgraded: advice.upgraded, findings: advice.findings } } : {}) }, instructions: seal ? `Wait for the human: only "approve environment ${seal}" (or "a") seals the repaired environment; "b" or their words repair it again; "c" re-checks after a fix on their machine.` : 'Wait for the human: resume <step> · cancel job · abandon job.' });
   }
   if (state.amendment && state.amendment.status === 'open') {
     return out({ action: 'skill', skill: 'amend', step: 'amend', reason: 'An amendment is open: finish editing, then `factory amend submit`.' });

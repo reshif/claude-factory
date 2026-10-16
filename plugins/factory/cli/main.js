@@ -117,6 +117,8 @@ function run(argv) {
     case 'init':
       return C('setup').init(opt.root || process.cwd(), { baseBranch: opt.base });
     case 'doctor':
+      // the machine scan is the main session's (port review m-2): never while a factory agent works
+      if (opt.machine) C('agents-open').refuseWhileAgentsWork(opt.root || process.cwd(), 'doctor --machine');
       return C('setup').doctor(opt.root || process.cwd(), { refreshMachine: Boolean(opt.machine) });
     case 'console':
       if (opt.serve) { C('console').runServe(R(), { port: opt.port, job: J, label: opt.label }); return LONG_RUNNING; } // prints its own URL once listening
@@ -472,10 +474,19 @@ function run(argv) {
       if (sub === 'check') {
         // --job: the sealed environment's check before any task (the router's env.check step):
         // recorded for the job; a failure is a result the repair loop takes up, not an error
-        if (opt.job && !opt.proposed) {
-          C('agents-open').refuseWhileAgentsWork(R(), 'env check --job');
-          return C('env-repair').checkForJob(R(), C('job').resolve(R(), J));
+        // --repair: a recorded repair candidate's check (the router's env.repair_check step). Both
+        // run as a long step: a detached child picked up by the next call (port review M-1);
+        // --foreground runs it here (the user's terminal, after step_too_long)
+        if ((opt.job || opt.repair) && !opt.proposed) {
+          const kind = opt.repair ? 'repair' : 'sealed';
+          const ER = C('env-repair');
+          if (opt.child && process.env.FACTORY_ENVCHECK_CHILD === opt.child) return ER.runChild(R(), C('job').resolve(R(), J).id, kind, opt.child);
+          C('agents-open').refuseWhileAgentsWork(R(), `env check ${opt.repair ? '--repair' : '--job'}`);
+          return ER.runManaged(R(), C('job').resolve(R(), J).id, kind, { foreground: Boolean(opt.foreground) });
         }
+        // the confirmed environment, run as the user's own shell would: never while a factory agent
+        // works (port review m-8: an agent checks only a proposal, sandboxed)
+        if (!opt.proposed) C('agents-open').refuseWhileAgentsWork(R(), 'env check');
         const r = E.check(R(), { proposed: Boolean(opt.proposed) });
         if (!r.ok) process.exitCode = 1;
         return r;

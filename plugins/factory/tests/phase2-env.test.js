@@ -213,7 +213,7 @@ test('P2.1 acceptance (0.11): a broken sealed setup is checked before any builde
   assert.equal(b.judge.agent_type, 'factory:planner');
   assert.match(fs.readFileSync(b.judge.prompt.split('\n')[1].trim(), 'utf8'), /environment repair[\s\S]*No matching distribution found for nautobot==9\.9/);
   fs.writeFileSync(core('env-repair').REPAIR(root, J), JSON.stringify(P.ENV));
-  const rec = F.record(root, F.envelope(b, 'ok', { repair: { path: core('env-repair').REPAIR(root, J), summary: 'drop the failing install' } }));
+  const rec = F.recordRepair(root, J, b, { repair: { path: core('env-repair').REPAIR(root, J), summary: 'drop the failing install' } });
   assert.equal(rec.status, 'park', JSON.stringify(rec));
   assert.equal(rec.park.kind, 'environment_repair');
   let st = core('job').load(root, J);

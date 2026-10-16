@@ -283,6 +283,11 @@ function stopDetail(kind, n, extra = {}) {
       return { questions: extra.questions || [], summary: `${J}: ${(extra.questions || []).length} question(s) block the design.`, reply: 'answer each question' };
     case 'parked': {
       const p = n.park || {};
+      // a repaired build environment waits for its seal: the exact replies, never "resume" or "yes"
+      if (p.kind === 'environment_repair') {
+        const short = p.seal || '<hash>';
+        return { park: { kind: p.kind, next: p.next || null, seal: short, ...(p.question ? { question: p.question, options: p.options || [] } : {}) }, summary: `${J} parked (environment_repair): a repaired build environment ${short} waits for your seal (its full diff is in the question). Reply "approve environment ${short}" (or "a") to seal it, "b" or your words to repair it again, "c" to re-check after a fix on your machine. A bare "approve environment", "ok" or "yes" seals nothing.`, reply: `approve environment ${short} | a | b (or your words) | c`, command: null };
+      }
       // a park asks a specific question (a loop's diagnosis, the budget question): the reply is
       // the user's answer in their own words, an option's letter, or one of the exact replies
       const q = p.question ? { question: p.question, options: p.options || [], recommendation: p.recommendation || null } : null;
@@ -428,6 +433,19 @@ function loop(ctx) {
         if (long) return long;
         const res = ctx.timed(w.join(' '), () => runChild(ctx, w));
         const key = n.command;
+        // a long step that was cut off twice before it finished (the environment checks): the
+        // user's terminal runs it in the foreground
+        if (res.json && res.json.code === 'step_too_long') {
+          const d = res.json.details || {};
+          return ctx.stop('step_too_long', n, { step: d.step || w.join(' '), command: d.command || `factory ${w.join(' ')}`, why: d.why || 'was cut off while running' });
+        }
+        // still running in its own process (the environment checks, like the plan probe): this
+        // call's time is used; a fresh drive call picks up its result (its wait is not a duration
+        // that would send the step to the user's terminal)
+        if (res.json && res.json.pending && /^env check\b/.test(w.join(' '))) {
+          ctx.forget(w.join(' '));
+          return ctx.stop('yield', n, { seconds: Math.round((Date.now() - ctx.t0) / 1000), before: w.join(' ') });
+        }
         if (res.code !== 0 || !res.json || res.json.error) {
           fails[key] = (fails[key] || 0) + 1;
           // a failing check (ci verify) is routed again by factory next; the same command failing
@@ -592,6 +610,11 @@ function drive(root, { jobId, record = null, lessons = null, maxSteps = MAX_STEP
       save({ durations: { ...(current.durations || {}), [label]: Date.now() - t }, killed_in: killed || null, step_long: false });
     }
     return r;
+  };
+  ctx.forget = (label) => {
+    const durations = { ...(current.durations || {}) };
+    delete durations[label];
+    save({ durations });
   };
   ctx.stop = (kind, n, extra = {}) => {
     const d = stopDetail(kind, n || {}, { job: ctx.job, ...extra });

@@ -179,21 +179,35 @@ typed from its reason.
   copilot-factory 0.11.0). Once the environment is confirmed (and not none), the router's step
   before realize is `factory env check --job J` (rule `env.check`), a CLI step the drive runs
   itself (a long step): setup, services up/health/down in a scratch worktree, the result sealed
-  in `jobs/<J>/env-check.json` for the environment's hash. A failing check is a result, not a
+  in `jobs/<J>/env-check.json` for the environment's hash. Like the plan probe it runs in its own
+  detached process (`jobs/<J>/env-check.started.json`: what it checks, pid and start time,
+  deadline): the call waits for it until the drive's deadline, and a call that runs out returns
+  `pending` (the drive yields; the next call picks up the result, never starting it again). A run
+  that died is killed with what it started, its scratch worktree swept, and counted; after two the
+  drive stops with `step_too_long` and `factory env check --job J --foreground` for the user's
+  terminal. Stale `_envcheck-*` worktrees whose owner (pid and start time) is gone are swept. A failing check is a result, not a
   step error. Until it passes, `wfargs realize` and `task start` are refused
   (`environment_unchecked`): no attempt is spent. A failure routes the repair loop: the drive
   hands back `fanout-judge` with config `env_repair` (the planner in repair mode, with the
   failure, this machine's tool inventory, the lint and the earlier rounds; per-call model, moved
   to the stronger one when a round makes no progress) for the main session to run with the
-  Workflow tool; `factory record` accepts its result only for a repair the router opened, lints
-  the candidate against the machine and checks it in a scratch worktree, sandboxed (no tokens, no
-  login shell, its `prefix` run too, what it leaves running killed) and under
-  `decompose.plan_probe` (false: not run; `"lint"`: lint only). A passing candidate parks the job
-  with one `environment_repair` question: the full diff and the whole environment, sealed only by
-  the user's `approve environment <hash>` (or `a`) through the reply hook; sealing moves only the
+  Workflow tool; `factory record` accepts its result only for a repair the router opened and lints
+  the candidate against the machine, never running it. Its check is the next router step,
+  `factory env check --repair --job J` (rule `env.repair_check`, the same detached long step):
+  in a scratch worktree, sandboxed (no tokens, no login shell, its `prefix` run too, what it
+  leaves running killed). The plan probe's switches decide whether it runs at all: policy
+  `decompose.plan_probe` false or the job's "no probe" answer: not run; `"lint"` or the job's
+  "lint only" answer: lint only; and, under `auto`, a candidate that installs from the network
+  is linted, not run (policy `"full"` runs it). A candidate that did not run says "NOT run" in
+  the seal question. A passing candidate parks the job
+  with one `environment_repair` question: the full diff (lists in order, with positions) and the
+  whole environment, sealed only by the user's `approve environment <hash>` or `a` on its own
+  through the reply hook (never `a, …`, a number, the option's text, `ok` or `yes`); sealing moves only the
   environment part of an approved combined gate, and only when the plan and design are as
   approved (else the gate is asked again). `c` ("I fixed it on my machine") or a plain resume
-  re-checks the sealed environment with a fresh machine inventory. No progress after four
+  re-checks the sealed environment with a fresh machine inventory (every cached inventory is
+  dropped: the reply hook's PATH is not the drive's). A check's output is redacted before it is
+  recorded, briefed, parked or shown. No progress after four
   rounds: a specific `environment_broken` question, never a bare resume.
 - **environment_broken** (a builder that finds the environment broken mid-build) parks once with the command and its output; **scope_violation**
   restarts from the job branch; an invalid reply gets the schema's correction turn: unchanged.

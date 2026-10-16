@@ -317,6 +317,8 @@ function resume(root, { jobId, step, words: given = null, channel }) {
 // ("b", "2", "b)", "(b)", "option b", "b: …"), or yes to a stored answer.
 const PARK_OPTION = /^(?:option\s+([a-z]|\d{1,2})|\(([a-z]|\d{1,2})\)|([a-z]|\d{1,2})\))(?:\s*[:.,\u2014\u2013-]?\s*(.*))?$/is;
 const PARK_LETTER = /^([a-z]|\d{1,2})(?:\s*[:.,\u2014\u2013-]\s*(.*))?$/is;
+// the environment seal's option letter on its own (port review m-1)
+const SEAL_LETTER = /^(?:option\s+a|\(a\)|a\)|a)\.?$/i;
 const PARK_CONFIRM = /^(y|yes|yep|yeah|yes please|ok|okay|sure|confirm|confirmed|use it|use that|do it|do that|go with it|go ahead)[.!]?$/i;
 // A stored answer is confirmed only while the park it was given to is still the one waiting, and
 // for a day at most (review m4): a later "yes" to something else never resumes with old words.
@@ -349,6 +351,18 @@ function parkAnswer(state, text) {
       if (m[1].toLowerCase() !== want) fail(`The repaired environment waiting for your seal is ${want}, not ${m[1]}: it changed after it was shown. Nothing was sealed.`, 'stale_environment');
       const a = (park.options || [])[0];
       return { words: a ? a.text : 'seal', option: 'a', optionText: a ? a.text : 'seal', extra: null, via: 'option' };
+    }
+    // the option letter alone seals too: "a", "(a)", "a)", "option a" — never with words after it
+    // ("a, no wait"), never its number ("1"), never the option's text ("Seal the …"): port review m-1
+    if (SEAL_LETTER.test(t)) {
+      const a = (park.options || [])[0];
+      return { words: a ? a.text : 'seal', option: 'a', optionText: a ? a.text : 'seal', extra: null, via: 'option' };
+    }
+    const om = PARK_OPTION.exec(t) || PARK_LETTER.exec(t);
+    const okey = om ? String(om[1] || om[2] || om[3] || '').toLowerCase() : null;
+    const head = String(((park.options || [])[0] || {}).text || '').toLowerCase().split(/[\s:,(]+/).filter(Boolean).slice(0, 2).join(' ');
+    if (okey === 'a' || okey === '1' || (head.length >= 4 && t.toLowerCase().startsWith(head)) || /^seal\b/i.test(t)) {
+      fail(`"${t.slice(0, 80)}" does not seal the repaired build environment: only "approve environment ${(state.env_repair || {}).short || '<hash>'}" or "a" on its own seals it. Nothing was sealed.`, 'explicit_seal_needed');
     }
   }
   const m = PARK_OPTION.exec(t) || PARK_LETTER.exec(t);
@@ -684,6 +698,8 @@ function readReply(text) {
     if (C.ACCEPT.test(y) || C.ACCEPT_HEAD.test(x) || SHEET.test(x)) forms.add('clarify');
     if (PARK_OPTION.test(y) || PARK_LETTER.test(y) || PARK_CONFIRM.test(y) || budgetGrant(y)) forms.add('park');
     if (INSPECTOR.test(x)) forms.add('inspector');
+    // anything shaped like the environment seal (approve / seal … environment, a seal option's text)
+    if (/^(approve|seal)\b[\s\S]{0,80}\benvironment\b/i.test(y)) forms.add('park');
   }
   out.forms = [...forms];
   out.reply = forms.size > 0;

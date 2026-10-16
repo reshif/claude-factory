@@ -609,6 +609,6 @@ test('the plan probe is the CLI\'s own step inside decompose (factory 0.10.0 por
   const M = require('../inspector/model');
   assert.ok(M.SPECIAL_STEPS.has('plan_probe'));
   // factory 0.11: the environment check and repair before realize are router steps outside the recipe
-  assert.ok(M.SPECIAL_STEPS.has('env_check') && M.SPECIAL_STEPS.has('env_repair'));
+  assert.ok(M.SPECIAL_STEPS.has('env_check') && M.SPECIAL_STEPS.has('env_repair') && M.SPECIAL_STEPS.has('env_repair_check'));
   assert.ok(!M.SPECIAL_STEPS.has('probe'), 'only the factory\'s own name');
 });
