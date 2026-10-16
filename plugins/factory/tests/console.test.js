@@ -16,16 +16,30 @@ const instructions = (prompt) => {
   return line ? fs.readFileSync(line.trim(), 'utf8') : prompt;
 };
 
+// Clarify v3 through the real workflow script, stage by stage: read-back (nothing to research),
+// ok, contract, readiness. Returns the last record.
+const READY = { intent_clear: true, scope_bounded: true, acs_testable: true, self_consistent: true, facts_honoured: true, instructions_handled: true, decisions_closed: true };
 async function clarify(root) {
-  const brief = F.cli(root, ['wfargs', 'fanout-judge', '--config', 'clarify'], { allowFail: false });
-  const { result } = await H.run(path.join(F.PLUGIN, 'workflows', 'fanout-judge.js'), JSON.stringify(brief), (prompt, opts) => {
-    if (opts.agentType === 'factory:intent-analyst') return { focus: 'x', questions: [] };
-    if (opts.agentType === 'factory:judge') return { questions: [], dismissed: [] };
-    if (opts.agentType === 'factory:god-eye') return { verdict: 'approve', items: [] };
-    throw new Error(`unexpected ${opts.agentType}: ${instructions(prompt).slice(0, 80)}`);
-  });
-  assert.ok(Array.isArray(result.agents) && result.agents.length === 6, 'the envelope carries the roster (intent gate + 3 angles, judge, God Eye)');
-  return F.record(root, result);
+  const { grab } = require('./helpers/clarify3-crew');
+  let r = null;
+  for (let i = 0; i < 8; i++) {
+    const n = F.cli(root, ['next']);
+    if (!(n.action === 'skill' && n.skill === 'clarify')) break;
+    if (n.clarify.waiting_for_user) {
+      F.cli(root, ['clarify', 'reply', 'ok'], { allowFail: false });
+      continue;
+    }
+    const brief = F.cli(root, ['wfargs', 'clarify'], { allowFail: false });
+    const { result } = await H.run(path.join(F.PLUGIN, 'workflows', 'clarify.js'), JSON.stringify(brief), (prompt, opts) => {
+      if (opts.agentType === 'factory:interviewer') return { intent: { problem: 'add subtracts', who: 'callers', outcome: 'add sums', success: 'the test passes' }, scope: { in: ['add'], out: [] }, took: [], pins: [], plan: [], questions: [], design_may_choose: [] };
+      if (opts.agentType === 'factory:contract-writer') return { contract: F.contractText(), covers: (grab(`${instructions(prompt)}\n${prompt}`, 'CLARIFY INPUT (JSON):').items || []).map((x) => ({ item: x.id, where: 'Goal' })), uncovered: [] };
+      if (opts.agentType === 'factory:god-eye') return { verdict: 'ready', restatement: { problem: 'add subtracts', outcome: 'add sums' }, checklist: READY, objections: [] };
+      throw new Error(`unexpected ${opts.agentType}: ${instructions(prompt).slice(0, 80)}`);
+    });
+    assert.ok(Array.isArray(result.agents) && result.agents.length === 1, 'the envelope carries the roster (one agent per clarify stage here)');
+    r = F.record(root, result);
+  }
+  return r;
 }
 
 const snapshot = (root) => {
@@ -55,8 +69,8 @@ test('console: steps, timeline and the agents per step, read-only', async () => 
   const ledger = fs.readFileSync(path.join(F.jobDir(root, J), 'ledger.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
   const ag = ledger.find((e) => e.kind === 'agents');
   assert.ok(ag && ag.seal, 'agents entry is sealed');
-  assert.equal(ag.workflow, 'fanout-judge');
-  assert.deepEqual([...new Set(ag.agents.map((a) => a.agent_type))].sort(), ['factory:god-eye', 'factory:intent-analyst', 'factory:judge']);
+  assert.equal(ag.workflow, 'clarify');
+  assert.deepEqual([...new Set(ledger.filter((e) => e.kind === 'agents').flatMap((e) => e.agents.map((a) => a.agent_type)))].sort(), ['factory:contract-writer', 'factory:god-eye', 'factory:interviewer']);
   assert.match(ag.decision_id, /^J-\d+-D\d+$/);
 
   const before = snapshot(root);
@@ -81,7 +95,7 @@ test('console: steps, timeline and the agents per step, read-only', async () => 
   for (const t of ['route', 'human', 'agents', 'result']) assert.ok(types.includes(t), `timeline has ${t}`);
   const a = job.timeline.find((t) => t.type === 'agents');
   assert.equal(a.step, 'clarify', 'agents are placed on the step that ran them');
-  assert.equal(a.agents.filter((x) => x.role === 'intent-analyst').length, 4);
+  assert.deepEqual(job.timeline.filter((t) => t.type === 'agents' && t.step === 'clarify').map((t) => t.agents.map((x) => x.role).join()), ['interviewer', 'contract-writer', 'god-eye'], 'one agents event per clarify stage');
   assert.equal(job.timeline.find((t) => t.type === 'human').step, 'H1');
   const park = job.timeline.find((t) => t.type === 'park');
   assert.ok(park && /API owners/.test(park.text), 'a park you asked for is on the timeline, even after a resume clears it from state');
@@ -210,72 +224,65 @@ test('console: a workflow run step by step, from the brief (wfargs), the agent h
   const root = F.makeRepo();
   const J = F.cli(root, ['job', 'new', '--title', 'Clarify me', '--type', 'bug', '--risk', 'low']).job;
   fs.writeFileSync(path.join(F.jobDir(root, J), 'contract.md'), F.contractText());
+  // clarify v3 up to its research pass: a read-back that plans one repo and one docs question, and your ok
+  const plan = [
+    { item: 'new', what: 'Where add is defined and tested', tag: 'repo', pins: [], impact: 'medium', why: 'The fix goes where add lives.' },
+    { item: 'new', what: 'How node:test reports a failed assertion', tag: 'docs', pins: [], impact: 'low', why: 'The verify command must fail on a wrong sum.' },
+  ];
+  assert.equal(F.clarify(root, { until: 'research', readback: { intent: { problem: 'add subtracts', who: 'callers', outcome: 'add sums', success: 'the test passes' }, scope: { in: ['add'], out: [] }, took: [], pins: [], plan, questions: [], design_may_choose: [] } }).stage, 'research');
   const D = F.cli(root, ['next']).decision_id;
   const { build } = require('../cli/core/console');
   // a brief made twice: the first one never ran, and leaves no run
-  F.cli(root, ['wfargs', 'fanout-judge', '--config', 'clarify']);
-  const brief = F.cli(root, ['wfargs', 'fanout-judge', '--config', 'clarify'], { allowFail: false });
+  F.cli(root, ['wfargs', 'clarify']);
+  const brief = F.cli(root, ['wfargs', 'clarify'], { allowFail: false });
   const live = {};
-  let gateFailed = false;
-  // the intent gate asks first and fails once; the judge finds the intent clear, so the held-back angles run and the judge again
-  const { result } = await H.run(path.join(F.PLUGIN, 'workflows', 'fanout-judge.js'), JSON.stringify(brief), hookedAgents(root, (prompt, o) => {
-    if (o.agentType === 'factory:intent-analyst') {
-      if (o.label === 'analyst · intent' && !gateFailed) { gateFailed = true; return null; }
-      if (o.label === 'analyst · ambiguity') live.fanout = build(root, {}).jobs[0];
-      return { focus: 'x', questions: o.label.startsWith('analyst · intent') ? [{ question: 'Who has the problem?', category: 'intent', blocking: true }] : [] };
+  let briefFailed = false;
+  // the docs researcher comes back with nothing (a researcher is tried once: its time box is spent); the
+  // brief writer comes back with nothing once and is tried again
+  const { result } = await H.run(path.join(F.PLUGIN, 'workflows', 'clarify.js'), JSON.stringify(brief), hookedAgents(root, (prompt, o) => {
+    if (o.agentType === 'factory:researcher') return /docs/.test(o.label) ? null : { mode: 'repo', evidence: [], unresolved: [{ plan: 'P-1', reason: 'not found' }], failed_sources: [] };
+    if (o.agentType === 'factory:brief-writer') {
+      if (!briefFailed) { briefFailed = true; live.brief = build(root, {}).jobs[0]; return null; }
+      return { summary: 'nothing found', records: [], facts: [], gaps: [{ plan: 'P-1', why: 'not found' }] };
     }
-    if (o.agentType === 'factory:judge') { if (!live.judge) live.judge = build(root, {}).jobs[0]; return { questions: [], dismissed: [] }; }
-    if (o.agentType === 'factory:god-eye') return { verdict: 'approve', items: [] };
     throw new Error(o.agentType);
   }));
-  assert.equal(F.record(root, result).status, 'ok');
+  assert.ok(['continue', 'needs_user', 'ok'].includes(F.record(root, result).status));
 
-  const wf = logLines(root).filter((e) => /^workflow_/.test(e.event));
+  // the read-back's own run came first (F.clarify recorded it); the research brief's start, made twice, and its end follow
+  const wf = logLines(root).filter((e) => /^workflow_/.test(e.event)).slice(-3);
   assert.deepEqual(wf.map((e) => e.event), ['workflow_start', 'workflow_start', 'workflow_end']);
   for (const e of wf) {
     assert.equal(e.job, J);
     assert.equal(e.decision_id, D, 'tied to the routing decision in force, as the agent lines are');
     assert.equal(require('../cli/lib/seal').valid(e), true, 'sealed like every log line');
   }
-  // clarify v2: the contract editor's two steps (nothing to apply in round 1; its revision only if God Eye asks)
-  assert.deepEqual(wf[1].plan, { steps: { edit: 0, gate: 1, fanout: 3, judge: 1, 'god-eye': 1, revise: null } }, 'what the brief will run');
+  // clarify v3: one stage per brief; this one is the research pass (two researchers, then the brief writer)
+  assert.deepEqual(wf[1].plan, { steps: { readback: 0, research: 2, brief: 1, interpret: 0, redirect: 0, write: 0, check: 0 }, modes: ['repo', 'docs'] }, 'what the brief will run');
   assert.equal(wf[2].wf_run, wf[1].wf_run, 'the record ends the run its brief started');
-  assert.equal(wf[2].roster.length, 8);
+  assert.equal(wf[2].roster.length, 4);
   assert.ok(logLines(root).filter((e) => /^Subagent/.test(e.event)).every((e) => e.job === J && e.decision_id === D), 'every agent line names the job and the decision');
 
-  // while the judge worked: the gate (its analyst failed once, retried), the judge at work, the angles not yet
-  let r = live.judge.runs[0];
-  assert.equal(live.judge.runs.length, 1, 'the brief made twice is one run');
-  assert.equal(live.judge.runs_live.running, r.id);
-  assert.equal(r.status, 'running');
+  // while the brief writer worked: the research step done, the brief at work
+  let r = live.brief.runs.find((x) => x.status === 'running');
+  assert.ok(r, 'the research run is live');
+  assert.equal(live.brief.runs_live.running, r.id);
   assert.equal(r.stage, 'contract');
-  assert.equal(r.round, 1);
   assert.deepEqual(stepRows(r), [
-    ['done', 'intent gate (1)', 'intent-analyst 1/0/1/0/0'],
-    ['done', 'fan-out (3)', 'intent-analyst 1/0/1/0/0'],
-    ['running', 'judge', 'judge 1/1/0/0/0'],
-    ['pending', 'God Eye (intent)', ''],
-  ], 'live, a retry of the gate is counted with the step that started next: the hooks do not name the call');
-  // when the first held-back angle worked: the judge is done, the angles run again after it
-  r = live.fanout.runs[0];
-  assert.deepEqual(stepRows(r).map((x) => [x[0], x[1]]), [['done', 'intent gate (1)'], ['done', 'fan-out (3)'], ['done', 'judge'], ['running', 'fan-out (3)'], ['pending', 'God Eye (intent)']]);
-  assert.deepEqual([r.at, r.of], [4, 5]);
+    ['done', 'research (repo, docs)', 'researcher 2/0/2/0/0'],
+    ['running', 'research brief', 'brief-writer 1/1/0/0/0'],
+  ], 'live, the hooks say only that an agent stopped, not how');
 
-  // done: the record's roster marks the failure and the retry, and puts the retry back with its gate
+  // done: the record's roster marks the failed researcher and the brief writer's retry
   const j = build(root, {}).jobs[0];
-  r = j.runs[0];
+  r = j.runs.find((x) => x.id === wf[2].wf_run);
   assert.equal(r.status, 'done');
-  assert.equal(r.result, 'ok');
   assert.deepEqual(stepRows(r), [
-    ['done', 'intent gate (1)', 'intent-analyst 2/0/1/1/1'],
-    ['done', 'judge', 'judge 1/0/1/0/0'],
-    ['done', 'fan-out (3)', 'intent-analyst 3/0/3/0/0'],
-    ['done', 'judge (all angles)', 'judge 1/0/1/0/0'],
-    ['done', 'God Eye (intent)', 'god-eye 1/0/1/0/0'],
+    ['done', 'research (repo, docs)', 'researcher 2/0/1/1/0'],
+    ['done', 'research brief', 'brief-writer 2/0/1/1/1'],
   ]);
-  assert.deepEqual(j.runs_live, { running: null, last_by_stage: { contract: r.id } });
   assert.equal(r.at, null);
-  assert.deepEqual(r.agents.map((a) => a.label).slice(0, 2), ['analyst · intent', 'analyst · intent (retry)'], 'the agents carry their labels from the roster');
+  assert.ok(r.agents.some((a) => /\(retry\)$/.test(a.label) && a.retry), 'the agents carry their labels from the roster');
 });
 
 test('console: workflow steps for decide, challenge, decompose rounds and realize waves; cut-off runs; distill', () => {
@@ -359,13 +366,14 @@ test('console: workflow run templates follow the workflow sources and their conf
   const sample = (t, cfg) => t.replace(/\$\{brief\.config\}/g, cfg).replace(/\$\{[^}]*\}/g, '1');
   const byTemplate = {};
   for (const t of calls('fanout-judge.js')) {
-    const cfgs = t.startsWith('${brief.config}') ? ['clarify', 'decide', 'challenge'] : [t.split(':')[0]];
+    const cfgs = t.startsWith('${brief.config}') ? ['decide', 'challenge'] : [t.split(':')[0]];
     for (const c of cfgs) (byTemplate[`fanout-judge:${c}`] = byTemplate[`fanout-judge:${c}`] || []).push(t.replace('${brief.config}', c));
   }
   for (const w of ['ground', 'decompose', 'realize', 'reconcile']) byTemplate[w] = calls(`${w}.js`);
-  // clarify has no phase for the gate when the brief has no gate, and challenge none for its lanes but the shared fan-out
+  // clarify v3 runs its own workflow, one stage per run; the phase texts come from the CLI's stage plan
+  // (workflows/clarify.js prints them as `clarify: <text>`), checked below
   delete byTemplate.distill;
-  assert.deepEqual(Object.keys(RS.TEMPLATES).sort(), [...Object.keys(byTemplate), 'distill'].sort(), 'a template per workflow config, and distill');
+  assert.deepEqual(Object.keys(RS.TEMPLATES).sort(), [...Object.keys(byTemplate), 'clarify', 'distill'].sort(), 'a template per workflow config, clarify and distill');
   for (const [k, texts] of Object.entries(byTemplate)) {
     const tpl = RS.TEMPLATES[k];
     const cfg = k.split(':')[1];
@@ -387,12 +395,19 @@ test('console: workflow run templates follow the workflow sources and their conf
   // the roles each step names are the agents the configs and briefs start there
   const cfg = (n) => JSON.parse(fs.readFileSync(path.join(F.PLUGIN, 'config', 'workflows', `${n}.json`), 'utf8'));
   const roles = (k, key) => RS.TEMPLATES[k].steps.find((s) => s.key === key).roles.slice().sort();
-  const cl = cfg('clarify');
-  assert.deepEqual(roles('fanout-judge:clarify', 'gate'), [...new Set(cl.fanout.filter((f) => f.gate).map((f) => f.role))].sort());
-  assert.deepEqual(roles('fanout-judge:clarify', 'fanout'), [...new Set(cl.fanout.filter((f) => !f.gate).map((f) => f.role))].sort());
-  assert.deepEqual([cl.fanout.length, cl.fanout.filter((f) => f.gate).length], [4, 1], 'clarify: four intent analysts, one of them the gate; no scouts');
-  assert.deepEqual(roles('fanout-judge:clarify', 'judge'), [cl.judge.role]);
-  assert.deepEqual(roles('fanout-judge:clarify', 'god-eye'), [cl.critique.role]);
+  const cl = cfg('clarify').agents;
+  const cs = fs.readFileSync(path.join(F.PLUGIN, 'cli', 'core', 'clarify.js'), 'utf8');
+  const ph = [...(/const PH = \{([^\n]*)\};/.exec(cs) || ['', ''])[1].matchAll(/'([^']+)'\]/g)].map((m) => m[1]);
+  assert.equal(ph.length, 5, ph.join(' | '));
+  assert.match(cs, /'research brief' : `research \(\$\{/);
+  for (const t of [...ph, 'research brief', 'research (repo, docs)', 'research (repo)', 'research (docs)']) assert.ok(RS.matchStep(RS.TEMPLATES.clarify, `clarify: ${t}`) >= 0, `clarify: "${t}" has a template step`);
+  assert.match(src('clarify.js'), /phase\(`clarify: \$\{\(brief\.phases/, 'the clarify workflow prints the CLI\'s phase texts');
+  RS.TEMPLATES.clarify.steps.forEach((st, i) => assert.equal(RS.matchStep(RS.TEMPLATES.clarify, st.text(1, 1, { plan: { modes: ['repo', 'docs'] } })), i, `clarify/${st.key} is its own step`));
+  assert.deepEqual(roles('clarify', 'readback'), [cl.interviewer.role]);
+  assert.deepEqual(roles('clarify', 'research'), [...new Set([cl.repo.role, cl.docs.role])]);
+  assert.deepEqual(roles('clarify', 'brief'), [cl.brief.role]);
+  assert.deepEqual(roles('clarify', 'write'), [cl.writer.role]);
+  assert.deepEqual(roles('clarify', 'check'), [cl.check.role]);
   const de = cfg('decide');
   assert.deepEqual(roles('fanout-judge:decide', 'fanout'), [...new Set(de.fanout.map((f) => f.role))].sort());
   assert.deepEqual(roles('fanout-judge:decide', 'architect'), [de.judge.role]);
@@ -601,6 +616,67 @@ test('console blueprint: gates wait on you with the reply the prompt hook applie
   for (const s of d.stages.concat(d.side_lanes)) for (const x of s.states) assert.ok(d.meaning[x], `${x} has a meaning`);
 });
 
+test('console: clarify v3 — items with who decided them, findings with source and verdict (another version never used), gaps and the stage line per step', () => {
+  const root = F.makeRepo();
+  const J = F.cli(root, ['job', 'new', '--title', 'Fix add', '--type', 'feature', '--risk', 'medium', '--request', 'fix add on nautobot 2.4 so the cart totals add up']).job;
+  fs.writeFileSync(path.join(F.jobDir(root, J), 'contract.md'), F.contractText());
+  const NB = 'https://docs.nautobot.com/projects/core/en';
+  const stage = (outputs) => {
+    const brief = F.cli(root, ['wfargs', 'clarify'], { allowFail: false });
+    const out = {};
+    for (const g of brief.groups) for (const a of g) out[a.label] = outputs(a, brief);
+    return F.record(root, F.envelope(brief, 'ok', { stage: brief.stage, rev: brief.rev, outputs: out }));
+  };
+  assert.equal(F.cli(root, ['next']).clarify.stage, 'readback');
+  stage(() => ({ intent: { problem: 'add subtracts', who: 'the cart', outcome: 'add sums', success: 'the test passes' }, scope: { in: ['add'], out: [] }, took: [], pins: [{ system: 'nautobot', version: '2.4', source: 'user', quote: 'nautobot 2.4' }], plan: [{ item: 'new', what: 'Where is add and what does it do?', tag: 'repo', pins: [], impact: 'high' }, { item: 'new', what: 'Does Nautobot scope VLANs by location?', tag: 'docs', pins: ['nautobot'], impact: 'high' }], questions: [], design_may_choose: [] }));
+  F.cli(root, ['clarify', 'reply', 'ok'], { allowFail: false });
+  assert.equal(F.cli(root, ['next']).clarify.stage, 'research');
+  stage((a) => {
+    if (a.label === 'research · repo') return { mode: 'repo', versions: [], evidence: [{ plan: 'P-1', claim: 'add is in src/add.js and subtracts', source: 'src/add.js:1', source_tier: 'repo', quote: 'module.exports = (a, b) => a - b;', confidence: 'high' }], unresolved: [] };
+    if (a.label === 'research · docs') return { mode: 'docs', web_available: true, versions: [], evidence: [
+      { plan: 'P-2', claim: 'Nautobot 2.4 VLAN groups can be assigned to a location', source: `${NB}/v2.4.4/user-guide/core-data-model/ipam/vlangroup/`, source_tier: 'official', system: 'nautobot', version: '2.4.4', quote: 'A VLAN group may be assigned to a location.', retrieved_at: '2026-10-14', confidence: 'high' },
+      { plan: 'P-2', claim: 'Nautobot 3 VLANs have many locations', source: `${NB}/stable/user-guide/core-data-model/ipam/vlan/`, source_tier: 'official', system: 'nautobot', version: '3.0', quote: 'A VLAN may be assigned to multiple locations.', retrieved_at: '2026-10-14', confidence: 'high' },
+    ], unresolved: [] };
+    return { summary: 's', records: [], facts: [{ plan: 'P-1', statement: 'add is in src/add.js and subtracts', evidence: ['src/add.js:1'] }, { plan: 'P-2', statement: 'VLAN groups can be assigned to a location', evidence: [`${NB}/v2.4.4/user-guide/core-data-model/ipam/vlangroup/`, `${NB}/stable/user-guide/core-data-model/ipam/vlan/`] }], gaps: [] };
+  });
+  assert.equal(F.cli(root, ['next']).clarify.stage, 'sheet_wait');
+  const dataFile = path.join(os.tmpdir(), `console-clarify-${process.pid}-${Date.now()}.json`);
+  F.cli(root, ['console', '--out', `${dataFile}.html`, '--data', dataFile]);
+  let job = JSON.parse(fs.readFileSync(dataFile, 'utf8')).jobs.find((j) => j.id === J);
+  const c = job.clarify;
+  assert.equal(c.version, 3);
+  assert.equal(c.stage, 'sheet_wait');
+  assert.equal(c.waiting_for_user, true);
+  assert.deepEqual(c.evidence.map((e) => [e.source.replace(NB, ''), e.verdict, e.usable]), [
+    ['src/add.js:1', 'repo', true],
+    ['/v2.4.4/user-guide/core-data-model/ipam/vlangroup/', 'pinned', true],
+    ['/stable/user-guide/core-data-model/ipam/vlan/', 'unpinned', false],
+  ], 'a moving page (stable) is shown, and never used for the confirmed 2.4');
+  assert.deepEqual(c.pins.map((p) => [p.text, p.by]), [['nautobot 2.4', 'you']]);
+  assert.ok(c.items.some((it) => it.kind === 'fact' && it.by === 'evidence'), 'facts research settled say so');
+  const lines = job.timeline.filter((t) => t.type === 'clarify');
+  assert.deepEqual(lines.map((t) => t.outcome), ['readback_wait', 'research', 'sheet_wait']);
+  assert.ok(lines.every((t) => t.step === 'clarify'));
+  assert.equal(lines[2].waiting, true);
+  assert.match(lines[2].text, /Decision sheet ready; waiting for your answer/);
+  // the rest of clarify: ok, contract, readiness → H1, and the result line says so
+  F.cli(root, ['clarify', 'reply', 'ok'], { allowFail: false });
+  F.clarify(root);
+  assert.equal(F.cli(root, ['next']).step, 'H1');
+  F.cli(root, ['console', '--out', `${dataFile}.html`, '--data', dataFile]);
+  job = JSON.parse(fs.readFileSync(dataFile, 'utf8')).jobs.find((j) => j.id === J);
+  assert.match(job.timeline.find((t) => t.type === 'result' && t.step === 'clarify').text, /Contract passed its readiness check after 1 research pass/);
+  assert.ok(job.h1 && Array.isArray(job.h1.decisions), 'H1 carries the decisions, gaps, drops and objections');
+  // the page knows the clarify v3 roles and renders the clarify block and its stage lines
+  const html = fs.readFileSync(path.join(F.PLUGIN, 'console', 'console.html'), 'utf8');
+  for (const role of ['interviewer', 'brief-writer', 'contract-writer']) assert.match(html, new RegExp(`'${role}': \\['Clarify'`));
+  for (const role of ['intent-analyst', 'judge', 'contract-editor']) assert.ok(!html.includes(`'${role}': ['Clarify'`), `${role} is retired`);
+  assert.match(html, /P\('read-back', 'agent', 'interviewer'\)[\s\S]*P\('research brief', 'agent', 'brief-writer'\)[\s\S]*P\('readiness', 'agent', 'god-eye'\)/);
+  assert.match(html, /function clarifyHtml/);
+  assert.match(html, /case 'clarify':/);
+  assert.ok(!/factory run clarify/.test(html), 'this factory has no factory run: clarify runs through wfargs and the Workflow tool');
+});
+
 test('console blueprint: clarify\'s questions wait on you (Q) until the next clarify round, as the Board\'s Your turn', () => {
   const toDisplay = blueprintAdapter();
   const human = require('../cli/core/human');
@@ -640,6 +716,20 @@ test('console blueprint: clarify\'s questions wait on you (Q) until the next cla
   assert.equal(e.reply, null);
   assert.equal(e.answer, '1 <your answer>, 2 <your answer>, … 4 <your answer>');
   assert.equal(human.parseReply(e.answer), null);
+  // clarify v3: its stage lines (cli/core/console.js, kind clarify) wait on one reply to the screen shown
+  const cl = (m, outcome, waiting) => ({ t: at(m), type: 'clarify', step: 'clarify', stage: outcome, outcome, text: outcome, waiting });
+  const v3 = toDisplay({ generated_at: at(60), project: 'p', jobs: [
+    bpJob('J-0004', { timeline: [route(1, 'clarify'), cl(2, 'readback_wait', true)] }),
+    bpJob('J-0005', { timeline: [route(1, 'clarify'), cl(2, 'readback_wait', true), cl(4, 'research', false), cl(6, 'sheet_wait', true)] }),
+  ] });
+  const [rb, sh] = v3.jobs;
+  assert.equal(rb.state, 'awaiting_answers');
+  assert.equal(rb.waiting_on.gate, 'Q');
+  assert.equal(rb.waiting_on.answer, 'ok');
+  assert.match(rb.waiting_on.hint, /what to change/);
+  assert.deepEqual(sh.history.map((h) => [h.to, h.by]), [['intent', 'router'], ['awaiting_answers', 'router'], ['intent', 'you'], ['awaiting_answers', 'router']], 'your ok moved clarify on; the sheet waits on you again');
+  assert.match(sh.waiting_on.hint, /ok, but 2 b/);
+  assert.equal(human.parseReply(sh.waiting_on.answer), null, 'ok reaches the clarify reply path, not the gate replies');
 });
 
 test('console blueprint: park and resume, a failed proof sent back to Build, stops and closes', () => {
@@ -716,12 +806,11 @@ test('console blueprint: agent banks are this factory\'s agents and workflows', 
   const roles = [...banks.matchAll(/\["([a-z-]+)", "/g)].map((m) => m[1]);
   assert.ok(roles.length > 5);
   for (const r of roles) assert.ok(agents.has(r), `bank member ${r} is an agent in agents/`);
-  // clarify's bank is its fan-out: the intent analysts (×N as config/workflows/clarify.json runs them), the judge, the
-  // contract editor (clarify v2: the one writer of the contract), God Eye
-  const clarify = require('../config/workflows/clarify.json');
-  const n = clarify.fanout.filter((f) => f.role === 'intent-analyst').length;
-  assert.match(banks, new RegExp(`intent: \\{ name: "Clarify agents", members: \\[\\["intent-analyst", "analysts ×${n}"\\], \\["${clarify.judge.role}", "judge"\\], \\["${clarify.editor.role}", "contract editor"\\], \\["${clarify.critique.role}", "God Eye"\\]\\] \\}`));
-  assert.ok(!/scout/i.test(banks), 'clarify has no scouts in this factory');
+  // clarify's bank is its crew (config/workflows/clarify.json): the interviewer, the researchers (repo, docs), the
+  // brief writer, the contract writer, God Eye (its readiness check)
+  const cl = require('../config/workflows/clarify.json').agents;
+  assert.match(banks, new RegExp(`intent: \\{ name: "Clarify agents", members: \\[\\["${cl.interviewer.role}", "interviewer"\\], \\["${cl.repo.role}", "researchers · repo, docs"\\], \\["${cl.brief.role}", "brief writer"\\], \\["${cl.writer.role}", "contract writer"\\], \\["${cl.check.role}", "God Eye"\\]\\] \\}`));
+  assert.ok(!/intent-analyst|"judge"|contract-editor|scout/.test(banks), 'the clarify v2 crew is retired');
   // the page: no Copilot Autopilot, no claude-software-factory replies, the 0.4.1 fixes in their form here
   const html = fs.readFileSync(path.join(F.PLUGIN, 'console', 'console.html'), 'utf8');
   assert.ok(!/autopilot/i.test(html), 'nothing about an Autopilot this factory does not have');

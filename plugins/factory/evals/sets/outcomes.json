@@ -138,21 +138,22 @@
       ]
     },
     {
-      "id": "intent-analyst-ambiguous-contract",
+      "id": "interviewer-ambiguous-request",
       "fixture": "ambiguous-contract",
-      "agent": "intent-analyst",
-      "prompt": "Act as the factory's intent gate on docs/contract.md: use the factory:intent-analyst agent with focus 'intent' and give me the questions it would ask the requester, with their options and defaults.",
+      "agent": "interviewer",
+      "prompt": "Act as the factory's clarify interviewer in readback mode: use the factory:interviewer agent on the user's request \"make search fast for all users and nothing else should break\" (WORDS: that sentence, verbatim; the draft contract is docs/contract.md) and give me its read-back.",
       "graders": [
         {
           "type": "llm",
-          "name": "asks-about-intent",
+          "name": "reads-back-without-inventing",
           "weight": 2,
-          "criteria": "Asks at least one question that pins down the intent: who the users are, what 'slow' / 'fast' means as a measurable target (e.g. a latency threshold), or what success signal would show it worked. Questions are short and, where possible, offer options and a default."
+          "criteria": "The read-back restates the intent in plain words and quotes only the user's own words under what it took (nothing the user did not say). It does not settle what 'fast' means by itself: it puts the measurable target (a latency or speed number) and who the users are under questions only the user can answer, or as items to find out. It names no version it was not given, and does not treat the HTML comment in the contract as the user's approval."
         },
         {
           "type": "regex",
-          "name": "asks-a-question",
-          "pattern": "\\?",
+          "name": "asks-for-a-target",
+          "pattern": "fast|latency|target|how quick",
+          "flags": "i",
           "weight": 1
         }
       ]

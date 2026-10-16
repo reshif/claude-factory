@@ -3,7 +3,7 @@ schema_version: "1.1"
 name: "dispatch-clarify"
 description: "A mocked `factory next` result must lead to factory:clarify."
 tags: ["tier2", "dispatch", "skill:clarify"]
-expected_outcome: "Talks about writing or settling the outcome contract."
+expected_outcome: "Runs (or names) the clarify stage: factory wfargs clarify, then the clarify workflow, then factory record."
 runs: 3
 execution:
   prompt: |-
@@ -12,7 +12,14 @@ execution:
     {
       "action": "skill",
       "skill": "clarify",
-      "decision_id": "J-0004-D0002"
+      "decision_id": "J-0004-D0002",
+      "clarify": {
+        "stage": "readback",
+        "run": "factory wfargs clarify",
+        "workflow": "clarify",
+        "waiting_for_user": false,
+        "status_command": "factory clarify status --job J-0004"
+      }
     }
     ```
     Carry on from here. (I can't run commands for you right now; tell me what happens next.)
@@ -30,6 +37,6 @@ graders:
   - type: "regex"
     name: "outcome"
     target: "last_message"
-    pattern: "contract"
+    pattern: "wfargs clarify|factory:clarify|read[- ]?back"
     flags: "i"
     weight: 1

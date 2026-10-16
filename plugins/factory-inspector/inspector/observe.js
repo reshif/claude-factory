@@ -22,6 +22,8 @@ function observe(root) {
     const p = L.job(id);
     const state = readJson(p.state, null);
     const lock = readJson(p.lock, null);
+    // Clarify v3's ledger of items (clarify.json), sealed like state.json; absent before factory 0.16.0.
+    const clarify = readJson(p.clarify, null);
     const ledgerLines = readLog(p.ledger);
     const decisions = decisionsAll.filter((d) => d.rec && d.rec.job === id);
     const events = eventsAll.filter((e) => e.rec && e.rec.job === id);
@@ -31,6 +33,8 @@ function observe(root) {
       lock,
       stateSealed: state ? sealOk(state) !== false : false,
       lockSealed: lock ? sealOk(lock) !== false : false,
+      clarify,
+      clarifySealed: clarify ? sealOk(clarify) !== false : true,
       ledgerLines,
       ledgerTorn: ledgerLines.filter((l) => l.torn).map((l) => l.line),
       ledger: ledgerLines.filter((l) => l.sealed && l.rec && l.rec.job === id).map((l) => l.rec),

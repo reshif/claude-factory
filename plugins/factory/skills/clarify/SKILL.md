@@ -1,57 +1,69 @@
 ---
 name: clarify
-description: Writes and settles a factory job's outcome contract with the user, asking only what the repo can't answer. Used by factory:start when `factory next` returns skill clarify, and whenever a clarify workflow result needs handling (questions, a revise or retry round, degraded angles, notes).
+description: Settles a factory job's outcome contract with the user, in a few short stages - a read-back, one research pass pinned to the versions they confirm, one decision sheet, the contract and its readiness check. Used by factory:start when `factory next` returns skill clarify, and whenever a clarify result needs handling.
 user-invocable: false
 ---
-# Clarify: write the outcome contract
+# Clarify: settle the outcome contract
 
-Terms such as God Eye, envelope, fan-out and clarify ledger are defined in `${CLAUDE_PLUGIN_ROOT}/docs/GLOSSARY.md`.
+Terms such as God Eye, envelope, read-back and decision sheet are defined in `${CLAUDE_PLUGIN_ROOT}/docs/GLOSSARY.md`.
 
-The contract lives at `.factory/jobs/<job>/contract.md` (`factory job show` prints the job; the path is in the job folder). It has fixed sections the CLI parses: **Intent, Goal, Non-goals, Acceptance criteria, Constraints, Allowed paths, Verify commands, Clarifications (settled), Deferred to design, Assumptions**. The CLI writes the two marked sections (Clarifications (settled), Deferred to design) from the clarify ledger; never edit them yourself.
+Clarify is a short sequence of stages, each a rule in the factory CLI. Agents run inside the clarify workflow; you never play their part. The user normally types two short replies: **ok** on the read-back, and one answer to the decision sheet.
 
-## Draft (before the first round only)
-You write the contract once, before clarify's first round. After that, during clarify, the contract has **one writer**: the clarify workflow's contract editor, through `factory record`. The guard refuses your edits to `contract.md` until H1 is approved; don't work around it.
-Write the **Intent** first, then the rest. If the intent isn't clear, nothing below it makes sense.
-- **Intent**, one line each: `Problem` (what is wrong or missing today), `Who` (who has it, who asked), `Outcome` (what is true for them when done), `Why now` (optional), `Success signal` (how we'd know it worked, observably). Use the user's words and the intake restatement they confirmed.
-- **Goal**: the outcome in one or two sentences — what is true when done, not how. It must agree with the Intent.
-- **Acceptance criteria**: one per line, `- AC-1: <observable behaviour> (evidence: test)`. Evidence types: `test`, `run` (a command whose success proves it), `diff`, `doc`, `human` (the user confirms it). Prefer `test`. Epics use `E-AC-1`.
-- **Allowed paths**: globs the change may touch, as narrow as you can (`src/cart/**`, `tests/cart/**`).
-- **Verify commands**: commands from the repo root that exit non-zero on failure, with the ACs they prove: ``- `npm test -- cart` (AC-1, AC-2)``.
-- Non-goals, constraints and assumptions from the request and what you read in the repo. Don't settle how it will be built (exact field names, command syntax, line ranges): design does that.
-Answer everything the repo can answer yourself. Then run `factory contract check` and fix every problem it lists (an Intent line still `<…>` is a problem). (For the `bug@low` recipe, also `factory contract check --plan-fields`: it builds straight from the contract, so allowed paths and verify commands are required.)
+| Stage | Who works | What you do |
+|---|---|---|
+| read-back | the interviewer (one short call) | run it |
+| waiting on the read-back | the user | show the screen, stop |
+| research | the repo and docs researchers, then the brief writer (one time-boxed pass) | run it |
+| waiting on the sheet | the user | show the screen, stop |
+| interpret | the interviewer, when the sheet answer was plain prose | run it |
+| redirect / waiting on the redirect | the interviewer, then the user | run it; show the screen; stop |
+| contract | the contract writer | run it |
+| readiness check | the CLI's checks, then God Eye's fixed checklist | run it |
 
-## The clarify ledger
-Clarify keeps one list of issues (`U-n`), owned by the CLI: each question is an issue with a subject, an owner (the user, or design), a status and how it was settled. `factory clarify status` prints it (id, subject, status, owner, next action, and what each round opened and settled); it is read-only and safe to run any time. Show it when the user asks what is open, or when a result is hard to explain.
-- **Settled is final.** A settled issue is never asked again, in any wording; agents that raise it again only add a note. If the user says two different issues were folded into one (an alias in `factory clarify status`), they reply `split U-n <alias>` in chat (or run `factory clarify split U-n <alias>` in their own terminal); it is human-only.
-- **Design's, not yours.** Implementation details are deferred to design (`## Deferred to design`) and never block H1. Don't ask the user about them.
-- **Never improvise edits or answers.** Don't edit the contract, don't answer for the user. If something looks wrong, add context with `factory clarify note <U-n|contract> "…"` and run `factory next`.
+## The contract
+It lives at `.factory/jobs/<job>/contract.md`. Before the first stage you may draft it from the request (Intent first: Problem, Who, Outcome, Why now, Success signal; then Goal, Non-goals, Acceptance criteria `- AC-1: <observable behaviour> (evidence: test)`, Constraints, Allowed paths, Verify commands ``- `cmd` (AC-1)``, Assumptions) and run `factory contract check`. After that the contract writer writes it from what clarify settled, and the CLI adds its own sections (`## Decisions`, `## Facts relied on`, `## Design may choose`, `## Research gaps`); don't edit those. **The user may edit `contract.md` at any time**; the CLI checks their text again before H1, the next writer keeps their edits, and if an edit takes out what honoured something they said (an AC they deleted) the sheet asks them whether to put it back or leave it out. Don't state facts about the outside world from memory: research settles them against the confirmed versions.
 
-## The question protocol (the CLI enforces it)
-- **Order**: intent → scope → constraint → acceptance. The intent analyst runs first and alone; while any intent question is open, only intent questions are asked and the other angles wait.
-- **How many**: round 1 at most **5**, later rounds at most **3**; extra ones wait for the next round.
-- **Form**: each question has an id (`Q-3`), the issue it is for (`U-n`), a category, why it matters, options when possible, and the default the factory uses if it stays unanswered.
-- **Defaults**: a question the user skips takes its default next round; a question with no default (an intent question, "your call") stays open until they answer it. Intent never defaults: still unclear after 2 rounds of intent questions, the job parks.
-- **Progress, not rounds**: clarify parks when rounds stop settling anything (`limits.clarify_no_progress_rounds`, default 2) or at its ceiling (`limits.max_intent_rounds`, default 10). `resume` gives it more room.
+## Each turn
+1. `factory next` returns skill clarify with a `clarify` block: `stage`, and either `run` (agents work) or `waiting_for_user` with a `screen`. If it has `error` (the clarify record fails its seal), say it to the user as given and stop: only their `factory reseal` in their own terminal moves it.
+2. **When `run` is set**, run the stage as factory:start runs any workflow ("Running a workflow"): `factory wfargs clarify` → Workflow **`factory:clarify`** with that brief, unchanged → write the result to `.factory/scratch/envelope.json` → `factory record --file .factory/scratch/envelope.json`. Act on the record result's `status`:
+   - `needs_user`: clarify now waits on the user. Show its `screen` **as it is** (do not summarise, reorder or add questions) and **stop**.
+   - `continue`: run `factory next` again (the next stage runs).
+   - `ok`: the contract passed its readiness check; `factory next` presents H1. With `approved: false` and `god_eye_objects`, God Eye did **not** approve (the user chose to proceed over its objections): say so first; H1 lists them.
+   - `park`: follow factory:park. The `park_reason` names what failed or which cap was reached. The user replies `resume` for one more try, or, at a research, contract or readiness cap (never after an agent failure), `proceed` to go on with the gaps shown. Both are the user's words: never type them yourself. While the job is parked, `factory clarify reply` and `redirect` are refused: tell the user their words wait until they resume or proceed.
+   - `stale`: the record moved on while the stage ran; run `factory next`.
+   - When the result lists research failures (`research.failures`), say them in one line; they also appear on the sheet, in the contract's Research gaps and at H1.
+3. **When `waiting_for_user` is set**, show the `screen` as it is and **stop**. Your turn ends there.
 
-## Round
-1. Run the clarify fan-out the way factory:start runs any workflow (its "Running a workflow" steps):
-   `factory wfargs fanout-judge --config clarify` → Workflow `factory:fanout-judge` → write the envelope → `factory record --file .factory/scratch/envelope.json`.
-2. Read the result. This list is the one place these outcomes are handled; act on the record result's `status`:
-   - `needs_user` with `questions`: ask them as **one numbered list**, in the order given, each on one line: id, question, options (if any) and `(default: …)`. Never add questions, split one into several, or re-ask an answered one. If `intent_first` is true, say in one line that other questions wait until the intent is settled. Questions marked `waiting` were asked before and still need an answer. Then say once how to answer: a numbered reply (`1 yes, 2 …`, `skip 2`), or `defaults` to accept every default. **Stop.**
-     The reply hook records a numbered reply itself and tells you so; don't record it again. When the user answers in their own words instead, record each answer with `factory answer Q-n "<answer>"` (`factory answer Q-n --default` accepts the default). Never record an answer the user didn't give. If `factory answer --question "…"` says `no_match`, use the id it lists. Don't edit the contract: run `factory next` — clarify runs again with the answers and its contract editor writes them in.
-   - Whatever the status, when the result carries `analysis_incomplete` (an analyst angle failed and clarify went on without it), say it first, as given.
-   - `revise`: the contract still has problems or God Eye's items with nothing to ask the user; don't fix it by hand. Say in one line that clarify runs again, then `factory next`.
-   - `retry`: an analyst failed in this round; it doesn't count and runs again once by itself. Say so in one line, then `factory next`.
-   - `park`: clarify stopped (no progress, the intent is still unclear, or analysts failed in two rounds in a row: the reason names them). Follow factory:park; `factory clarify status` shows what is open. When analysts failed, the user chooses: `resume` to try again, or go on without that angle (after `resume`, run the round with `factory wfargs fanout-judge --config clarify --accept-degraded`).
-   - `ok`: clarify is done. With `approved: false` and `god_eye_objects`, God Eye did **not** approve: say so first and list its objections; H1 shows them for the user to approve over or deny. Otherwise God Eye approved and confirmed the intent (`notes` are its approve-with-notes remarks). Tell the user its one-line restatement (problem → outcome), then return to the loop; `factory next` will present gate H1.
+## Recording the user's reply
+The reply hook records a plain `ok` or a structured sheet answer (`ok, but 2 b`, `1 a, 3: other: …`, `2 defer`, `fact 1: <correction>`) by itself and tells you so (`[factory] Recorded your reply for clarify`); don't record it again, run `factory next`. Anything else the user says, record **verbatim**, their whole message as they typed it:
+
+`factory clarify reply "<the user's words>"`
+
+- Anything the user says counts: corrections to the read-back, free prose on the sheet ("whatever's standard, but keep the old names"), a fact they state. The interviewer maps prose to the sheet; it never answers for them.
+- Never paraphrase, never shorten, never pick an option for the user, never answer a question they did not answer. The reply hook noted what they typed: words you relay exactly are counted as theirs; anything else is marked at H1 as relayed by you, for the user to check.
+- To change direction (at any stage, or at H1 instead of denying): `factory clarify redirect "<the user's words>"`. The interviewer reads it back as tracked items; each one is reported done or not done at H1.
+- The user can always reopen something clarify settled: record what they say with `factory clarify reply`.
+- `factory clarify status` prints every item with who decided it, the findings with their source and verdict, the gaps and what was dropped (read-only; show it whenever the user asks what is open).
+
+## What the screens contain
+- **Read-back**: what the factory understood (intent, scope), the user's own facts quoted, the versions research will use (from a repo file, or from the user's own words), and what research will find out (each tagged repo, docs or decision). The user replies ok or says what to change.
+- **Decision sheet**: at most five decisions, each with options, the evidence and a recommendation, then **Facts I'll assume** (with their sources) and any research gaps. One reply answers all of it.
+- **Redirect read-back**: the user's redirect split into items, each linked to what it changes.
+
+Sources for another version than the one confirmed, or a moving page (stable, latest), are never used as evidence; the sheet lists them as skipped.
 
 ## Example
-A round-1 result `needs_user` with two questions (`intent_first: false`) is shown as:
+`factory next` carries `clarify: { stage: "readback_wait", waiting_for_user: true, screen: "**Read-back · J-0004 Fix the cart total** …" }`. Show the screen as it is, then stop:
 
-> Two questions before I finish the contract:
-> 1. **Q-1** (scope) Should the discount also apply to items already on sale? Options: yes / no. (default: no)
-> 2. **Q-2** (acceptance) How close must the cart total be to the checkout price? Options: exactly / within one cent. (default: exactly)
+> **Read-back · J-0004 Fix the cart total**
 >
-> Reply with the numbers (`1 yes, 2 exactly`), `skip 2` to take a default, or `defaults`.
+> **What you want** (my words; correct me)
+> - Problem: shoppers with a discount code see the wrong cart total
+> - Outcome: the cart total matches checkout
+>
+> **What I will find out**
+> 1. [repo] Where the cart total is computed
+>
+> Reply **ok** to start research, or tell me in your own words what to change.
 
-The user replies "1 yes, skip 2": the reply hook records Q-1 = yes (Q-2 takes its default next round) and tells you; run `factory next`.
+The user replies "ok": the reply hook records it and says so; run `factory next` (research runs). The user replies "also round to the cent": run `factory clarify reply "also round to the cent"`, then `factory next` (the read-back runs again with their words).

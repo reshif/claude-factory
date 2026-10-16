@@ -4,7 +4,7 @@
 // from the hand-written sets in <plugin>/evals/sets/*.json:
 //   sets/triggers.json → evals/trigger/<skill>/{pos,neg}-NN/   should / should-not load the skill
 //   sets/agents.json   → evals/agents/<id>/                    must-not-fire: no factory:* agent
-//   sets/dispatch.json → evals/dispatch/<skill>/               mocked `factory next` → right step skill
+//   sets/dispatch.json → evals/dispatch/<id or skill>/         mocked `factory next` → right step skill
 //   sets/outcomes.json → evals/outcome/<id>/ (+ scaffold.sh)    Tier 3: planted-defect fixtures, outcome graders
 // The sets are the source of truth; edit them, then run
 //   node plugins/factory/evals/tools/generate.js plugins/factory [--check]
@@ -133,10 +133,11 @@ function dispatchCases(plugin, set) {
   return set.cases.map((c) => {
     const prompt = c.prompt || [set.preamble, '```json', JSON.stringify(c.next, null, 2), '```', c.extra || '', set.postamble].filter(Boolean).join('\n');
     return {
-      dir: path.join('dispatch', c.skill),
+      // a skill may have several cases (clarify: a stage that runs, a stage that waits on the user)
+      dir: path.join('dispatch', c.id || c.skill),
       yaml: {
         schema_version: '1.1',
-        name: `dispatch-${c.skill}`,
+        name: `dispatch-${c.id || c.skill}`,
         description: `A mocked \`factory next\` result must lead to ${plugin}:${c.skill}.`,
         tags: ['tier2', 'dispatch', `skill:${c.skill}`],
         expected_outcome: c.outcome.about,

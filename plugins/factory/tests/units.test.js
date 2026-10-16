@@ -147,8 +147,7 @@ test('prompt hook applies an exact reply and reports a refused one', () => {
   assert.match(notGate, /NOT applied/);
   assert.equal(run('please continue').stdout, '');
   fs.writeFileSync(path.join(F.jobDir(root, J), 'contract.md'), F.contractText());
-  const b = F.cli(root, ['wfargs', 'fanout-judge', '--config', 'clarify']);
-  F.record(root, F.envelope(b, 'ok', { analysts: [], degraded: [], judge: { questions: [], dismissed: [] }, critique: { verdict: 'approve', items: [] } }));
+  F.clarify(root);
   assert.equal(F.cli(root, ['next']).step, 'H1');
   // a near miss is never applied, and says so with the exact forms
   const miss = JSON.parse(run('aprove').stdout).hookSpecificOutput.additionalContext;
@@ -295,66 +294,6 @@ test('contract Intent: parsed, placeholders fail the check, legacy contracts onl
   assert.deepEqual(contract.problems(noWhyNow), [], 'Why now is optional; label variants parse');
 });
 
-test('question protocol: intent first and alone, priority order, budget, never re-ask, ids and defaults', () => {
-  const Q = require('../cli/core/questions');
-  const cfg = JSON.parse(fs.readFileSync(path.join(F.PLUGIN, 'config', 'workflows', 'clarify.json'), 'utf8'));
-  const L = { max_intent_rounds: 4 };
-  assert.deepEqual([1, 2, 3, 4].map((r) => Q.budget(cfg, r, L)), [5, 3, 3, 0], 'round 1 ≤ 5, later ≤ 3, last round none');
-  assert.equal(cfg.fanout[0].category, 'intent');
-  const list = [
-    { question: 'Which DB?', category: 'constraint', why: 'w', default: 'postgres' },
-    { question: 'Who is this for?', category: 'intent', why: 'w' },
-    { question: 'Mobile too?', category: 'scope', why: 'w', default: 'no', options: ['yes', 'no'] },
-  ];
-  let s = Q.shape(list, { budget: 5, startId: 2 });
-  assert.equal(s.intent_open, true);
-  assert.deepEqual(s.questions.map((q) => [q.id, q.question]), [['Q-3', 'Who is this for?']]);
-  assert.match(s.questions[0].default, /will not guess/);
-  assert.equal(s.held.length, 2, 'scope and constraint wait for intent');
-  s = Q.shape(list.slice(0, 1).concat(list.slice(2)), { budget: 1, asked: ['which db'] });
-  assert.deepEqual(s.questions.map((q) => q.question), ['Mobile too?']);
-  assert.deepEqual(s.questions[0].options, ['yes', 'no']);
-  assert.deepEqual(s.dropped.map((d) => d.reason), ['already asked']);
-  s = Q.shape([{ question: 'b', category: 'acceptance' }, { question: 'a', category: 'scope' }, { question: 'c', focus: 'constraints' }], { budget: 2 });
-  assert.deepEqual(s.questions.map((q) => q.category), ['scope', 'constraint'], 'sorted by priority, over-budget dropped');
-  assert.deepEqual(s.dropped, [{ question: 'b', reason: 'over budget' }]);
-});
-
-test('workflows: clarify runs the intent gate first and holds the other angles while intent is open', async () => {
-  const H = require('./helpers/workflow-harness');
-  const env = JSON.parse(fs.readFileSync(path.join(F.PLUGIN, 'schemas', 'envelope.json'), 'utf8'));
-  const item = (id, category, gate = false) => ({ id, label: id, category, gate, prompt: `p-${id}`, schema: {}, agent_type: 'factory:intent-analyst' });
-  const brief = { workflow: 'fanout-judge', job: 'J-0001', input_hash: 'h', budgets: { limit: {} }, config: 'clarify', limits: { max_questions: 2 }, asked: ['Old question?'], fanout: [item('intent', 'intent', true), item('scope', 'scope'), item('tests', 'acceptance')], judge: { prompt: 'J', schema: {}, agent_type: 'factory:judge' }, critique: { prompt: 'C', schema: {}, agent_type: 'factory:god-eye' } };
-  // intent unclear: only the gate runs; the judge is told; only intent questions come back
-  let r = await H.run(path.join(F.PLUGIN, 'workflows', 'fanout-judge.js'), brief, (prompt) => {
-    if (prompt.startsWith('J')) {
-      assert.match(prompt, /INTENT GATE/);
-      return { questions: [{ question: 'Old question?', category: 'intent', why: 'w', default: 'd' }, { question: 'Who uses it?', category: 'intent', why: 'w', default: 'd' }, { question: 'Edge?', category: 'acceptance', why: 'w', default: 'd' }], dismissed: [] };
-    }
-    if (prompt === 'p-intent') return { focus: 'intent', questions: [{ question: 'Who uses it?', why: 'w', blocking: true }] };
-    throw new Error(`held angle ran: ${prompt}`);
-  });
-  assert.equal(r.result.status, 'needs_user');
-  assert.deepEqual(r.result.questions.map((q) => q.question), ['Who uses it?'], 'never re-asks; intent alone');
-  assert.deepEqual(r.result.data.held_back, ['scope', 'tests']);
-  assert.deepEqual(r.result.data.degraded, [], 'held angles are not missing angles');
-  assert.equal(r.result.data.intent_open, true);
-  assert.deepEqual(validate(env, r.result), []);
-  // intent clear: gate then the rest; the judge's list is cut to the budget in priority order; God Eye must confirm the intent
-  r = await H.run(path.join(F.PLUGIN, 'workflows', 'fanout-judge.js'), brief, (prompt) => {
-    if (prompt.startsWith('J')) return { questions: [{ question: 'a', category: 'acceptance', why: 'w', default: 'd' }, { question: 'b', category: 'scope', why: 'w', default: 'd' }, { question: 'c', category: 'constraint', why: 'w', default: 'd' }], dismissed: [] };
-    return { focus: 'x', questions: [] };
-  });
-  assert.equal(r.calls.filter((c) => c.opts.agentType === 'factory:intent-analyst').length, 3);
-  assert.deepEqual(r.result.questions.map((q) => q.question), ['b', 'c']);
-  r = await H.run(path.join(F.PLUGIN, 'workflows', 'fanout-judge.js'), brief, (prompt) => {
-    if (prompt.startsWith('J')) return { questions: [], dismissed: [] };
-    if (prompt.startsWith('C')) return { verdict: 'approve', intent_confirmed: false, restatement: { problem: 'p', outcome: 'o' }, items: [] };
-    return { focus: 'x', questions: [] };
-  });
-  assert.equal(r.result.status, 'needs_user', 'approve without a confirmed intent is not ok');
-});
-
 test('plan validate: coverage, unknown criteria, protected paths, locks held by another job', () => {
   const root = F.makeRepo();
   const J = F.cli(root, ['job', 'new', '--title', 'x', '--type', 'feature', '--risk', 'medium']).job;
@@ -371,13 +310,12 @@ test('epic: slices spawn child jobs in order; depth is capped at 2; the epic gat
   const root = F.makeRepo();
   const E = F.cli(root, ['job', 'new', '--title', 'Big', '--type', 'feature', '--risk', 'medium', '--epic']).job;
   assert.equal(F.cli(root, ['job', 'show']).recipe.id, 'epic');
-  fs.writeFileSync(path.join(F.jobDir(root, E), 'contract.md'), F.contractText({ ac: '- E-AC-1: a works (evidence: test)\n- E-AC-2: b works (evidence: test)' }));
-  let b = F.cli(root, ['wfargs', 'fanout-judge', '--config', 'clarify']);
-  F.record(root, F.envelope(b, 'ok', { analysts: [], degraded: [], judge: { questions: [], dismissed: [] }, critique: { verdict: 'approve', items: [] } }));
+  fs.writeFileSync(path.join(F.jobDir(root, E), 'contract.md'), F.contractText({ ac: '- E-AC-1: a works (evidence: test)\n- E-AC-2: b works (evidence: test)', verify: '`node tests/add.test.js` (E-AC-1, E-AC-2)' }));
+  F.clarify(root);
   let n = F.cli(root, ['next']);
   assert.equal(n.step, 'EH1');
   F.reply(root, 'approve');
-  b = F.cli(root, ['wfargs', 'ground']);
+  let b = F.cli(root, ['wfargs', 'ground']);
   F.record(root, F.envelope(b, 'ok', { topics: [{ topic: 't', claims: [], unknowns: [] }], degraded: [] }));
   n = F.cli(root, ['next']);
   assert.equal(n.config, 'decide');
@@ -419,22 +357,32 @@ test('epic: slices spawn child jobs in order; depth is capped at 2; the epic gat
   assert.match(ci.success, /E-AC-1/);
 });
 
-test('workflows: fanout-judge clarify / decide / challenge produce valid envelopes', async () => {
+test('workflows: clarify (one stage) and fanout-judge decide / challenge produce valid envelopes', async () => {
   const H = require('./helpers/workflow-harness');
   const env = JSON.parse(fs.readFileSync(path.join(F.PLUGIN, 'schemas', 'envelope.json'), 'utf8'));
   const base = { workflow: 'fanout-judge', job: 'J-0001', input_hash: 'h', budgets: { limit: {} } };
   const item = (id, role = 'intent-analyst') => ({ id, label: id, prompt: `p-${id}`, schema: {}, agent_type: `factory:${role}` });
 
-  // clarify: one analyst fails twice → degraded, judge still runs, no critique
-  let r = await H.run(path.join(F.PLUGIN, 'workflows', 'fanout-judge.js'), { ...base, config: 'clarify', fanout: [item('a'), item('b'), item('c')], judge: { prompt: 'J', schema: {}, agent_type: 'factory:judge' }, critique: { prompt: 'C', schema: {}, agent_type: 'factory:god-eye' } }, (prompt) => {
-    if (prompt === 'p-b') return null;
-    if (prompt.startsWith('J')) return { questions: [], dismissed: [] };
-    return { focus: 'x', questions: [] };
+  // clarify v3: one stage's groups; a later group sees the earlier replies under INPUTS; an agent
+  // that returns nothing is retried as often as its brief says, then named as failed
+  const spec = (label, role, mode, attempts = 2) => ({ label, mode, attempts, prompt: `p-${label}`, schema: {}, agent_type: `factory:${role}` });
+  const seen = [];
+  let r = await H.run(path.join(F.PLUGIN, 'workflows', 'clarify.js'), { workflow: 'clarify', job: 'J-0001', input_hash: 'h', budgets: { limit: {} }, stage: 'research', rev: 3, phases: ['research (repo, docs)', 'research brief'], groups: [[spec('research · repo', 'researcher', 'repo', 1), spec('research · docs', 'researcher', 'docs', 1)], [spec('research brief', 'brief-writer', 'brief')]] }, (prompt, opts) => {
+    seen.push(opts.label);
+    if (prompt.startsWith('p-research · docs')) return null;
+    if (prompt.startsWith('p-research brief')) {
+      assert.match(prompt, /INPUTS \(JSON\):\n\[\{"label":"research · repo"/, 'the brief writer gets the repo researcher\'s reply');
+      return { summary: 's', records: [], facts: [], gaps: [] };
+    }
+    return { mode: 'repo', evidence: [], unresolved: [] };
   });
   assert.equal(r.result.status, 'degraded');
-  assert.deepEqual(r.result.data.degraded, ['b']);
+  assert.deepEqual(r.result.data.failed, ['research · docs']);
+  assert.equal(r.result.data.stage, 'research');
+  assert.equal(r.result.data.rev, 3);
+  assert.deepEqual(r.result.data.runs.map((x) => [x.label, x.outcome]), [['research · repo', 'ok'], ['research · docs', 'no_result'], ['research brief', 'ok']]);
+  assert.deepEqual(seen.filter((l) => /docs/.test(l)).length, 1, 'a time-boxed researcher gets one attempt');
   assert.deepEqual(validate(env, r.result), []);
-  assert.equal(r.calls.filter((c) => c.prompt === 'p-b').length, 2, 'retried once');
 
   // decide: revise then approve
   let rounds = 0;
@@ -519,11 +467,10 @@ test('spike: grounded recommendation, HF gate, close without shipping code', () 
   const root = F.makeRepo();
   const J = F.cli(root, ['job', 'new', '--title', 'Which queue?', '--type', 'spike', '--risk', 'medium']).job;
   fs.writeFileSync(path.join(F.jobDir(root, J), 'contract.md'), F.contractText({ goal: 'Decide which queue library fits our retry needs.', ac: '- AC-1: a recommendation with evidence is written (evidence: doc)' }));
-  let b = F.cli(root, ['wfargs', 'fanout-judge', '--config', 'clarify']);
-  F.record(root, F.envelope(b, 'ok', { analysts: [], degraded: [], judge: { questions: [], dismissed: [] }, critique: { verdict: 'approve', items: [] } }));
+  F.clarify(root);
   F.cli(root, ['next']);
   F.reply(root, 'approve');
-  b = F.cli(root, ['wfargs', 'ground']);
+  let b = F.cli(root, ['wfargs', 'ground']);
   F.record(root, F.envelope(b, 'ok', { topics: [{ topic: 'external', claims: [{ claim: 'lib A supports retries', source: 'https://example.com/a' }], unknowns: [] }], degraded: [] }));
   const n = F.cli(root, ['next']);
   assert.equal(n.mode, 'recommendation');
@@ -607,10 +554,15 @@ test('briefs name a real factory agent for every item, and carry only the run co
     assert.ok(!file.includes('You are a researcher grounding one topic'), 'the role text is the agent\'s system prompt, not repeated in the brief');
     assert.match(file, /## This run/);
   }
-  const c = F.cli(root, ['wfargs', 'fanout-judge', '--config', 'clarify']);
-  const specs = [...c.fanout, c.judge, c.critique];
-  for (const sp of specs) assert.match(sp.agent_type, /^factory:(intent-analyst|judge|god-eye)$/);
-  assert.equal(c.judge.model, undefined, 'no model unless policy names one');
+  F.cli(root, ['next']);
+  const c = F.cli(root, ['wfargs', 'clarify']);
+  assert.equal(c.stage, 'readback');
+  const specs = c.groups.flat();
+  for (const sp of specs) assert.match(sp.agent_type, /^factory:interviewer$/);
+  assert.equal(specs[0].model, undefined, 'no model unless policy names one');
+  const file = fs.readFileSync(specs[0].prompt.split('\n')[1].trim(), 'utf8');
+  assert.ok(!file.includes('You are the interviewer of a software factory'), 'the role text is the agent\'s system prompt');
+  assert.match(file, /CLARIFY INPUT \(JSON\):/);
 });
 
 test('stop hook never blocks while the human is the one to act (gate, park, open questions, a record that asked the user)', () => {
@@ -621,18 +573,15 @@ test('stop hook never blocks while the human is the one to act (gate, park, open
   const claim = 'All done! The task breakdown is complete.';
   const run = (msg = claim) => spawnSync('node', [path.join(F.PLUGIN, 'hooks', 'stop.js')], { input: JSON.stringify({ cwd: root, last_assistant_message: msg }), encoding: 'utf8' }).stdout;
   assert.equal(JSON.parse(run()).decision, 'block', 'nothing waits on the human: a false "done" is blocked');
-  // clarify asked the user a question: waiting
-  F.cli(root, ['next']);
-  let b = F.cli(root, ['wfargs', 'fanout-judge', '--config', 'clarify']);
-  assert.equal(F.record(root, F.envelope(b, 'needs_user', { analysts: [], degraded: [], judge: { questions: [{ question: 'Floats too?', why: 'scope' }], dismissed: [] }, critique: null })).status, 'needs_user');
-  assert.equal(run(), '', 'open clarify question');
-  F.cli(root, ['answer', '--id', 'Q-1', '--answer', 'no']);
-  assert.equal(run(), '', 'the record asked for the user and no factory next since');
+  // clarify's read-back waits on the user: waiting
+  F.clarify(root, { until: 'readback_wait' });
+  assert.equal(run(), '', 'the read-back waits for the user');
+  assert.match(require('../hooks/stop').waitingOnHuman(root, require('../cli/core/job').load(root, J)), /read-back waits for your ok/);
+  F.cli(root, ['clarify', 'reply', 'ok']);
   F.cli(root, ['next']);
   assert.equal(JSON.parse(run()).decision, 'block', 'answered and routed again: Claude owes the step');
   // the H1 gate: waiting on the human
-  b = F.cli(root, ['wfargs', 'fanout-judge', '--config', 'clarify']);
-  F.record(root, F.envelope(b, 'ok', { analysts: [], degraded: [], judge: { questions: [], dismissed: [] }, critique: { verdict: 'approve', items: [] } }));
+  F.clarify(root);
   assert.equal(F.cli(root, ['next']).action, 'gate');
   assert.equal(run(), '', 'pending gate');
   const { waitingOnHuman } = require('../hooks/stop');

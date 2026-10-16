@@ -15,7 +15,6 @@ const lessons = require('./lessons');
 const review = require('./review');
 const budgets = require('./budgets');
 const invalidation = require('./invalidation');
-const questions = require('./questions');
 const docs = require('./doc');
 
 // The self-check command an agent runs on a doc it wrote (agents/<role>.md says when and why).
@@ -26,14 +25,14 @@ function docCheck(root, state, file) {
 // Which output schema(s) each role may be given. One place, so a brief can't hand a role a
 // schema its "Your final message" recipe doesn't describe (tests/contracts.test.js checks both).
 const ROLE_OUTPUTS = {
-  'intent-analyst': ['analyst'],
-  judge: ['judge'],
-  'contract-editor': ['contract-edit'],
-  'god-eye': ['intent-critique', 'critique'],
+  interviewer: ['readback', 'redirect', 'interpret'],
+  'brief-writer': ['brief'],
+  'contract-writer': ['contract-write'],
+  'god-eye': ['critique', 'readiness'],
   'option-generator': ['option'],
   'threat-modeler': ['threat'],
   architect: ['architect'],
-  researcher: ['researcher'],
+  researcher: ['researcher', 'research'],
   planner: ['planner'],
   slicer: ['planner'],
   builder: ['builder'],
@@ -195,110 +194,41 @@ function base(root, state, workflow, extra = {}) {
   };
 }
 
-// ---------------------------------------------------------------- fanout-judge: clarify
-// Clarify v2 (docs/DESIGN-CLARIFY-v2.md): every brief carries the issue ledger (settled: do not
-// re-raise; open: the only things to ask about), what is new since the last round and which
-// contract sections changed; the contract editor gets what was settled but is not in the
-// contract text yet, the user's notes, the contract's problems and a new gate denial.
-function clarify(root, state, ctx, acceptDegraded) {
-  const cfg = readJson(pluginPath('config', 'workflows', 'clarify.json'));
+// ---------------------------------------------------------------- clarify (v3)
+// One stage per run (docs/DESIGN-CLARIFY-v3.md): cli/core/clarify.js says which stage runs and
+// what each agent gets (its CLARIFY INPUT); this only turns that into prompts. The main session
+// runs the brief with the Workflow tool (workflows/clarify.js) and records the result.
+const CLARIFY_SCHEMA = { readback: 'readback', redirect: 'redirect', interpret: 'interpret', research: 'research', brief: 'brief', 'contract-write': 'contract-write', readiness: 'readiness' };
+const CLARIFY_TASK = {
+  readback: 'Mode: **readback**. Read the user\'s words (WORDS below), the draft contract if there is one and the repository\'s manifests, and return the read-back (see "Read-back" in your role). Quote the user exactly; a pin needs a repo line or the user\'s own words.',
+  redirect: 'Mode: **redirect**. The user redirected the work (REDIRECT below). Split it into clauses, each quoting the user exactly, each linked to an existing item by id or marked new, each with an action (see "Redirect" in your role).',
+  interpret: 'Mode: **interpret**. The user answered the decision sheet (SHEET below) in their own words (REPLY below). Map each part of the reply to a decision or fact by its number, quoting the reply exactly (see "Interpret" in your role). Never answer for the user.',
+  repo: 'Mode: **repo**. Research the plan items below from this repository only: quote each line exactly with path:line (see "Research mode (clarify)" in your role).',
+  docs: 'Mode: **docs**. Research the plan items below from official documentation for the pinned versions only; give each finding the version its page documents and the system it is about. Never cite a page listed under avoid (see "Research mode (clarify)" in your role).',
+  brief: 'Write the research brief from the researchers\' findings (under INPUTS) and the findings kept from earlier passes (evidence below): one decision record per decision item, one fact per researched fact item, the gaps. Cite findings by their source, exactly as the researchers gave it.',
+  write: 'Write the outcome contract from what clarify settled (below) and return it with the coverage map: for every item, where the contract honours it. Fix every blocker listed. Never write the factory\'s own sections (Decisions, Facts relied on, Design may choose, Research gaps).',
+  readiness: 'Focus: **readiness**. Read the contract cold and answer the fixed checklist below, each true or false; every objection names its check, its severity, the stage it concerns and a fix.',
+};
+
+function clarifyBrief(root, state) {
   const clarifyMod = require('./clarify');
-  const round = state.counters.clarify_rounds + 1;
-  const CL = clarifyMod.limits(state);
-  const L = { ...state.policy.limits, max_intent_rounds: CL.ceiling };
-  const maxQ = questions.budget(cfg, CL.counted + 1, L);
-  const jp = jobPaths(root, state.id);
-  const answers = readJson(jp.answers, []) || [];
-  const asked = questions.askedList(state, answers);
-  const jc = jobContext(root, state, ['H1', 'EH1']);
-  // the ledger as the next round will see it (a pre-v2 job's migrated in memory; defaults due now taken)
-  const data = clarifyMod.ensure(root, state);
-  if (data) clarifyMod.acceptDefaults(data, state, round);
-  const issues = data ? data.issues : [];
-  const lastRound = data && (data.rounds || []).length ? data.rounds[data.rounds.length - 1] : null;
-  const since = lastRound ? lastRound.at : '';
-  // What changed since the last recorded round: contract sections, answers, notes.
-  const text = contractMod.read(root, state.id);
-  const hashes = contractMod.sectionHashes(text);
-  const before = (data && data.sections) || null;
-  const changed = before ? Object.keys(hashes).filter((k) => hashes[k] !== before[k]) : null;
-  const settledSections = before ? Object.keys(hashes).filter((k) => hashes[k] === before[k]) : [];
-  const newAnswers = answers.filter((a) => !since || String(a.at || '') > since).map((a) => ({ ...(a.id ? { question: a.id } : {}), ...(a.issue ? { issue: a.issue } : {}), text: String(a.question || '').slice(0, 200), answer: String(a.answer || '').slice(0, 300) }));
-  const newNotes = [...issues.flatMap((u) => (u.notes || []).filter((n) => String(n.at || '') > since && /^user/.test(n.actor || '')).map((n) => ({ issue: u.id, text: n.text }))), ...((data && data.notes) || []).filter((n) => n.ref === 'contract' && !n.applied && String(n.at || '') > since).map((n) => ({ issue: null, text: n.text }))];
-  const defaultsTaken = issues.filter((u) => u.status === 'settled' && u.settled_by === 'assumption_accepted' && u.answered && u.answered.via === 'default' && (u.history || []).some((h) => h.round === round && /^settled/.test(h.event))).map((u) => ({ issue: u.id, default: u.answer }));
-  // a gate denial goes to the editor once: in the first round after it (God Eye and the
-  // analysts keep seeing it in the job context until the gate is approved)
-  const denial = denialNotes(state, ['H1', 'EH1']);
-  const denialNew = Boolean(denial) && (state.denials || []).some((x) => ['H1', 'EH1'].includes(x.gate) && (!since || String(x.at || '') > since));
-  const nothingNew = Boolean(data && lastRound && !(lastRound.ledger && lastRound.ledger.degraded) && changed && !changed.length && !newAnswers.length && !newNotes.length && !defaultsTaken.length && !denialNew);
-  const slim = (u) => ({ id: u.id, subject: u.subject, subject_explicit: Boolean(u.subject_explicit), text: u.text, kind: u.kind, impact: u.impact, owner: u.owner, status: u.status, settled_by: u.settled_by || null, draft: u.draft, ...(u.options ? { options: u.options } : {}), default: u.default || null, reason: u.reason || null, ...(u.why ? { why: u.why } : {}), question_id: u.question_id || null, answer: u.answer || null, aliases: u.aliases || [], applied_round: u.applied_round || null, history: (u.history || []).slice(-8), notes: (u.notes || []).slice(-5), source: u.source, round: u.round });
-  const nextId = issues.reduce((m, u) => Math.max(m, Number(String(u.id).slice(2)) || 0, ...(u.aliases || []).map((a) => Number(String(a.id).slice(2)) || 0)), 0);
-  const ledgerBrief = { round, prior: issues.map(slim), next_id: nextId, new_since: { answers: newAnswers, defaults_taken: defaultsTaken, notes: newNotes }, changed_sections: changed, settled_sections: settledSections, nothing_new: nothingNew, vocabulary: clarifyMod.vocabulary(state.title) }; // vocabulary: the job's own words, no evidence that two issues are the same (the dedup rule)
-  const review = changed === null
-    ? '- Review the whole contract (first round with a ledger).'
-    : changed.length
-      ? `- Contract sections changed since the last round (review ONLY these; the others are settled and not re-reviewed): ${changed.join(', ')}.${settledSections.length ? ` Settled: ${settledSections.join(', ')}.` : ''}`
-      : `- No contract section changed since the last round (settled: ${settledSections.join(', ') || 'all'}): review only the new answers and notes under CLARIFY LEDGER.`;
-  const askedText = asked.map((q) => `  - ${q}`).join('\n') || '  - (none)';
-  const answersText = answers.map((a) => `  - Q: ${a.question}\n    A: ${a.answer}`).join('\n') || '  - (none)';
-  const protocol = `- Question priority: ${cfg.priority.join(' > ')}.\n- Identity: every question you raise names its issue: \`same_as\` an existing U-n from CLARIFY LEDGER (after your pointer), or "new" with a short \`subject\` key (e.g. "cart.discount-on-sale"). Never raise a settled issue again, in any wording.`;
-  const fanout = cfg.fanout.map((f) => ({
-    id: `${f.role}:${f.focus}`,
-    ...agentSpec(state, f.role),
-    category: f.category || questions.FOCUS_CATEGORY[f.focus] || 'scope',
-    gate: Boolean(f.gate),
-    label: `analyst · ${f.focus}`,
-    prompt: prompt(f.role, `${jc}\n- Your focus: **${f.focus}** (category: ${f.category || 'scope'}) — ${f.brief}${f.gate ? '\n- You are the intent gate (see your role\'s rules for the intent focus).' : ''}\n${protocol}\n${review}\n- Round ${round}. Questions already asked (never repeat them):\n${askedText}\n- Answers given earlier:\n${answersText}`, 'analyst'),
-    schema: schema('analyst'),
+  const plan = clarifyMod.stagePlan(root, state);
+  const jc = jobContext(root, state);
+  const groups = plan.groups.map((group) => group.map((a) => {
+    const schemaName = CLARIFY_SCHEMA[a.schema] || a.schema;
+    // the Workflow tool has no time cap: the time box is the researcher's to keep
+    const time = ['repo', 'docs'].includes(a.mode) && a.input && a.input.minutes ? `\n- Time: about ${a.input.minutes} minute(s) for this pass; return what you have by then rather than more.` : '';
+    return {
+      ...agentSpec(state, a.role),
+      label: a.label,
+      mode: a.mode,
+      attempts: a.attempts,
+      timeout_sec: a.timeout_sec,
+      prompt: prompt(a.role, `${jc}\n- Clarify stage: **${plan.stage}**.\n- ${CLARIFY_TASK[a.mode] || ''}${time}\n\nCLARIFY INPUT (JSON):\n${JSON.stringify(a.input, null, 1)}`, schemaName),
+      schema: schema(schemaName),
+    };
   }));
-  const judge = {
-    ...agentSpec(state, 'judge'),
-    prompt: prompt(
-      'judge',
-      `${jc}\n- Mode: clarify, round ${round} (clarify parks after ${CL.no_progress} rounds in a row that settle nothing, or at ${CL.ceiling} rounds).\n- Ask at most ${maxQ} questions this round${maxQ === 0 ? ' (question budget spent: return none, record assumptions instead)' : ''}.\n${protocol}\n${review}\n- Never re-ask any of these:\n${askedText}\n- Answers given earlier:\n${answersText}\n- The analysts' outputs follow under INPUTS.`,
-      'judge',
-    ),
-    schema: schema('judge'),
-  };
-  const critique = {
-    ...agentSpec(state, 'god-eye'),
-    prompt: prompt('god-eye', `${jc}\n- Focus: **intent**. The document: ${jp.contract}\n- CLARIFY LEDGER (after your pointer) lists every issue, how the settled ones were settled (the CLI writes the user's answers into "## Clarifications (settled)") and what was deferred to design. Judge the contract as if those sections were there, and answer the checklist.\n${review}`, cfg.critique.schema || 'critique'),
-    schema: schema(cfg.critique.schema || 'critique'),
-    max_rounds: 1,
-    when: 'no_questions',
-  };
-  const inClarify = clarifyMod.inClarify(state);
-  const todo = [];
-  for (const u of issues) {
-    if (u.status === 'settled' && ['user', 'assumption_accepted'].includes(u.settled_by) && u.answer && !u.applied_round && (u.edit_attempts || 0) < 2) {
-      todo.push({ from: 'ledger', ref: u.id, issue: String(u.text).slice(0, 300), settled: String(u.answer).slice(0, 300), how: u.settled_by === 'user' ? 'answered by the user' : 'default accepted' });
-    }
-  }
-  for (const n of newNotes) todo.push({ from: 'user note', ref: n.issue || 'contract', note: n.text });
-  if (inClarify) for (const pr of contractMod.problems(contractMod.parse(text))) todo.push({ from: 'contract check', problem: pr });
-  if (denialNew && inClarify) todo.push({ from: 'gate denial', note: denial.replace(/^- /, '') });
-  const editor = cfg.editor ? {
-    ...agentSpec(state, cfg.editor.role),
-    label: 'contract editor',
-    prompt: prompt(cfg.editor.role, `${jc}\n- The contract to revise: ${jp.contract}. Return its full revised text; the CLI writes it when it records this round. Change only what CHANGES TO APPLY (after your pointer) asks for.\n- Never change the CLI-owned sections (## Clarifications (settled), ## Deferred to design): return them as they are.`, cfg.editor.schema),
-    schema: schema(cfg.editor.schema),
-    todo: inClarify ? todo : [],
-  } : null;
-  return base(root, state, 'fanout-judge', {
-    config: 'clarify',
-    mode: state.epic ? 'epic' : null,
-    input_hash: inputHash({ contract: ctx.b.contract, round }),
-    accept_degraded: Boolean(acceptDegraded),
-    round,
-    limits: { max_questions: maxQ, priority: cfg.priority },
-    asked,
-    fanout,
-    judge,
-    critique,
-    editor,
-    ledger: ledgerBrief,
-    verifier: null,
-  });
+  return base(root, state, 'clarify', { config: null, stage: plan.stage, rev: plan.rev, phases: plan.phases, input_hash: inputHash({ stage: plan.stage, rev: plan.rev, contract: plan.contract_hash }), groups });
 }
 
 // ---------------------------------------------------------------- fanout-judge: decide
@@ -317,7 +247,7 @@ function decide(root, state, ctx, action) {
       ? `- God Eye's last design critique (${lastCritique.verdict}):\n${lastCritique.items.slice(0, 12).map((it) => `  - ${typeof it === 'string' ? it : [it.severity, it.issue || it.summary || JSON.stringify(it)].filter(Boolean).join(': ')}`).join('\n')}`
       : '',
   ].filter(Boolean).join('\n');
-  const deferred = require('./clarify').deferredFor(root, state);
+  const deferred = require('./clarify').deferredText(root, state);
   const jc = `${jobContext(root, state, ['H2', 'EH2', 'HF'])}\n- Findings (cited): ${jp.findings}${deferred ? `\n${deferred}` : ''}${history ? `\n${history}` : ''}`;
   const existingAdrs = priorDesign.filter((f) => /adr-\d+/.test(f));
   const nextAdr = existingAdrs.length
@@ -469,8 +399,11 @@ function ground(root, state, ctx, action) {
         ['external', 'Only if the contract depends on something outside the repo: official docs, cited by URL. Otherwise return no claims.'],
       ];
   const cap = state.policy.limits.max_parallel_research;
-  const deferred = require('./clarify').deferredFor(root, state);
-  const jc = `${jobContext(root, state)}${deferred ? `\n${deferred}` : ''}`;
+  // what clarify settled (its versions, facts, decisions, gaps) and what it handed to design
+  const C = require('./clarify');
+  const v3 = C.briefText(root, state);
+  const deferred = C.deferredText(root, state);
+  const jc = `${jobContext(root, state)}${v3 ? `\n- Research from clarify (${C.file(root, state.id)}): reuse it, don't redo it; extend only on design topics:\n${v3.split('\n').map((l) => `  ${l}`).join('\n')}` : ''}${deferred ? `\n${deferred}` : ''}`;
   const probes = topics.slice(0, Math.max(1, cap)).map(([t, brief]) => ({
     id: t,
     ...agentSpec(state, 'researcher'),
@@ -630,8 +563,10 @@ function build(root, { jobId, workflow, config, mode, scope, lanes, threatModel,
     if (s) action.mode = s.mode;
   }
   switch (workflow) {
+    case 'clarify':
+      return clarifyBrief(root, state);
     case 'fanout-judge':
-      if (config === 'clarify') return clarify(root, state, ctx, acceptDegraded);
+      if (config === 'clarify') return fail('Clarify v3 runs as its own workflow, one stage per run: factory wfargs clarify (then the Workflow tool, factory:clarify). fanout-judge --config clarify is retired.', 'bad_input');
       if (config === 'decide') return decide(root, state, ctx, action);
       if (config === 'challenge') return challenge(root, state, ctx, action);
       return fail('fanout-judge needs --config clarify|decide|challenge', 'bad_input');
@@ -653,8 +588,13 @@ function currentInputHash(root, state, envelope) {
   const ctx = steps.context(root, state, job.load);
   const answers = readJson(jobPaths(root, state.id).answers, []);
   switch (envelope.workflow) {
+    case 'clarify': {
+      const C = require('./clarify');
+      const d = C.load(root, state.id);
+      const stage = d ? d.stage : 'readback';
+      return inputHash({ stage, rev: d ? d.rev || 0 : 0, contract: C.stageContractHash(root, state, stage) });
+    }
     case 'fanout-judge':
-      if (envelope.config === 'clarify') return inputHash({ contract: ctx.b.contract, round: state.counters.clarify_rounds + 1 });
       if (envelope.config === 'decide') return inputHash({ contract: ctx.b.contract, findings: ctx.b.findings });
       return inputHash({ fingerprint: ctx.b.fingerprint, children: ctx.b.children, mode: envelope.mode || null });
     case 'ground':

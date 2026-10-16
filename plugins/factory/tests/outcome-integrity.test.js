@@ -64,11 +64,10 @@ const stateOf = (root, J) => core('job').load(root, J);
 function grounded(root) {
   const J = F.cli(root, ['job', 'new', '--title', 'Two tasks', '--type', 'bug', '--risk', 'low']).job;
   fs.writeFileSync(path.join(F.jobDir(root, J), 'contract.md'), F.contractText());
-  let b = F.cli(root, ['wfargs', 'fanout-judge', '--config', 'clarify']);
-  F.record(root, F.envelope(b, 'ok', { analysts: [], degraded: [], judge: { questions: [], dismissed: [] }, critique: { verdict: 'approve', items: [] } }));
+  F.clarify(root);
   F.cli(root, ['next']);
   F.reply(root, 'approve');
-  b = F.cli(root, ['wfargs', 'ground']);
+  let b = F.cli(root, ['wfargs', 'ground']);
   F.record(root, F.envelope(b, 'ok', { topics: [{ topic: 'codebase', claims: [{ claim: 'x', source: 'src/add.js:1' }], unknowns: [] }], degraded: [] }));
   F.cli(root, ['next']);
   return J;
@@ -223,12 +222,11 @@ test('P1.2 (claude): task built is the builder\'s own last step; the main sessio
 function toProve(root) {
   const J = F.cli(root, ['job', 'new', '--title', 'Fix add', '--type', 'bug', '--risk', 'low']).job;
   fs.writeFileSync(path.join(F.jobDir(root, J), 'contract.md'), F.contractText());
-  let b = F.cli(root, ['wfargs', 'fanout-judge', '--config', 'clarify']);
-  F.record(root, F.envelope(b, 'ok', { analysts: [], degraded: [], judge: { questions: [], dismissed: [] }, critique: { verdict: 'approve', items: [] } }));
+  F.clarify(root);
   F.cli(root, ['next']);
   F.reply(root, 'approve');
   F.cli(root, ['next']);
-  b = F.cli(root, ['wfargs', 'ground']);
+  let b = F.cli(root, ['wfargs', 'ground']);
   F.record(root, F.envelope(b, 'ok', { topics: [{ topic: 't', claims: [], unknowns: [] }], degraded: [] }));
   F.cli(root, ['next']);
   F.cli(root, ['plan', 'from-contract']);

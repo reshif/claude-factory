@@ -32,7 +32,10 @@ const CONTRACT = F.contractText({
     '- AC-3: add(2, 3) returns 5 (evidence: test)',
     '- AC-4: src/index.js exports add, csv and alerts (evidence: test)',
   ].join('\n'),
-  verify: '`node tests/add.test.js` (AC-3)',
+  // clarify v3's readiness check: every test criterion has a verify command
+  // (the per-wave check runs a contract command once all its criteria are integrated: each names
+  // the test of the task that builds it)
+  verify: '`node tests/add.test.js` (AC-3)\n- `node tests/csv.test.js` (AC-1)\n- `node tests/report.test.js` (AC-2)\n- `node tests/index-csv.test.js` (AC-4)',
 });
 const INDEX_TEST = "const m = require('../src/index');\nfor (const k of ['add', 'csv', 'alerts']) if (!m[k]) { console.error('missing export ' + k); process.exit(1); }\n";
 
@@ -54,12 +57,11 @@ test('e2e: a five-task, three-wave feature@medium job with a crashing builder, a
   const J = F.cli(root, ['job', 'new', '--title', 'CSV export', '--type', 'feature', '--risk', 'medium']).job;
   fs.writeFileSync(path.join(F.jobDir(root, J), 'contract.md'), CONTRACT);
   // clarify → H1 → ground → decide → H2 → decompose → H3, as in e2e-medium-high
-  let b = F.cli(root, ['wfargs', 'fanout-judge', '--config', 'clarify']);
-  F.record(root, F.envelope(b, 'ok', { analysts: [], degraded: [], judge: { questions: [], dismissed: [] }, critique: { verdict: 'approve', items: [] } }));
+  F.clarify(root);
   assert.equal(next(root).step, 'H1');
   F.reply(root, 'approve');
   assert.equal(next(root).workflow, 'ground');
-  b = F.cli(root, ['wfargs', 'ground']);
+  let b = F.cli(root, ['wfargs', 'ground']);
   F.record(root, F.envelope(b, 'ok', { topics: [{ topic: 'codebase', claims: [{ claim: 'add subtracts', source: 'src/add.js:1' }], unknowns: [] }], degraded: [] }));
   assert.equal(next(root).config, 'decide');
   F.write(F.jobDir(root, J), 'adr-001-csv.md', F.adrText({ job: J, acs: ['AC-1', 'AC-2', 'AC-3', 'AC-4'], decision: 'We will build toCsv in src/csv.js and have alerts and the report call it.' }));

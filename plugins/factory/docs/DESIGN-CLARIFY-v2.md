@@ -1,5 +1,7 @@
 # Clarify v2: a convergent clarify stage (design)
 
+> **Superseded** by [DESIGN-CLARIFY-v3.md](DESIGN-CLARIFY-v3.md) in factory 0.16.0. Kept for jobs approved under clarify v2, whose `clarify-ledger.json` ground and decide still read, and for the migration.
+
 Clarify used to be a fan-out that re-ran every round over the whole contract: analysts, a
 judge and God Eye, with the chat agent editing the contract between rounds. This design makes
 it **converge**: one ledger of issues that the CLI owns, identity by subject instead of

@@ -1,939 +1,2355 @@
 'use strict';
-// Clarify v2: the issue ledger (docs/DESIGN-CLARIFY-v2.md).
+// Clarify v3 (docs/DESIGN-CLARIFY-v3.md): every clarify rule lives in this module.
 //
-// The ledger is the job's sealed jobs/<J>/clarify-ledger.json: every question clarify raises
-// is an issue (U-n) with a stable subject, an owner (user | design) and a status
-// (open → proposed → settled, or deferred_to_design / dropped) and how it was settled. The
-// CLI owns it: the workflow proposes, `factory record` re-applies the rules, `factory answer`,
-// `factory clarify note` and `factory clarify split` are the only other writers.
+//   read-back ─ok─▶ research (pinned, time-boxed) ─▶ decision sheet ─reply─▶ contract
+//   ─▶ readiness (deterministic checks, then God Eye's fixed checklist) ─▶ H1
+//   a denial or a redirect ─▶ read back ─ok─▶ restart at the earliest affected stage
 //
-// Clarify here has no research phase (no scouts, no evidence): the analysts read the
-// repository themselves and the judge dismisses what it answers. So an issue is the user's
-// (only the requester can settle it) or design's (an implementation detail ground and decide
-// settle); nothing is settled "by evidence".
-//
-// The subject and dedup rules are written twice: here and in workflows/fanout-judge.js
-// (workflows cannot import). tests/clarify-v2.test.js checks they agree.
+// The record is jobs/<J>/clarify.json (sealed, version 3). Its items carry a strength (user >
+// evidence > accepted > assumption) and a source; routing is recomputed from their current
+// state at every stage; identity comes from the ids this module assigns (I-n, P-n, E-n, the
+// sheet's numbers, redirect clauses), never from word overlap. workflows/clarify.js only
+// dispatches the agents a stage needs and returns their raw replies (the main session runs it
+// with Claude Code's Workflow tool from `factory wfargs clarify`); `factory record` hands them to
+// record() here.
 
 const fs = require('fs');
 const path = require('path');
-const { readJson, writeJson, nowIso, fail } = require('../lib/util');
-const { jobPaths, pluginPath } = require('../lib/paths');
-const sealMod = require('../lib/seal');
+const { readJson, writeJson, readText, writeText, nowIso, fail, deepMerge, exists, sha256 } = require('../lib/util');
+const { jobPaths } = require('../lib/paths');
+const { seal, valid } = require('../lib/seal');
 
-const KINDS = ['intent', 'scope', 'constraint', 'acceptance', 'decision', 'user'];
-const OWNERS = ['user', 'design'];
-const STATUSES = ['open', 'proposed', 'settled', 'deferred_to_design', 'dropped'];
-const SETTLED_BY = ['user', 'assumption_accepted', 'design_deferral'];
-const FINAL = new Set(['settled', 'deferred_to_design', 'dropped']);
+const STAGES = ['readback', 'readback_wait', 'research', 'sheet_wait', 'interpret', 'redirect', 'redirect_wait', 'assemble', 'check', 'ready'];
+const WAITS = new Set(['readback_wait', 'sheet_wait', 'redirect_wait']);
+const RUNS = new Set(['readback', 'research', 'interpret', 'redirect', 'assemble', 'check']);
+const KINDS = ['intent', 'scope', 'fact', 'pin', 'decision', 'question', 'instruction', 'design'];
+const STATUSES = ['open', 'to_decide', 'decided', 'assumed', 'deferred', 'done', 'dropped'];
+const FINAL = new Set(['decided', 'assumed', 'deferred', 'done', 'dropped']);
+const STRENGTH = { user: 4, evidence: 3, accepted: 2, assumption: 1 };
+// Where a blocker sends work back, earliest first.
+const ORDER = { readback: 0, research: 1, sheet: 2, assemble: 3, check: 4 };
+const CHECKLIST = ['intent_clear', 'scope_bounded', 'acs_testable', 'self_consistent', 'facts_honoured', 'instructions_handled', 'decisions_closed'];
+const IMPACT = { high: 0, medium: 1, low: 2 };
+const SECTIONS = { decisions: '## Decisions', facts: '## Facts relied on', design: '## Design may choose', gaps: '## Research gaps' };
+const SECTION_COMMENT = '<!-- Written by the factory from the clarify record (factory clarify status); edit the rest of the contract, not this section. -->';
 
-// ---------------------------------------------------------------- subjects and identity
-const STOP = new Set('a an the of to for in on at by with and or is are be been does do did should shall which what when where who whom how this that these those it its as from into per than then there their our we you your can could will would must may might not no yes any all each either via vs about exact exactly precise specific confirm confirmed check verify whether if use used using uses one two new current currently today get gets set sets'.split(' '));
-const SYN = { cli: 'command', cmd: 'command', commands: 'command', syntax: 'command', configures: 'configure', configured: 'configure', configuring: 'configure', configuration: 'configure', config: 'configure', ports: 'port', interfaces: 'interface', vlans: 'vlan', fields: 'field', names: 'name', lines: 'line' };
-const ALSO_STOP = new Set(['form', 'forms', 'way', 'kind', 'thing', 'value', 'list']);
-
-function norm(s) {
-  return String(s || '').toLowerCase().replace(/\b([a-z0-9]{1,3})-([a-z0-9]{1,3})\b/g, '$1$2');
-}
-function stem(w) {
-  if (SYN[w]) return SYN[w];
-  let x = w;
-  if (x.length > 4 && x.endsWith('ies')) x = `${x.slice(0, -3)}y`;
-  else if (x.length > 5 && /(ches|shes|xes|sses)$/.test(x)) x = x.slice(0, -2);
-  else if (x.length > 3 && x.endsWith('s') && !/(ss|os|us|is)$/.test(x)) x = x.slice(0, -1);
-  return SYN[x] || x;
-}
-// Significant tokens of a text, in order of first appearance.
-function tokens(text) {
-  const out = [];
-  for (const w of norm(text).split(/[^a-z0-9]+/)) {
-    if (!w || w.length < 2 || STOP.has(w) || /^\d+$/.test(w)) continue;
-    const s = stem(w);
-    if (STOP.has(s) || ALSO_STOP.has(s) || out.includes(s)) continue;
-    out.push(s);
-  }
-  return out;
-}
-// The normalised subject key: "NX-OS switchport command" → "nxos.switchport.command".
-function subjectKey(s) {
-  return tokens(norm(s).replace(/[._/:-]+/g, ' ')).join('.');
-}
-// An issue's subject: the agent's, normalised, or derived from its text (first four tokens).
-function subjectOf(raw) {
-  if (raw && raw.subject && subjectKey(raw.subject)) return { subject: subjectKey(raw.subject), explicit: true };
-  return { subject: tokens((raw && (raw.text || raw.question)) || '').slice(0, 4).join('.'), explicit: false };
-}
-// For comparing faces only (subject keys keep tokens()): "failed"/"fails", "required"/"require"
-// and "allowed"/"allows" meet on one root.
-function wordRoot(w) {
-  let x = w;
-  if (x.length > 5 && x.endsWith('ing')) x = x.slice(0, -3);
-  else if (x.length > 4 && x.endsWith('ed')) x = x.slice(0, -2);
-  if (x.length > 4 && x.endsWith('e')) x = x.slice(0, -1);
-  return x;
-}
-// The faces an issue is known by: its subject and text, and each alias's text.
-function faces(x) {
-  const subj = tokens(norm(x.subject).replace(/[._/:-]+/g, ' '));
-  const out = [new Set([...subj, ...tokens(x.text || x.question || '')])];
-  for (const a of x.aliases || []) out.push(new Set(tokens(a.text || '')));
-  return out.map((f) => new Set([...f].map(wordRoot))).filter((f) => f.size);
-}
-// The job's own vocabulary (the words of its title, e.g. "Nautobot VLAN sync from Cisco
-// devices") is shared by nearly every issue of that job, so it is no evidence that two issues
-// are the same. It still counts towards the overlap, but a match must also share at least two
-// words outside it (or the one own word of a face that has only one). Without this rule "How
-// does the sync get credentials for the Cisco devices?" folds into a settled "Which Cisco
-// devices does the Nautobot VLAN sync read?" and the credentials issue vanishes as a note on
-// the scoping issue. The workflow keeps the same rule (workflows/fanout-judge.js faceMatch),
-// fed by the brief's ledger.vocabulary.
-function vocabulary(title) {
-  return [...new Set(tokens(title || '').map(wordRoot))];
-}
-const asSet = (bg) => (bg instanceof Set ? bg : new Set(Array.isArray(bg) ? bg : []));
-function faceMatch(ta, tb, strict, bg) {
-  let shared = 0;
-  for (const t of ta) if (tb.has(t)) shared += 1;
-  if (shared < 3) return false;
-  // a word swapped for another ("native VLAN" / "allowed VLANs", "leaf" / "spine", "add" /
-  // "remove"): that difference may be the point, so fold only on a wide common core. (One side
-  // saying more, "in scope?" / "in scope (leaf, spine, border)?", is not a swap.)
-  const onlyA = ta.size - shared;
-  const onlyB = tb.size - shared;
-  if (onlyA && onlyA === onlyB && shared < 5) return false;
-  const jac = shared / (ta.size + tb.size - shared);
-  const ovl = shared / Math.min(ta.size, tb.size);
-  if (!(strict ? jac >= 0.6 : jac >= 0.5 || ovl >= 0.75)) return false;
-  const B = asSet(bg);
-  if (!B.size) return true;
-  const a = [...ta].filter((t) => !B.has(t));
-  const b = new Set([...tb].filter((t) => !B.has(t)));
-  // two shared own words, or as many as the shorter face has (the same question raised again
-  // word for word may have only one word outside the vocabulary); none on both sides: the
-  // faces are the vocabulary alone and already matched on it
-  const need = Math.min(2, a.length, b.size);
-  if (!need) return !a.length && !b.size;
-  let own = 0;
-  for (const t of a) if (b.has(t)) own += 1;
-  if (own < need) return false;
-  return own / (a.length + b.size - own) >= 0.34 || own / Math.min(a.length, b.size) >= 0.6;
-}
-// Same issue? Deterministic: same_as is handled by the caller; here the subject key, then
-// significant tokens of any face (the issue or one of its aliases). bg: the job's vocabulary.
-function sameIssue(a, b, bg) {
-  // equal subject keys given by an agent; a derived key (the text's first words) is no identity
-  // on its own: the words decide
-  if (a.subject && a.subject === b.subject && (a.subject_explicit || b.subject_explicit)) return true;
-  const strict = Boolean(a.subject_explicit && b.subject_explicit && a.subject !== b.subject);
-  const fa = faces(a);
-  const fb = faces(b);
-  return fa.some((x) => fb.some((y) => faceMatch(x, y, strict, bg)));
-}
-const byRef = (list, ref) => list.find((u) => u.id === ref || (u.aliases || []).some((a) => a.id === ref)) || null;
-// The live issue a raised item is about: same_as, then an alias, then the dedup rule.
-function findSame(list, raw, bg) {
-  const ref = String((raw && (raw.same_as || raw.unknown || raw.issue)) || '').trim().toUpperCase();
-  if (/^U-\d+$/.test(ref)) {
-    const hit = byRef(list, ref);
-    if (hit) return hit;
-  }
-  const s = subjectOf(raw);
-  const probe = { subject: s.subject, subject_explicit: s.explicit, text: raw.text || raw.question || '' };
-  return list.find((u) => sameIssue(probe, u, bg)) || null;
-}
-
-// ---------------------------------------------------------------- classification
-// Implementation detail belongs to ground/decide, not to clarify: exact API field names,
-// source line ranges, command syntax, parser behaviour.
-const IMPL = /\b(exact|precise|specific)\s+(syntax|commands?|fields?|names?|format|lines?|api|endpoints?|regex|signatures?|parameters?|keys?|path)\b|\b(command|cli)\s+(syntax|forms?|format)\b|\bsyntax\b|\bline ranges?\b|\bline numbers?\b|\blines?\s+\d+\s*[-–]\s*\d+|\b(api|json|payload|response|schema|serializer)\s+(fields?|keys?|attributes?)\b|\bfield names?\b|\battribute names?\b|\bparser\b|\bparsing\b|\bparses\b|\bregex\b|\bwhich ([\w-]+ )?(cli )?commands?\b|\bcli commands?\b|\bcommand (form|forms|format)\b/i;
-function isImplementationFact(text) {
-  return IMPL.test(String(text || ''));
-}
-// owner from the agent's field ("research" has no lane in this clarify: the user is asked),
-// else the fallback rule; an intent issue is always the user's.
-function classify(raw, kind) {
-  if (kind === 'intent') return 'user';
-  if (raw && raw.owner === 'design') return 'design';
-  if (raw && ['user', 'research'].includes(raw.owner)) return 'user';
-  if (isImplementationFact(`${(raw && (raw.text || raw.question)) || ''} ${(raw && raw.draft) || ''}`)) return 'design';
-  return 'user';
-}
-
-// ---------------------------------------------------------------- limits
-function liveLimits() {
-  try {
-    return readJson(pluginPath('policy', 'default-policy.json')).limits || {};
-  } catch {
-    return {};
-  }
-}
-// Pre-v2 policy snapshots (no clarify_no_progress_rounds) keep their old cap (max + 2) or the
-// new default ceiling, whichever is higher. The rounds such a job ran before clarify v2
-// (counters.clarify_v2_from, set by its first v2 round; until then all of them) do not count
-// against that ceiling: they are the rounds v2 exists to replace.
-function limits(state) {
-  const L = (state.policy && state.policy.limits) || {};
-  const live = liveLimits();
-  const v2 = L.clarify_no_progress_rounds !== undefined;
-  const base = Number(L.max_intent_rounds) || Number(live.max_intent_rounds) || 10;
-  const ceiling = v2 ? base : Math.max(base + 2, Number(live.max_intent_rounds) || 10);
-  const c = state.counters || {};
-  const before = c.clarify_v2_from !== undefined ? Number(c.clarify_v2_from) || 0 : v2 ? 0 : c.clarify_rounds || 0;
-  return {
-    ceiling: ceiling + (c.clarify_bonus_rounds || 0),
-    no_progress: Number(L.clarify_no_progress_rounds ?? live.clarify_no_progress_rounds ?? 2) || 2,
-    counted: Math.max(0, (c.clarify_rounds || 0) - (c.clarify_degraded_rounds || 0) - before),
-    before_v2: before,
-    legacy_snapshot: !v2,
-  };
-}
-
-// ---------------------------------------------------------------- issues
-const clip = (s, n) => String(s === undefined || s === null ? '' : s).slice(0, n);
-const num = (id) => Number(String(id || '').replace(/^[A-Z]-/, '')) || 0;
-const isNone = (d) => !d || /^none\b/i.test(String(d).trim()) || /^your call\.?:?\s*$/i.test(String(d).trim());
-// "Your call: keep coercion" → "keep coercion" (the default itself, not the label)
-const defaultValue = (d) => String(d || '').replace(/^your call\s*:\s*/i, '').trim();
-
-function event(u, round, ev, actor, text) {
-  u.history = u.history || [];
-  u.history.push({ round: round || null, event: ev, actor, ...(text ? { text: clip(text, 300) } : {}), at: nowIso() });
-}
-
-// A v2 issue from anything (a workflow item, an agent's raw output, a migrated question).
-function cleanIssue(u, { round = null } = {}) {
-  const kind = KINDS.includes(u.kind) ? u.kind : 'user';
-  const s = u.subject ? { subject: subjectKey(u.subject) || subjectOf(u).subject, explicit: u.subject_explicit !== false } : subjectOf(u);
-  const owner = OWNERS.includes(u.owner) ? (kind === 'intent' ? 'user' : u.owner) : classify(u, kind);
-  const status = STATUSES.includes(u.status) ? u.status : owner === 'design' ? 'deferred_to_design' : 'proposed';
-  return {
-    id: String(u.id),
-    subject: s.subject,
-    subject_explicit: Boolean(s.explicit),
-    text: clip(u.text || u.question, 400),
-    kind,
-    impact: ['high', 'medium', 'low'].includes(u.impact) ? u.impact : 'high',
-    owner,
-    status,
-    settled_by: SETTLED_BY.includes(u.settled_by) ? u.settled_by : status === 'deferred_to_design' ? 'design_deferral' : null,
-    draft: clip(u.draft || u.text || u.question, 400),
-    ...(Array.isArray(u.options) && u.options.length ? { options: u.options.slice(0, 5).map((o) => clip(o, 160)) } : {}),
-    default: isNone(u.default) ? null : clip(u.default, 300),
-    reason: u.reason ? clip(u.reason, 300) : null,
-    ...(u.why ? { why: clip(u.why, 300) } : {}),
-    question_id: u.question_id || null,
-    answer: u.answer || null,
-    ...(u.answered ? { answered: u.answered } : {}),
-    ...(u.dismissed ? { dismissed: true } : {}),
-    aliases: Array.isArray(u.aliases) ? u.aliases.map((a) => ({ id: String(a.id), text: clip(a.text, 300), ...(a.question_id ? { question_id: String(a.question_id) } : {}) })) : [],
-    notes: Array.isArray(u.notes) ? u.notes.slice(-20) : [],
-    history: Array.isArray(u.history) ? u.history.slice(-40) : [],
-    applied_round: u.applied_round || null,
-    edit_attempts: Number(u.edit_attempts) || 0,
-    note: u.note ? clip(u.note, 300) : null,
-    source: u.source || 'judge',
-    round: u.round || round || null,
-  };
-}
-
-function settle(u, by, round, actor, text) {
-  u.status = 'settled';
-  u.settled_by = by;
-  if (by === 'user') u.owner = 'user'; // the user's word settles it, whoever owned it
-  event(u, round, `settled:${by}`, actor, text);
-}
+const clip = (s, n = 400) => String(s === undefined || s === null ? '' : s).replace(/\s+/g, ' ').trim().slice(0, n);
+const num = (id) => Number(String(id || '').replace(/^[A-Z]+-/, '')) || 0;
+const norm = (s) => String(s || '').toLowerCase().replace(/[‘’]/g, "'").replace(/[“”]/g, '"').replace(/\s+/g, ' ').trim();
 
 // ---------------------------------------------------------------- the record
-function empty(state) {
-  return { version: 2, job: state.id, updated_at: null, issues: [], rounds: [], notes: [], sections: null };
+function file(root, jobId) {
+  return path.join(jobPaths(root, jobId).dir, 'clarify.json');
 }
 
-// The sealed ledger file: the data, { tampered: true } when its seal fails, or null.
 function load(root, jobId) {
-  const d = readJson(jobPaths(root, jobId).clarifyLedger, null);
+  const f = file(root, jobId);
+  if (!exists(f)) return null;
+  const d = readJson(f, null);
   if (!d) return null;
-  if (!sealMod.valid(d)) return { tampered: true };
-  const { seal: _s, ...rest } = d;
-  return rest;
+  if (!valid(d)) return { ...d, tampered: true };
+  return d;
 }
+
 function save(root, jobId, data) {
   const { seal: _s, tampered: _t, ...rest } = data;
-  writeJson(jobPaths(root, jobId).clarifyLedger, sealMod.seal({ ...rest, updated_at: nowIso() }));
-}
-
-// A job that ran clarify before v2: rounds recorded, or questions asked, and no ledger file.
-const ranV1 = (state) => (state.counters && state.counters.clarify_rounds) >= 1 || (state.question_log || []).length > 0;
-
-// ---------------------------------------------------------------- migration (v1 → v2)
-// v1 kept the questions in state.question_log (Q-n, round, category, question, default) and the
-// answers in answers.json (by Q-n, or free-form by question text). Each asked question becomes
-// an issue (U-n in the order asked): subjects derived, paraphrases folded into the earliest id
-// (the others become aliases, with their Q-n), answers settle by user (free-form ones matched
-// by overlap, reported; answers given after H1 are ground's and never matched), and open
-// implementation facts are deferred to design. Returns { data, report }; never touches files.
-function migrate(state, answers = []) {
-  const log = (state.question_log || []).slice().sort((a, b) => num(a.id) - num(b.id));
-  const L = limits(state);
-  const report = { from: 1, at: nowIso(), folded: [], matched_answers: [], unmatched_answers: [], deferred: [], settled: [], ceiling: L.ceiling, legacy_policy: L.legacy_snapshot, rounds_before: (state.counters && state.counters.clarify_rounds) || 0 };
-  const issues = [];
-  const into = {};
-  const bg = vocabulary(state.title);
-  log.forEach((q, i) => {
-    const id = `U-${i + 1}`;
-    const s = subjectOf({ text: q.question });
-    const probe = { subject: s.subject, subject_explicit: false, text: q.question };
-    const hit = issues.find((x) => sameIssue(probe, x, bg));
-    if (hit) {
-      hit.aliases.push({ id, text: clip(q.question, 300), question_id: q.id });
-      into[q.id] = hit.id;
-      report.folded.push({ id, question_id: q.id, into: hit.id, text: clip(q.question, 160) });
-      return;
-    }
-    const kind = KINDS.includes(q.category) ? q.category : 'scope';
-    const iss = cleanIssue({ id, text: q.question, kind, owner: 'user', status: 'proposed', question_id: q.id, default: q.default, ...(Array.isArray(q.options) ? { options: q.options } : {}), source: 'migration', round: q.round || null });
-    event(iss, q.round || null, 'asked', 'migration', q.id);
-    into[q.id] = id;
-    issues.push(iss);
-  });
-  // Answers: by Q-n, then by the exact question text, then free text by overlap. After H1 an
-  // answer without a Q-n belongs to ground (its blocking questions), never to a clarify issue.
-  const h1 = state.approvals && (state.approvals.H1 || state.approvals.EH1);
-  const h1At = h1 ? String(h1.at || '') : null;
-  const byQ = Object.fromEntries(log.map((q) => [q.id, q]));
-  const issueOf = (qid) => issues.find((x) => x.id === into[qid]) || null;
-  for (const a of answers) {
-    let hit = null;
-    let how = null;
-    const q = a.id ? byQ[a.id] : log.find((x) => String(x.question).toLowerCase().trim() === String(a.question || '').toLowerCase().trim());
-    if (q) {
-      hit = issueOf(q.id);
-      how = a.id ? `by ${a.id}` : 'by question text';
-    } else if (!a.id && (!h1At || String(a.at || '') < h1At)) {
-      hit = findSame(issues, { text: a.question || '' }, bg);
-      how = hit ? 'by overlap' : null;
-    }
-    if (!hit) {
-      if (!h1At || String(a.at || '') < h1At) report.unmatched_answers.push({ question: clip(a.question, 160), answer: clip(a.answer, 160) });
-      continue;
-    }
-    // an answer by id or exact text replaces an earlier one (the user corrected it); a match by
-    // overlap only fills an issue nobody answered yet
-    if (how === 'by overlap' && hit.status === 'settled') continue;
-    if (how === 'by overlap') report.matched_answers.push({ question: clip(a.question, 160), issue: hit.id, answer: clip(a.answer, 160) });
-    else report.matched_answers = report.matched_answers.filter((m) => m.issue !== hit.id); // replaced by the user's own answer to it
-    hit.answer = clip(a.answer, 400);
-    hit.answered = { via: 'migration', at: a.at || null, question_id: a.id || (q && q.id) || null };
-    if (hit.status !== 'settled') settle(hit, 'user', null, 'migration', `answer matched ${how}`);
-  }
-  // Implementation facts still open become design's.
-  for (const iss of issues) {
-    if (FINAL.has(iss.status) || iss.kind === 'intent') continue;
-    if (isImplementationFact(`${iss.text} ${(iss.aliases || []).map((x) => x.text).join(' ')}`)) {
-      iss.owner = 'design';
-      iss.status = 'deferred_to_design';
-      iss.settled_by = 'design_deferral';
-      event(iss, null, 'deferred_to_design', 'migration', 'implementation detail: settled in ground/decide');
-      report.deferred.push({ id: iss.id, text: clip(iss.text, 160) });
-    }
-  }
-  report.settled = issues.filter((x) => x.status === 'settled').map((x) => ({ id: x.id, by: x.settled_by }));
-  const data = { ...empty(state), issues, migration: report };
-  return { data, report };
-}
-
-// The ledger for this job: the file, or (a job that ran clarify before v2, or whose ledger
-// fails its seal) the v1 record migrated in memory, or null (clarify never ran).
-function ensure(root, state, raw) {
-  const d = raw === undefined ? load(root, state.id) : raw;
-  if (d && !d.tampered) return d;
-  if (!ranV1(state)) return null;
-  const answers = readJson(jobPaths(root, state.id).answers, []) || [];
-  const out = migrate(state, answers).data;
-  if (d && d.tampered) out.migration.tampered_ledger = true;
-  return out;
-}
-
-// v2 state machine for every issue that is not final (factory record re-applies what the
-// workflow did): design's are deferred, a low-impact issue nobody asked is assumed, an open
-// one is proposed to the user.
-function advance(data, round = null) {
-  for (const u of data.issues) {
-    if (FINAL.has(u.status)) continue;
-    if (u.owner === 'design') {
-      u.status = 'deferred_to_design';
-      u.settled_by = 'design_deferral';
-      event(u, round, 'deferred_to_design', 'cli', 'implementation detail: settled in ground/decide');
-    } else if (u.impact === 'low' && !u.question_id) {
-      u.note = u.note || 'low impact: assumed, not asked';
-      u.answer = u.answer || (isNone(u.default) ? null : defaultValue(u.default));
-      settle(u, 'assumption_accepted', round, 'cli', u.note);
-    } else if (u.status === 'open') u.status = 'proposed';
-  }
+  rest.rev = (rest.rev || 0) + 1;
+  rest.updated_at = nowIso();
+  writeJson(file(root, jobId), seal(rest));
+  data.rev = rest.rev;
   return data;
 }
 
-// The workflow's issues folded into the ledger. Settled is final: a settled, deferred or
-// dropped issue keeps the CLI's copy (only new notes and aliases come through); the rest take
-// the workflow's view, keeping what the human did (answers, notes) and the history.
-function mergeIssues(data, list, round) {
-  const key = (h) => `${h.round}|${h.event}|${h.actor}|${h.text || ''}`;
-  for (const raw of list || []) {
-    if (!raw || !/^U-\d+$/.test(raw.id || '')) continue;
-    const u = cleanIssue({ round, ...raw }, { round });
-    const i = data.issues.findIndex((x) => x.id === u.id);
-    if (i === -1) {
-      // an id the ledger knows as an alias is the same issue, never a second one
-      const host = data.issues.find((x) => (x.aliases || []).some((a) => a.id === u.id));
-      if (!host) data.issues.push(u);
-      continue;
-    }
-    const old = data.issues[i];
-    const seen = new Set((old.history || []).map(key));
-    const history = [...(old.history || []), ...(u.history || []).filter((h) => !seen.has(key(h)))].slice(-40);
-    const nseen = new Set((old.notes || []).map((n) => `${n.round}|${n.text}`));
-    const notes = [...(old.notes || []), ...(u.notes || []).filter((n) => !nseen.has(`${n.round}|${n.text}`))].slice(-20);
-    const aliases = [...(old.aliases || [])];
-    for (const a of u.aliases || []) if (!aliases.some((x) => x.id === a.id)) aliases.push(a);
-    if (FINAL.has(old.status)) {
-      data.issues[i] = { ...old, history, notes, aliases };
-      continue;
-    }
-    const human = old.answered && old.answer ? { answer: old.answer, answered: old.answered } : {};
-    data.issues[i] = { ...old, ...u, ...human, history, notes, aliases, question_id: old.question_id || u.question_id, applied_round: old.applied_round || u.applied_round || null, edit_attempts: old.edit_attempts || 0 };
-  }
+function empty(state) {
+  return {
+    version: 3, job: state.id, created_at: nowIso(), updated_at: null, rev: 0, stage: 'readback',
+    words: [], items: [], plan: [], evidence: [], readback: null, sheets: [], research: { passes: [], failures: [] },
+    redirects: [], checks: [], contract: { written_hash: null, checked_hash: null, edited_by_hand: false }, counters: { research_passes: 0, writer_attempts: 0, readback_failures: 0 },
+    failures: [], parked: null, denials_seen: null, migration: null, history: [],
+  };
+}
+
+function nextId(list, prefix) {
+  return `${prefix}-${list.reduce((m, x) => Math.max(m, num(x.id)), 0) + 1}`;
+}
+
+function log(data, event, text, stage = data.stage) {
+  data.history.push({ at: nowIso(), stage, event, ...(text ? { text: clip(text, 300) } : {}) });
+  if (data.history.length > 200) data.history = data.history.slice(-200);
+}
+
+function itemEvent(it, event, actor, text) {
+  it.history = it.history || [];
+  it.history.push({ at: nowIso(), event, actor, ...(text ? { text: clip(text, 300) } : {}) });
+  if (it.history.length > 40) it.history = it.history.slice(-40);
+}
+
+// The job's record: loaded, or migrated from a v1/v2 intent record, or new (with the request).
+function get(root, state) {
+  const d = load(root, state.id);
+  if (d) return d;
+  const approved = state.approvals && (state.approvals.H1 || state.approvals.EH1);
+  // a job in clarify under 0.15 or earlier (clarify-ledger.json, or v1's question_log)
+  const M = require('./clarify-migrate');
+  const legacy = approved ? null : M.legacy(root, state);
+  if (legacy) return M.migrate(root, state, legacy);
+  const data = empty(state);
+  if (state.request) markHeard(root, addWord(data, state.request, 'request'));
   return data;
 }
 
-// Questions asked in an earlier round and still unanswered take their default (the question
-// said so); questions without one (intent, "your call") stay open for the user.
-function acceptDefaults(data, state, round) {
-  const log = state.question_log || [];
-  const asked = Object.fromEntries(log.map((q) => [q.id, q]));
-  const out = [];
-  for (const u of data.issues) {
-    if (u.status !== 'proposed' || !u.question_id) continue;
-    const q = asked[u.question_id];
-    if (!q || (q.round || 0) >= round) continue;
-    const d = isNone(u.default) ? q.default : u.default;
-    if (isNone(d) || q.category === 'intent' || u.kind === 'intent') continue;
-    u.answer = clip(defaultValue(d), 400);
-    u.answered = { via: 'default', at: nowIso(), question_id: u.question_id, default_accepted: true };
-    settle(u, 'assumption_accepted', round, 'default', `unanswered: the default "${clip(d, 120)}" applies`);
-    out.push(u.id);
-  }
-  return out;
+// The record when one exists (read-only callers): null for a job clarify v3 never touched and
+// that has nothing to migrate.
+function peek(root, state) {
+  const d = load(root, state.id);
+  if (d) return d;
+  const approved = state.approvals && (state.approvals.H1 || state.approvals.EH1);
+  if (approved) return null;
+  return get(root, state);
 }
 
-// ---------------------------------------------------------------- answers and notes
-// The questions the last clarify round showed, in the order shown (what "1", "2" … in a
-// numbered reply refer to): the ids factory record kept, else the last round's questions.
-function questionSet(state) {
-  const log = state.question_log || [];
-  if (!log.length) return [];
-  const byId = Object.fromEntries(log.map((q) => [q.id, q]));
-  if (Array.isArray(state.clarify_shown) && state.clarify_shown.length) {
-    const shown = state.clarify_shown.map((id) => byId[id]).filter(Boolean);
-    if (shown.length) return shown;
-  }
-  const last = Math.max(...log.map((q) => q.round || 0));
-  return log.filter((q) => (q.round || 0) === last);
+// ---------------------------------------------------------------- policy
+function settings(root, state) {
+  const policy = require('./policy');
+  const live = policy.load(root);
+  const pol = deepMerge(live, state.policy || {});
+  const c = deepMerge(live.clarify || {}, (state.policy && state.policy.clarify) || {});
+  const ir = pol.intent_research || {};
+  const pos = (v, d) => (typeof v === 'number' && v > 0 ? v : d);
+  const minutes = (c.research_minutes || {})[state.risk];
+  const sec = c.agent_seconds || {};
+  const caps = readJson(require('../lib/paths').pluginPath('config', 'workflows', 'clarify.json')).caps || {};
+  return {
+    research_passes: Math.max(1, pos(c.max_research_passes, caps.max_research_passes || 2)),
+    sheet_decisions: Math.max(1, pos(c.max_sheet_decisions, caps.max_sheet_decisions || 5)),
+    writer_attempts: Math.max(1, pos(c.max_writer_attempts, caps.max_writer_attempts || 2)),
+    // readiness checks that send work back (to the writer, the sheet, research or the read-back)
+    // before the job parks: a God Eye that keeps finding a new blocker cannot loop the user
+    readiness_cycles: Math.max(1, pos(c.max_readiness_cycles, caps.max_readiness_cycles || 3)),
+    research_sec: Math.max(1, Math.round(pos(minutes, { low: 6, medium: 10, high: 15 }[state.risk] || 10) * 60)),
+    agent_sec: { interviewer: pos(sec.interviewer, 600), 'brief-writer': pos(sec['brief-writer'], 900), 'contract-writer': pos(sec['contract-writer'], 900), 'god-eye': pos(sec['god-eye'], 900) },
+    web: ir.web !== false,
+    search_mcp: typeof ir.search_mcp === 'string' && ir.search_mcp.trim() ? ir.search_mcp.trim() : null,
+  };
 }
 
-// Find the issue an answer is for: U-n, Q-n, or free text.
-function resolveRef(data, state, ref, text) {
-  const list = data.issues;
-  const R = String(ref || '').trim().toUpperCase();
-  if (/^U-\d+$/.test(R)) return byRef(list, R);
-  if (/^Q-\d+$/.test(R)) {
-    const byQ = list.find((u) => u.question_id === R || (u.aliases || []).some((a) => a.question_id === R));
-    if (byQ) return byQ;
-    const q = (state.question_log || []).find((x) => x.id === R);
-    if (q && q.unknown) return byRef(list, String(q.unknown).toUpperCase());
-    return null;
+// ---------------------------------------------------------------- words (the user's, verbatim)
+function addWord(data, text, via, stage = data.stage) {
+  const t = String(text || '').trim();
+  if (!t) return null;
+  const last = data.words[data.words.length - 1];
+  // the same reply relayed twice, once by the prompt hook (chat) and once by the main session
+  // (the CLI), within a few minutes: recorded once
+  const chat = (v) => /chat/.test(String(v || ''));
+  if (last && last.text === t && via !== 'request' && chat(last.via) !== chat(via) && Date.now() - Date.parse(last.at) < 10 * 60 * 1000) return { ...last, duplicate: true };
+  // relayed: the words reached the factory through a command the main session ran on the user's
+  // behalf (job new --request, clarify reply, clarify redirect), not through the reply hook or a
+  // human-only gate verb. Unless they are exactly a message the reply hook saw from the user
+  // (markHeard), the factory cannot tell them from the user's own; H1 says which they are.
+  const w = { id: nextId(data.words, 'W'), at: nowIso(), via, stage, text: t.slice(0, 4000), ...(['reply', 'redirect', 'request'].includes(via) ? { relayed: true } : {}) };
+  data.words.push(w);
+  return w;
+}
+
+// ---------------------------------------------------------------- what the reply hook heard
+// The UserPromptSubmit hook notes a hash of every message the user types (never the text) in
+// .factory/log/prompts.jsonl, sealed; the guard keeps the main session and agents from writing
+// there. Words the main session relays (factory clarify reply / redirect, job new --request) that
+// are exactly one of those messages are the user's own, heard directly: not marked relayed.
+const promptKey = (t) => sha256(norm(t));
+// a slash command's arguments are the user's words too ("/factory:start add rate limiting …")
+const promptArgs = (t) => String(t || '').trim().replace(/^\/[\w:.-]+\s+/, '');
+function promptsFile(root) {
+  return path.join(root, '.factory', 'log', 'prompts.jsonl');
+}
+function notePrompt(root, text) {
+  const t = String(text || '').trim();
+  if (!root || !t) return;
+  try {
+    const f = promptsFile(root);
+    fs.mkdirSync(path.dirname(f), { recursive: true });
+    const keys = [...new Set([promptKey(t), promptKey(promptArgs(t))])];
+    fs.appendFileSync(f, `${JSON.stringify(seal({ at: nowIso(), keys }))}\n`);
+    // keep it short: the last 500 messages
+    const lines = fs.readFileSync(f, 'utf8').split('\n').filter(Boolean);
+    if (lines.length > 1000) fs.writeFileSync(f, `${lines.slice(-500).join('\n')}\n`);
+  } catch {
+    /* noting never breaks the hook */
   }
-  if (text) {
-    const q = (state.question_log || []).find((x) => String(x.question).toLowerCase().trim() === String(text).toLowerCase().trim());
-    if (q) {
-      const hit = resolveRef(data, state, q.id);
-      if (hit) return hit;
+}
+function promptHeard(root, text) {
+  if (!root || !String(text || '').trim()) return false;
+  let lines = [];
+  try {
+    lines = fs.readFileSync(promptsFile(root), 'utf8').split('\n').filter(Boolean).slice(-500);
+  } catch {
+    return false;
+  }
+  const k = promptKey(text);
+  for (const l of lines) {
+    let e;
+    try {
+      e = JSON.parse(l);
+    } catch {
+      continue;
     }
-    return findSame(list.filter((u) => u.status !== 'dropped'), { text }, vocabulary(state.title));
+    if (valid(e) && Array.isArray(e.keys) && e.keys.includes(k)) return true;
+  }
+  return false;
+}
+function markHeard(root, w) {
+  if (!w || !w.relayed || w.duplicate) return w;
+  if (promptHeard(root, w.text)) {
+    delete w.relayed;
+    w.heard = 'reply hook';
+  }
+  return w;
+}
+
+function quoted(data, quote) {
+  const q = norm(quote);
+  if (q.length < 3) return null;
+  return data.words.find((w) => norm(w.text).includes(q)) || null;
+}
+
+// ---------------------------------------------------------------- items and authority
+function newItem(data, fields, actor) {
+  const it = {
+    id: nextId(data.items, 'I'),
+    kind: KINDS.includes(fields.kind) ? fields.kind : 'fact',
+    text: clip(fields.text, 300),
+    value: fields.value === undefined || fields.value === null ? null : clip(fields.value, 600),
+    status: STATUSES.includes(fields.status) ? fields.status : 'open',
+    strength: STRENGTH[fields.strength] ? fields.strength : null,
+    source: fields.source || null,
+    origin: fields.origin || 'readback',
+    tag: ['repo', 'docs', 'decision'].includes(fields.tag) ? fields.tag : null,
+    impact: IMPACT[fields.impact] !== undefined ? fields.impact : 'medium',
+    pins: Array.isArray(fields.pins) ? fields.pins.map((p) => String(p).toLowerCase()) : [],
+    needs_research: Boolean(fields.needs_research),
+    owner: fields.owner || null,
+    evidence: [],
+    rejected: [],
+    covered: null,
+    links: [],
+    history: [],
+    ...(fields.extra || {}),
+  };
+  itemEvent(it, 'created', actor || it.origin, fields.why || null);
+  data.items.push(it);
+  return it;
+}
+
+function item(data, id) {
+  const R = String(id || '').trim().toUpperCase();
+  return data.items.find((x) => x.id === R) || null;
+}
+
+// Authority: the user always wins; anyone else needs more strength than the value has.
+// Returns true when the value was set; a weaker or equal non-user claim is refused.
+function setValue(it, { value, strength, source, actor, status = 'decided', text }) {
+  const cur = STRENGTH[it.strength] || 0;
+  const neu = STRENGTH[strength] || 0;
+  const byUser = strength === 'user' || (strength === 'accepted' && /^user/.test(actor || ''));
+  if (!byUser && it.value !== null && cur >= neu) return false;
+  if (it.value !== null && it.value !== undefined) itemEvent(it, 'replaced', actor, `was: ${clip(it.value, 160)} (${it.strength || 'none'})`);
+  it.value = value === null || value === undefined ? it.value : clip(value, 600);
+  it.strength = strength;
+  if (source) it.source = source;
+  it.status = status;
+  itemEvent(it, status, actor, text || value);
+  return true;
+}
+
+function reopen(it, actor, why) {
+  itemEvent(it, 'reopened', actor, why);
+  it.status = 'open';
+  it.needs_research = Boolean(it.tag && it.tag !== null) || it.kind === 'decision';
+  it.covered = null;
+  it.shown = null;
+  if (it.kind === 'decision') {
+    it.strength = null; // the user reopened it: the next answer decides it again
+    it.value_before = it.value;
+    it.value = null;
+  }
+}
+
+// ---------------------------------------------------------------- versions and pins
+// "==2.4.3", "v2.4.x", "4.2" are pins; ">=2.0,<4.0", "^4.3", "~=3.1" are ranges.
+function pinOf(v) {
+  const t = String(v || '').trim().replace(/^==\s*/, '').replace(/^v(?=\d)/i, '');
+  if (!/^\d+(\.\d+)*(\.x|\.\*)?$/i.test(t)) return null;
+  return t.replace(/\.\*$/, '.x').toLowerCase();
+}
+const parts = (v) => String(v).replace(/\.x$/i, '').split('.').filter(Boolean);
+// Does a page for version `doc` document the pinned version `pin`? 2.4.x ↔ 2.4.3, 3.2.25 ↔ 3.2.
+function compatible(pin, doc) {
+  const a = parts(pin);
+  const b = parts(pinOf(doc) || '');
+  if (!a.length || !b.length) return false;
+  const k = Math.min(a.length, b.length);
+  if (k < Math.min(2, a.length)) return false;
+  for (let i = 0; i < k; i++) if (a[i] !== b[i]) return false;
+  return true;
+}
+// The version a documentation URL names: { moving: true } for stable/latest/main, a version, or null.
+function urlVersion(url) {
+  const u = String(url || '').toLowerCase().replace(/[?#].*$/, '');
+  if (!/^https?:\/\//.test(u)) return null;
+  const segs = u.replace(/^https?:\/\/[^/]+/, '').split('/').filter(Boolean);
+  if (segs.some((s) => ['stable', 'latest', 'main', 'master', 'dev', 'devel', 'nightly', 'current'].includes(s))) return { moving: true };
+  for (const s of segs) {
+    const v = pinOf(s.replace(/^v/, ''));
+    if (v && /\./.test(v)) return { version: v };
   }
   return null;
 }
 
-const ACCEPT = /^(default|accept|accepted|ok|okay|sure|fine|agreed|yes,? (use|take) the default|use the default|take the default|👍)$/i;
-
-// Settle one issue with the user's answer. via: cli | chat. Returns a row for the receipt.
-function applyAnswer(data, state, { issue, answer, acceptDefault = false, via = 'cli', round, questionId }) {
-  const u = issue;
-  let text = String(answer || '').replace(/\s+/g, ' ').trim();
-  const yes = /^(y|yes)$/i.test(text) && !(u.options || []).some((o) => /^yes\b/i.test(o));
-  const takeDefault = acceptDefault || ACCEPT.test(text) || (yes && !isNone(u.default));
-  if (takeDefault) {
-    if (isNone(u.default)) fail(`${u.id} has no proposed default to accept: answer it in words (factory answer ${u.question_id || u.id} "…").`, 'no_default');
-    text = defaultValue(u.default);
+// A simple range test, for a user's version against the repo's constraint.
+function inRange(version, range) {
+  const v = parts(pinOf(version) || '').map(Number);
+  if (!v.length) return true;
+  const cmp = (a, b) => {
+    for (let i = 0; i < Math.max(a.length, b.length); i++) {
+      const d = (a[i] || 0) - (b[i] || 0);
+      if (d) return d;
+    }
+    return 0;
+  };
+  for (const c of String(range).split(',').map((x) => x.trim()).filter(Boolean)) {
+    const m = /^(>=|<=|>|<|==|~=|\^|~)?\s*v?([\d.]+)/.exec(c);
+    if (!m) continue;
+    const r = m[2].split('.').map(Number);
+    const d = cmp(v, r);
+    const op = m[1] || '==';
+    if (op === '>=' && d < 0) return false;
+    if (op === '>' && d <= 0) return false;
+    if (op === '<' && d >= 0) return false;
+    if (op === '<=' && d > 0) return false;
+    if ((op === '^' || op === '~=' || op === '~') && (d < 0 || v[0] !== r[0])) return false;
   }
-  if (!text) fail('The answer is empty.', 'bad_input');
-  const was = { status: u.status, settled_by: u.settled_by, answer: u.answer };
-  u.answer = clip(text, 400);
-  u.answered = { via, at: nowIso(), question_id: questionId || u.question_id || null, ...(takeDefault ? { default_accepted: true } : {}) };
-  u.applied_round = null;
-  u.edit_attempts = 0;
-  settle(u, takeDefault ? 'assumption_accepted' : 'user', round, via === 'chat' ? 'user (chat)' : 'user', clip(text, 200));
-  if (was.status === 'deferred_to_design') u.owner = 'user';
-  return { issue: u.id, question: u.question_id || null, answer: u.answer, settled_by: u.settled_by, was: was.status === 'settled' ? `settled by ${was.settled_by}${was.answer ? `: ${clip(was.answer, 80)}` : ''}` : was.status };
+  return true;
 }
 
-function openIds(data) {
-  return data.issues.filter((u) => !FINAL.has(u.status)).map((u) => `${u.id}${u.question_id ? ` (${u.question_id})` : ''}`);
+function pinsBySystem(data) {
+  const out = {};
+  for (const it of data.items) if (it.kind === 'pin' && it.status === 'decided' && it.value) out[it.system] = it.value;
+  return out;
 }
 
-// In clarify: the contract is not approved yet and clarify has run at least once.
-function inClarify(state) {
-  const approved = state.approvals && (state.approvals.H1 || state.approvals.EH1);
-  return !approved && (state.counters && state.counters.clarify_rounds) >= 1;
+// Re-judge every finding against the pins as they stand now (a changed pin invalidates the
+// findings that rested on the old one).
+function judge(root, data) {
+  const pins = pinsBySystem(data);
+  for (const e of data.evidence) {
+    const prev = e.verdict;
+    e.verdict = verdictOf(root, e, pins, data);
+    if (prev && prev !== e.verdict) e.rejudged = prev;
+  }
+  // an item rests only on usable findings; the others stay visible as rejected
+  for (const it of data.items) {
+    const all = [...new Set([...(it.evidence || []), ...(it.rejected || [])])];
+    it.evidence = all.filter((id) => usable(data.evidence.find((e) => e.id === id)));
+    it.rejected = all.filter((id) => !it.evidence.includes(id));
+    if (it.record) it.record.usable = (it.record.evidence || []).filter((id) => usable(data.evidence.find((e) => e.id === id))).length;
+    // a decision whose researched recommendation rested on findings that no longer hold (the pin
+    // changed): asked again, unless the user decided it themselves
+    if (it.kind === 'decision' && it.researched && it.status === 'decided' && it.strength !== 'user' && !it.evidence.length && it.rejected.length) {
+      reopen(it, 'cli', `its sources document another version than the one now confirmed`);
+      it.researched = undefined;
+      it.record = null;
+      continue;
+    }
+    // settled by findings that no longer hold (another version than the one now confirmed)
+    if (it.strength === 'evidence' && it.kind !== 'pin' && !it.evidence.length && it.rejected.length) {
+      it.strength = 'assumption';
+      it.status = 'assumed';
+      it.unconfirmed = `its sources document another version (${[...new Set(it.rejected.map((id) => (data.evidence.find((e) => e.id === id) || {}).verdict))].join(', ')})`;
+      it.needs_research = Boolean(it.tag);
+      itemEvent(it, 'demoted', 'cli', it.unconfirmed);
+    }
+  }
 }
 
-// `factory answer`: U-n / Q-n / free text, during clarify (and U-n at any time). Writes the
-// ledger and answers.json. After H1 a clarify issue changes only through an amendment.
-function answer(root, { jobId, ref, text, question, acceptDefault = false, via = 'cli' }) {
-  const job = require('./job');
-  const state = job.resolve(root, jobId);
-  if (['closed', 'cancelled', 'abandoned'].includes(state.status)) fail(`${state.id} is ${state.status}; nothing to answer.`, 'not_active');
-  const data = ensure(root, state) || (inClarify(state) ? empty(state) : null);
-  const f = jobPaths(root, state.id).answers;
-  const list = readJson(f, []) || [];
-  const R = String(ref || '').trim().toUpperCase();
-  const round = (state.counters.clarify_rounds || 0) + 1;
-  // After H1 the ledger is what the approved contract rests on: a clarify issue changes only
-  // through an amendment, and a free-text answer is ground's (recorded, never matched to one).
-  const approved = Boolean(state.approvals && (state.approvals.H1 || state.approvals.EH1));
-  const issue = data && !(approved && !R) ? resolveRef(data, state, R, R ? null : question) : null;
-  if (issue && approved) fail(`${state.id}'s contract is approved, so clarify's ${issue.id} no longer changes by an answer. To change what the contract says, start an amendment (factory amend start --reason "…").`, 'approved');
-  const logged = /^Q-\d+$/.test(R) ? (state.question_log || []).find((q) => q.id === R) : issue && issue.question_id ? (state.question_log || []).find((q) => q.id === issue.question_id) : null;
-  if (R && !issue && !logged) fail(`${state.id} has no issue or question ${R}.${data ? ` Open: ${openIds(data).join(', ') || 'none'}.` : ''}`, 'bad_input');
-  if (!issue && data && inClarify(state)) {
-    fail(`No clarify issue matches "${clip(question || R, 120)}": nothing was recorded. Answer by id: factory answer <U-n|Q-n> "<answer>". Open: ${openIds(data).join(', ') || 'none'}.`, 'no_match');
+function repoQuoteOk(root, e) {
+  const m = /^([^:\s]+):(\d+)(?:-(\d+))?$/.exec(String(e.source || '').trim());
+  if (!m) return false;
+  const f = path.resolve(root, m[1]);
+  if (!f.startsWith(path.resolve(root) + path.sep) || !exists(f)) return false;
+  const lines = readText(f, '').split('\n');
+  const a = Number(m[2]);
+  const b = Number(m[3] || m[2]);
+  if (a < 1 || b > lines.length || b < a) return false;
+  const span = lines.slice(a - 1, b).join('\n');
+  return norm(span).includes(norm(e.quote)) && norm(e.quote).length > 0;
+}
+
+// The systems a finding must be judged against: the system it names when that system has a pin
+// (or a range); a finding that names no system is judged against its item's pinned systems, or
+// every pinned system when its item names none (a page cannot slip past the pins by leaving the
+// system out, as migrated v1/v2 findings and some researchers do). System names compare without
+// case or punctuation ("Nautobot" is the pinned "nautobot"); a different name is another system.
+const sysKey = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+function systemsFor(e, it, constrained) {
+  const keys = Object.keys(constrained);
+  const named = sysKey(e.system);
+  if (named) return keys.filter((k) => sysKey(k) === named);
+  const own = ((it && it.pins) || []).map((p) => keys.find((k) => sysKey(k) === sysKey(p))).filter(Boolean);
+  return own.length ? own : keys;
+}
+
+// Exact pins by system, and the repository's ranges for systems with no exact pin yet.
+function rangesBySystem(data) {
+  const out = {};
+  for (const it of data.items) if (it.kind === 'pin' && it.status !== 'dropped' && !(it.status === 'decided' && it.value) && (it.allows || []).length) out[it.system] = it.allows.map((a) => a.range);
+  return out;
+}
+
+function verdictOf(root, e, pins, data) {
+  if (e.tier === 'repo' || (!/^https?:/i.test(e.source) && /:\d+/.test(e.source))) return repoQuoteOk(root, e) ? 'repo' : 'bad_quote';
+  if (!/^https?:/i.test(e.source) || !String(e.quote || '').trim()) return 'unsourced';
+  const it = item(data, e.item);
+  const ranges = data && data.items ? rangesBySystem(data) : {};
+  const u = urlVersion(e.source);
+  const docVersion = (u && u.version) || (e.version ? pinOf(e.version) || e.version : null);
+  const pinned = systemsFor(e, it, pins);
+  if (pinned.length) {
+    if (u && u.moving) return 'unpinned';
+    if (!docVersion) return 'unpinned';
+    const fits = (v) => pinned.some((s) => compatible(pins[s], v));
+    return fits(docVersion) && (!e.version || !u || !u.version || fits(e.version)) ? 'pinned' : 'other_version';
   }
-  if (!text && !acceptDefault) fail('Need the answer: factory answer <U-n|Q-n> "<answer>" (or --default to accept the proposed default).', 'bad_input');
-  let row = null;
-  if (issue) {
-    row = applyAnswer(data, state, { issue, answer: text, acceptDefault, via, round, questionId: logged ? logged.id : null });
-    save(root, state.id, data);
+  // a system the repository constrains to a range, with no exact version confirmed yet: a moving
+  // page or a page outside the range proves nothing about the version in use
+  const ranged = systemsFor(e, it, ranges);
+  if (ranged.length) {
+    if (u && u.moving) return 'unpinned';
+    if (docVersion && !ranged.every((s) => ranges[s].every((r) => inRange(docVersion, r)))) return 'other_version';
   }
-  const q = logged ? logged.question : issue ? issue.text : question;
-  list.push({ ...(logged ? { id: logged.id, category: logged.category } : {}), ...(issue ? { issue: issue.id } : {}), question: q, answer: row ? row.answer : text, via, at: nowIso() });
-  writeJson(f, list);
+  return 'docs';
+}
+
+const USABLE = new Set(['repo', 'pinned', 'docs']);
+const usable = (e) => Boolean(e && USABLE.has(e.verdict));
+
+// ---------------------------------------------------------------- failures
+// What research could not do and still matters: a failure about a plan item that later got a
+// usable source (a pinned page after a 3.x one was skipped) is history, not a gap.
+function openFailures(data) {
+  return data.failures.filter((f) => {
+    if (!f.plan) return true;
+    const pe = data.plan.find((p) => p.id === f.plan);
+    const it = pe && data.items.find((x) => x.id === pe.item);
+    return !(it && FINAL.has(it.status) && (it.evidence || []).some((id) => usable(data.evidence.find((e) => e.id === id))));
+  });
+}
+
+// Sources research found but could not use (another version, a moving page, a quote not at its line).
+function skippedSources(data) {
+  return data.evidence.filter((e) => !usable(e)).map((e) => ({ source: e.source, why: e.verdict === 'other_version' ? `documents ${e.version || 'another version'}` : e.verdict === 'unpinned' ? 'a moving page (stable/latest), not the confirmed version' : e.verdict === 'bad_quote' ? 'the quote is not at the cited line' : e.verdict }));
+}
+
+// How an agent came back, from the workflow's roster (outcome ok | no_result): the Workflow tool
+// has no time cap of its own, so a researcher past its time box, a crashed or skipped agent all
+// come back with nothing. A roster from another runner may say timeout.
+function runWhy(r, capSec) {
+  if (!r) return 'returned nothing';
+  if (r.outcome === 'timeout') return `timed out after ${r.time_cap_sec || capSec || '?'}s`;
+  if (!r.outcome || r.outcome === 'no_result') return 'returned nothing (it failed or was stopped)';
+  return `${r.outcome}${(r.errors || [])[0] ? `: ${clip(r.errors[0], 120)}` : ''}`;
+}
+
+function addFailure(data, f) {
+  const key = `${f.what}|${f.reason}`;
+  if (data.failures.some((x) => `${x.what}|${x.reason}` === key)) return;
+  data.failures.push({ at: nowIso(), stage: data.stage, ...f, what: clip(f.what, 200), reason: clip(f.reason, 240) });
+}
+
+// ---------------------------------------------------------------- routing (by current state)
+// Where an item goes now: research, the sheet, the contract, or nowhere (closed).
+function route(it, data, S) {
+  if (FINAL.has(it.status)) return null;
+  if (it.kind === 'pin') return it.status === 'to_decide' ? 'readback' : null;
+  if (it.kind === 'question') return 'sheet';
+  if (it.kind === 'instruction') return 'assemble';
+  if (it.kind === 'intent' || it.kind === 'scope' || it.kind === 'design') return null;
+  if (it.needs_research && (S ? data.counters.research_passes < S.research_passes : true)) return 'research';
+  if (it.kind === 'decision') return 'sheet';
+  return 'settle';
+}
+
+// After research (or when research is out of passes): settle facts by their evidence.
+function settleFact(data, it) {
+  const ev = [...it.evidence, ...(it.rejected || [])].map((id) => data.evidence.find((e) => e.id === id)).filter(Boolean);
+  const good = ev.filter(usable);
+  if (good.length && it.statement) {
+    if (!setValue(it, { value: it.statement, strength: 'evidence', source: { kind: 'evidence', ids: good.map((e) => e.id) }, actor: 'research' })) it.status = it.status === 'open' ? 'decided' : it.status;
+    return;
+  }
+  const why = ev.length ? `only ${[...new Set(ev.map((e) => e.verdict))].join('/')} sources` : (it.gap || 'research found nothing');
+  if (it.statement) {
+    if (STRENGTH[it.strength] > STRENGTH.assumption) return;
+    it.value = clip(it.statement, 600);
+    it.strength = 'assumption';
+    it.status = 'assumed';
+    it.unconfirmed = why;
+    itemEvent(it, 'assumed', 'research', `not confirmed: ${why}`);
+    return;
+  }
+  if (it.impact === 'high') {
+    it.kind = 'question';
+    it.status = 'to_decide';
+    it.unconfirmed = why;
+    itemEvent(it, 'asked', 'research', `research could not find it out (${why}): the user is asked`);
+    return;
+  }
+  it.status = 'deferred';
+  it.owner = 'design';
+  it.unconfirmed = why;
+  itemEvent(it, 'deferred', 'research', `not researched (${why}): design finds it out`);
+}
+
+// The next stage once nothing is running: research, a sheet, the contract, or the read-back.
+function advance(data, S) {
+  const routes = data.items.map((it) => route(it, data, S));
+  if (routes.includes('readback')) return 'readback_wait';
+  if (routes.includes('research')) return 'research';
+  for (const it of data.items) if (route(it, data, S) === 'settle') settleFact(data, it);
+  if (data.items.some((it) => route(it, data, S) === 'sheet')) {
+    buildSheet(data, S);
+    return 'sheet_wait';
+  }
+  // facts not shown to the user yet go on a sheet of their own (one turn, they may correct them)
+  if (unshownFacts(data).length) {
+    buildSheet(data, S);
+    return 'sheet_wait';
+  }
+  return 'assemble';
+}
+
+function unshownFacts(data) {
+  return data.items.filter((it) => it.kind === 'fact' && ['decided', 'assumed'].includes(it.status) && ['evidence', 'assumption'].includes(it.strength) && !it.shown);
+}
+
+// ---------------------------------------------------------------- the read-back
+function applyReadback(root, state, data, out) {
+  const rb = { n: ((data.readback && data.readback.n) || 0) + 1, at: nowIso(), intent: {}, scope: { in: [], out: [] }, took: [], pins: [], plan: [], questions: [], design: [], dropped: [], confirmed: null };
+  const o = out || {};
+  for (const k of ['problem', 'who', 'outcome', 'success']) rb.intent[k] = clip((o.intent || {})[k], 300);
+  rb.scope.in = (o.scope && Array.isArray(o.scope.in) ? o.scope.in : []).map((x) => clip(x, 200)).slice(0, 10);
+  rb.scope.out = (o.scope && Array.isArray(o.scope.out) ? o.scope.out : []).map((x) => clip(x, 200)).slice(0, 10);
+  const referenced = new Set();
+  const reuse = (ref, kinds) => {
+    const it = ref && ref !== 'new' ? item(data, ref) : null;
+    if (it && (!kinds || kinds.includes(it.kind) || it.kind === 'question')) {
+      referenced.add(it.id);
+      return it;
+    }
+    return null;
+  };
+  // the intent and scope: the interviewer's restatement, confirmed by the user's ok
+  let intentItem = data.items.find((x) => x.kind === 'intent' && x.status !== 'dropped');
+  const intentText = `${rb.intent.problem} → ${rb.intent.outcome}`;
+  if (!intentItem) intentItem = newItem(data, { kind: 'intent', text: 'The intent', value: intentText, status: 'open', strength: 'assumption', origin: 'readback' }, 'interviewer');
+  else if (intentItem.strength !== 'user') {
+    intentItem.value = intentText;
+    intentItem.status = 'open';
+  }
+  referenced.add(intentItem.id);
+  rb.intent_item = intentItem.id;
+  // what the user said: kept only with a quote that is really in their words
+  for (const t of (Array.isArray(o.took) ? o.took : []).slice(0, 20)) {
+    const w = quoted(data, t.quote);
+    if (!w) {
+      rb.dropped.push({ what: clip(t.text, 160), why: 'its quote is not in your words' });
+      continue;
+    }
+    let it = reuse(t.item, ['fact', 'decision', 'instruction']);
+    if (it) {
+      if (it.kind === 'question') it.kind = 'fact';
+      setValue(it, { value: clip(t.text, 300), strength: 'user', source: { kind: 'word', ref: w.id, quote: clip(t.quote, 300) }, actor: 'user', text: t.quote });
+      if (!it.text || it.kind === 'fact') it.text = clip(t.text, 300);
+    } else it = newItem(data, { kind: 'fact', text: t.text, value: t.text, status: 'decided', strength: 'user', source: { kind: 'word', ref: w.id, quote: clip(t.quote, 300) }, origin: 'readback' }, 'user');
+    referenced.add(it.id);
+    rb.took.push(it.id);
+  }
+  // user-stated items an earlier read-back had and this one forgot: carried, never dropped
+  for (const it of data.items) {
+    if (it.strength === 'user' && it.kind === 'fact' && it.status !== 'dropped' && !referenced.has(it.id) && it.source && it.source.kind === 'word') {
+      referenced.add(it.id);
+      rb.took.push(it.id);
+    }
+  }
+  // version pins: a repo line or the user's own words, never a guess
+  const cands = {};
+  for (const p of (Array.isArray(o.pins) ? o.pins : []).slice(0, 20)) {
+    const system = String(p.system || '').trim().toLowerCase();
+    if (!system) continue;
+    let src = null;
+    if (p.source === 'user') {
+      const w = quoted(data, p.quote);
+      if (w && norm(p.quote).includes(norm(String(p.version).replace(/\.x$/i, '')))) src = { kind: 'word', ref: w.id, quote: clip(p.quote, 200) };
+    } else if (p.source === 'repo' && p.file) {
+      if (repoQuoteOk(root, { source: p.file, quote: p.quote })) src = { kind: 'repo', ref: clip(p.file, 200), quote: clip(p.quote, 200) };
+    }
+    if (!src) {
+      rb.dropped.push({ what: `${system} ${clip(p.version, 40)}`, why: p.source === 'user' ? 'not in your words' : 'not at the cited line' });
+      continue;
+    }
+    const exact = pinOf(p.version);
+    (cands[system] = cands[system] || []).push({ version: exact || clip(p.version, 60), range: !exact, source: src });
+  }
+  for (const [system, list] of Object.entries(cands)) {
+    let it = data.items.find((x) => x.kind === 'pin' && x.system === system && x.status !== 'dropped');
+    const exact = list.filter((c) => !c.range);
+    const ranges = list.filter((c) => c.range);
+    const user = exact.filter((c) => c.source.kind === 'word');
+    const repo = exact.filter((c) => c.source.kind === 'repo');
+    const distinct = [];
+    for (const c of exact) if (!distinct.some((d) => compatible(d.version, c.version) || compatible(c.version, d.version))) distinct.push(c);
+    const outside = user.filter((u) => ranges.some((r) => !inRange(u.version, r.version)));
+    const conflict = distinct.length > 1 || outside.length > 0;
+    if (!it) it = newItem(data, { kind: 'pin', text: `The ${system} version to research against`, status: 'open', origin: 'readback', extra: { system } }, 'interviewer');
+    referenced.add(it.id);
+    it.candidates = list;
+    if (it.strength === 'user' && it.status === 'decided' && !conflict) {
+      // kept: the user settled it before
+    } else if (conflict) {
+      // the repository's exact version first; between the user's own words, the latest they said
+      const latestUser = [...user].sort((a, b) => num(b.source.ref) - num(a.source.ref))[0];
+      const rec = repo[0] || latestUser || exact[0];
+      it.status = 'to_decide';
+      it.options = distinct.length > 1 ? distinct.map((c, i) => ({ key: String.fromCharCode(97 + i), text: `${c.version} (${c.source.kind === 'word' ? `you said "${c.source.quote}"` : `${c.source.ref}`})`, version: c.version })) : [{ key: 'a', text: `${user[0].version} (you said "${user[0].source.quote}")`, version: user[0].version }];
+      it.recommendation = it.options.find((x) => x.version === rec.version) ? it.options.find((x) => x.version === rec.version).key : 'a';
+      it.why = distinct.length > 1 ? `the versions disagree; ${rec.source.kind === 'repo' ? `the repository installs ${rec.version}` : 'take the one you stated last'}` : `${user[0].version} is outside what the repository allows (${ranges.map((r) => r.version).join(', ')})`;
+      itemEvent(it, 'conflict', 'cli', it.why);
+    } else if (exact.length) {
+      const c = user[0] || exact[0];
+      setValue(it, { value: c.version, strength: c.source.kind === 'word' ? 'user' : 'evidence', source: c.source, actor: c.source.kind === 'word' ? 'user' : 'repo' });
+    } else {
+      it.status = 'open';
+      it.why = `the repository only gives a range (${ranges.map((r) => r.version).join(', ')})`;
+    }
+    it.allows = ranges.map((r) => ({ range: r.version, source: r.source }));
+    rb.pins.push(it.id);
+  }
+  // the plan: what to find out, each tagged repo, docs or decision
+  for (const p of (Array.isArray(o.plan) ? o.plan : []).slice(0, 15)) {
+    const tag = ['repo', 'docs', 'decision'].includes(p.tag) ? p.tag : 'docs';
+    let it = reuse(p.item, ['fact', 'decision']);
+    const kind = tag === 'decision' ? 'decision' : 'fact';
+    if (it) {
+      if (!it.value || STRENGTH[it.strength] < STRENGTH.user) {
+        it.kind = it.kind === 'question' ? kind : it.kind;
+        it.text = clip(p.what, 300);
+        it.tag = tag;
+        it.impact = IMPACT[p.impact] !== undefined ? p.impact : it.impact;
+        it.pins = Array.isArray(p.pins) ? p.pins.map((x) => String(x).toLowerCase()) : it.pins;
+        if (!FINAL.has(it.status) || it.status === 'assumed') it.needs_research = true;
+      }
+    } else it = newItem(data, { kind, text: p.what, tag, impact: p.impact, pins: p.pins, needs_research: true, origin: 'readback', why: p.why }, 'interviewer');
+    if (Array.isArray(p.options) && p.options.length && !it.options) it.options = p.options.slice(0, 5).map((x, i) => ({ key: String.fromCharCode(97 + i), text: clip(typeof x === 'string' ? x : x.text, 200) }));
+    referenced.add(it.id);
+    let pe = data.plan.find((x) => x.item === it.id);
+    if (!pe) {
+      pe = { id: nextId(data.plan, 'P'), item: it.id, what: it.text, tag, pins: it.pins };
+      data.plan.push(pe);
+    } else Object.assign(pe, { what: it.text, tag, pins: it.pins });
+    rb.plan.push(it.id);
+  }
+  for (const q of (Array.isArray(o.questions) ? o.questions : []).slice(0, 5)) {
+    let it = reuse(q.item, ['question']);
+    if (!it) it = newItem(data, { kind: 'question', text: q.question, status: 'open', impact: 'high', origin: 'readback', why: q.why }, 'interviewer');
+    else if (it.status !== 'decided') it.text = clip(q.question, 300);
+    it.why_asked = clip(q.why, 200);
+    referenced.add(it.id);
+    rb.questions.push(it.id);
+  }
+  for (const d of (Array.isArray(o.design_may_choose) ? o.design_may_choose : []).slice(0, 10)) {
+    let it = data.items.find((x) => x.kind === 'design' && norm(x.text) === norm(d));
+    if (!it) it = newItem(data, { kind: 'design', text: d, status: 'deferred', owner: 'design', origin: 'readback' }, 'interviewer');
+    referenced.add(it.id);
+    rb.design.push(it.id);
+  }
+  // what an earlier read-back proposed and this one no longer does (the user corrected it)
+  for (const it of data.items) {
+    // (only what is still open: a decided, assumed or deferred item is history the user saw, and a
+    // read-back after a redirect does not drop it for not mentioning it again)
+    if (referenced.has(it.id) || it.origin !== 'readback' || FINAL.has(it.status) || it.strength === 'user' || !data.readback) continue;
+    if (['fact', 'decision', 'question', 'scope', 'design'].includes(it.kind) && !(it.links || []).length) {
+      it.status = 'dropped';
+      itemEvent(it, 'dropped', 'interviewer', 'not in the new read-back (your edit replaced it)');
+    }
+  }
+  data.readback = rb;
+  data.stage = 'readback_wait';
+  log(data, 'readback', `read-back ${rb.n}: ${rb.took.length} stated, ${rb.pins.length} pin(s), ${rb.plan.length} to find out, ${rb.questions.length} question(s)`);
+}
+
+function readbackScreen(state, data) {
+  const rb = data.readback;
+  if (!rb) return '';
+  const L = [`**Read-back · ${state.id} ${state.title}**`, ''];
+  const i = rb.intent;
+  L.push('**What you want** (my words; correct me)');
+  if (i.problem) L.push(`- Problem: ${i.problem}`);
+  if (i.who) L.push(`- Who: ${i.who}`);
+  if (i.outcome) L.push(`- Outcome: ${i.outcome}`);
+  if (i.success) L.push(`- Success signal: ${i.success}`);
+  if (rb.scope.in.length) L.push(`- In scope: ${rb.scope.in.join('; ')}`);
+  if (rb.scope.out.length) L.push(`- Out of scope: ${rb.scope.out.join('; ')}`);
+  const took = rb.took.map((id) => item(data, id)).filter(Boolean);
+  if (took.length) {
+    L.push('', '**What I took from your words**');
+    took.forEach((it, k) => L.push(`${k + 1}. ${it.value || it.text} — "${(it.source && it.source.quote) || ''}"`));
+  }
+  const pins = rb.pins.map((id) => item(data, id)).filter(Boolean);
+  if (pins.length) {
+    L.push('', '**Versions I will research against**');
+    for (const p of pins) {
+      const allows = (p.allows || []).map((a) => `the repo allows "${a.range}", ${a.source.ref}`).join('; ');
+      if (p.status === 'to_decide') {
+        L.push(`- **${p.system}: the versions disagree** (a conflict to settle before research): ${p.options.map((o) => `${o.key}) ${o.text}${o.key === p.recommendation ? ' **(recommended)**' : ''}`).join(' · ')}. Why: ${p.why}.`);
+      } else if (p.value) {
+        const s = p.source || {};
+        L.push(`- ${p.system} ${p.value} — ${s.kind === 'word' ? `you said "${s.quote}"` : `${s.ref}: "${s.quote}"`}${allows ? ` (${allows})` : ''}`);
+      } else L.push(`- ${p.system}: no exact version (${p.why || allows}); research says which version each source documents`);
+    }
+  }
+  const plan = rb.plan.map((id) => item(data, id)).filter((x) => x && x.status !== 'dropped');
+  if (plan.length) {
+    L.push('', '**What I will find out**');
+    plan.forEach((it, k) => L.push(`${k + 1}. [${it.tag}] ${it.text}`));
+  }
+  const qs = rb.questions.map((id) => item(data, id)).filter((x) => x && !FINAL.has(x.status));
+  if (qs.length) {
+    L.push('', '**Only you can tell me**');
+    qs.forEach((it, k) => L.push(`${k + 1}. ${it.text}${it.why_asked ? ` (${it.why_asked})` : ''}`));
+  }
+  const design = rb.design.map((id) => item(data, id)).filter(Boolean);
+  if (design.length) L.push('', `**Design may choose:** ${design.map((d) => d.text).join('; ')}.`);
+  if (rb.dropped.length) L.push('', `Not taken (no source): ${rb.dropped.map((d) => `${d.what} (${d.why})`).join('; ')}.`);
+  if (data.migration && rb.n === 1) L.push('', `Carried over from before v3: ${data.migration.summary}.`);
+  L.push('', `Reply **ok** to ${plan.some((x) => x.needs_research) ? 'start research' : 'go on'}${pins.some((p) => p.status === 'to_decide') ? ' (with the recommended version)' : ''}, or tell me in your own words what to change.`);
+  return L.join('\n');
+}
+
+function confirmReadback(data, word, S) {
+  const rb = data.readback;
+  rb.confirmed = { at: nowIso(), word: word.id };
+  for (const it of data.items) {
+    if (it.status === 'dropped') continue;
+    if (it.kind === 'intent' && it.strength !== 'user') setValue(it, { value: it.value, strength: 'accepted', actor: 'user (read-back ok)', text: word.text });
+    if (it.kind === 'pin' && it.status === 'to_decide') {
+      const o = it.options.find((x) => x.key === it.recommendation) || it.options[0];
+      setValue(it, { value: o.version, strength: 'accepted', source: { kind: 'word', ref: word.id, quote: word.text }, actor: 'user (read-back ok)', text: `${o.text}` });
+      it.resolved = { chose: o.version, by: 'recommended, you accepted' };
+    }
+    if (it.kind === 'question' && it.status === 'open') it.status = 'to_decide';
+  }
+  log(data, 'readback_confirmed', word.text);
+}
+
+// ---------------------------------------------------------------- research
+function researchItems(data, S) {
+  return data.items.filter((it) => route(it, data, S) === 'research');
+}
+
+function planFor(data, it) {
+  let pe = data.plan.find((x) => x.item === it.id);
+  if (!pe) {
+    pe = { id: nextId(data.plan, 'P'), item: it.id, what: it.text, tag: it.tag || (it.kind === 'decision' ? 'decision' : 'docs'), pins: it.pins };
+    data.plan.push(pe);
+  }
+  return pe;
+}
+
+function applyResearch(root, state, data, outputs, runs, S, pass) {
+  const rec = { n: data.research.passes.length + 1, at: nowIso(), items: pass.items, scouts: [], brief_ok: false, failures: [] };
+  const byPlan = Object.fromEntries(data.plan.map((p) => [p.id, p]));
+  const runOf = (label) => (runs || []).filter((r) => r.label === label || r.label === `${label} (retry)`).pop() || null;
+  const fail1 = (what, reason, extra = {}) => {
+    rec.failures.push({ what, reason });
+    addFailure(data, { what, reason, pass: rec.n, ...extra });
+  };
+  let transient = false;
+  for (const s of pass.scouts) {
+    const out = outputs[s.label];
+    const r = runOf(s.label);
+    if (!out) {
+      const why = runWhy(r, Math.round(S.research_sec));
+      fail1(`the ${s.mode} researcher`, why);
+      rec.scouts.push({ label: s.label, mode: s.mode, ok: false, why });
+      transient = true;
+      continue;
+    }
+    rec.scouts.push({ label: s.label, mode: s.mode, ok: true });
+    if (s.mode === 'docs' && out.web_available === false) fail1('the web', `web unavailable: ${clip(((out.unresolved || [])[0] || {}).reason || 'no network', 160)}`);
+    for (const f of out.failed_sources || []) fail1(clip(f.source, 200), clip(f.reason, 160), { plan: f.plan || null });
+    for (const u of out.unresolved || []) {
+      const pe = byPlan[u.plan];
+      if (!pe) continue;
+      const it = item(data, pe.item);
+      if (it) it.gap = clip(`${s.mode}: ${u.reason}`, 200);
+      if (!/preference|no documentation needed/i.test(u.reason || '')) fail1(pe.what, `${s.mode} research: ${clip(u.reason, 160)}`, { plan: pe.id });
+    }
+    for (const e of (out.evidence || []).slice(0, 40)) {
+      const pe = byPlan[e.plan];
+      if (!pe || !pass.items.includes(pe.item)) continue;
+      const dup = data.evidence.find((x) => x.source === clip(e.source, 400) && x.item === pe.item && norm(x.quote) === norm(e.quote));
+      if (dup) {
+        // found again: it counts for this pass too
+        dup.passes = [...new Set([...(dup.passes || [dup.pass]), rec.n])];
+        continue;
+      }
+      const ev = { id: nextId(data.evidence, 'E'), item: pe.item, plan: pe.id, claim: clip(e.claim, 300), source: clip(e.source, 400), quote: clip(e.quote, 400), version: e.version ? clip(e.version, 40) : null, system: e.system ? clip(e.system, 60).toLowerCase() : null, tier: e.source_tier || (s.mode === 'repo' ? 'repo' : 'official'), retrieved_at: e.retrieved_at || null, by: s.mode, pass: rec.n, passes: [rec.n], ...(e.contradicts ? { contradicts: String(e.contradicts).toUpperCase() } : {}) };
+      data.evidence.push(ev);
+      const it = item(data, pe.item);
+      if (it && !it.evidence.includes(ev.id)) it.evidence.push(ev.id);
+    }
+  }
+  judge(root, data);
+  for (const e of data.evidence.filter((x) => x.pass === rec.n && !usable(x))) {
+    const pins = pinsBySystem(data);
+    const sys = systemsFor(e, item(data, e.item), pins)[0] || systemsFor(e, item(data, e.item), rangesBySystem(data))[0];
+    const pin = sys ? pins[sys] || `a version the repository allows (${(rangesBySystem(data)[sys] || []).join(', ')})` : 'version';
+    const why = e.verdict === 'other_version' ? `documents ${e.version || (urlVersion(e.source) || {}).version || 'another version'}, not the confirmed ${pin}` : e.verdict === 'unpinned' ? `documents the latest release (${(urlVersion(e.source) || {}).moving ? 'a moving page' : 'no version'}), not the confirmed ${pin}` : e.verdict === 'bad_quote' ? 'the quote is not at the cited line' : 'no source quote';
+    fail1(e.source, `skipped: ${why}`, { plan: e.plan });
+  }
+  // the brief: decision records and facts
+  const brief = outputs[pass.brief];
+  if (brief) {
+    rec.brief_ok = true;
+    data.research.summary = clip(brief.summary, 600);
+    const evFor = (it, sources) => {
+      const out = [];
+      for (const s of sources || []) {
+        const e = data.evidence.find((x) => x.item === it.id && x.source === clip(s, 400)) || data.evidence.find((x) => x.source === clip(s, 400));
+        if (e && !out.includes(e.id)) out.push(e.id);
+      }
+      return out;
+    };
+    for (const r of brief.records || []) {
+      const pe = byPlan[r.plan];
+      const it = pe && item(data, pe.item);
+      if (!it || !pass.items.includes(it.id)) continue;
+      const ids = evFor(it, r.evidence);
+      const good = ids.filter((id) => usable(data.evidence.find((e) => e.id === id)));
+      const better = !it.record || good.length >= (it.record.usable || 0);
+      if (!better) continue;
+      it.kind = 'decision';
+      it.options = (r.options || []).slice(0, 5).map((x, i) => ({ key: String(x.key || String.fromCharCode(97 + i)).toLowerCase(), text: clip(x.text, 200), consequences: clip(x.consequences, 200) }));
+      it.recommendation = it.options.some((x) => x.key === String(r.recommendation || '').toLowerCase()) ? String(r.recommendation).toLowerCase() : null;
+      it.why = clip(r.why, 300);
+      it.record = { pass: rec.n, evidence: ids, usable: good.length };
+      it.evidence = [...new Set([...it.evidence, ...ids])];
+      it.researched = good.length > 0;
+    }
+    for (const f of brief.facts || []) {
+      const pe = byPlan[f.plan];
+      const it = pe && item(data, pe.item);
+      if (!it || !pass.items.includes(it.id)) continue;
+      const ids = evFor(it, f.evidence);
+      it.statement = clip(f.statement, 400);
+      it.evidence = [...new Set([...it.evidence, ...ids])];
+      if (f.contradicts) contradiction(data, it, String(f.contradicts).toUpperCase(), ids);
+    }
+    for (const g of brief.gaps || []) {
+      const pe = byPlan[g.plan];
+      const it = pe && item(data, pe.item);
+      if (it) it.gap = clip(g.why, 200);
+    }
+  } else {
+    const r = runOf(pass.brief);
+    fail1('the brief writer', runWhy(r));
+  }
+  // contradictions the researchers flagged themselves
+  for (const e of data.evidence.filter((x) => x.pass === rec.n && x.contradicts && usable(x))) contradiction(data, item(data, e.item), e.contradicts, [e.id]);
+  judge(root, data);
+  data.research.passes.push(rec);
+  data.counters.research_passes += 1;
+  const lacking = pass.items.map((id) => item(data, id)).filter((it) => it && !it.evidence.some((id) => usable(data.evidence.find((e) => e.id === id))) && it.impact !== 'low');
+  const moreAllowed = data.counters.research_passes < S.research_passes;
+  if (!brief) {
+    if (moreAllowed) {
+      data.research.retry = { brief_only: rec.scouts.every((s) => s.ok), items: pass.items, failed: rec.scouts.filter((s) => !s.ok).map((s) => s.mode) };
+      log(data, 'research_retry', 'the brief writer returned nothing: one more pass');
+      return { next: 'research', retry: true };
+    }
+    data.parked = { kind: 'research', stage: 'research', reason: `Research could not produce a brief in ${data.counters.research_passes} pass(es): the brief writer ${rec.failures.find((f) => f.what === 'the brief writer').reason}.` };
+    return { next: 'park' };
+  }
+  if (transient && lacking.length && moreAllowed) {
+    data.research.retry = { brief_only: false, items: lacking.map((x) => x.id), failed: rec.scouts.filter((s) => !s.ok).map((s) => s.mode) };
+    log(data, 'research_retry', `${rec.failures.length} failure(s); ${lacking.length} item(s) still without a usable source: one more pass`);
+    return { next: 'research', retry: true };
+  }
+  data.research.retry = null;
+  for (const id of pass.items) {
+    const it = item(data, id);
+    if (!it) continue;
+    it.needs_research = false;
+    if (it.kind === 'decision' && it.researched === undefined) it.researched = false;
+  }
+  return { next: 'route' };
+}
+
+// Pinned evidence against something the user said: a decision for the user, never an overwrite.
+function contradiction(data, factItem, ref, ids) {
+  const said = item(data, ref);
+  if (!said || said.strength !== 'user' || !factItem) return;
+  if (data.items.some((x) => x.contradiction && x.contradiction.said === said.id && x.status !== 'dropped')) return;
+  const ev = ids.map((id) => data.evidence.find((e) => e.id === id)).filter(usable);
+  if (!ev.length) return;
+  const quote = (said.source && said.source.quote) || said.value;
+  const it = newItem(data, { kind: 'decision', text: `You said "${clip(quote, 160)}"; ${clip(ev[0].claim, 200)}`, status: 'to_decide', impact: 'high', origin: 'research', extra: { contradiction: { said: said.id, fact: factItem.id }, researched: true } }, 'research');
+  it.options = [{ key: 'a', text: `Go by the source: ${clip(ev[0].claim, 200)}`, consequences: 'the contract follows the documentation' }, { key: 'b', text: `Keep what you said: ${clip(said.value, 200)}`, consequences: 'the contract follows your statement against the documentation' }];
+  it.recommendation = 'a';
+  it.why = `the documentation${ev[0].version ? ` for ${ev[0].version}` : ''} says otherwise`;
+  it.evidence = ev.map((e) => e.id);
+  said.challenged_by = it.id;
+  itemEvent(said, 'challenged', 'research', `${ev[0].source}: ${ev[0].claim}`);
+}
+
+// ---------------------------------------------------------------- the decision sheet
+function buildSheet(data, S) {
+  const pending = data.items.filter((it) => route(it, data, S) === 'sheet').sort((a, b) => IMPACT[a.impact] - IMPACT[b.impact] || (a.contradiction ? -1 : 0) - (b.contradiction ? -1 : 0) || num(a.id) - num(b.id));
+  const asked = new Set(data.sheets.flatMap((s) => s.decisions.filter((d) => d.answered).map((d) => d.item)));
+  const take = pending.slice(0, S.sheet_decisions);
+  const n = data.sheets.length + 1;
+  const decisions = take.map((it, i) => {
+    it.status = 'to_decide';
+    return { no: i + 1, id: `D-${n}.${i + 1}`, item: it.id, question: it.text, options: it.options || [], recommendation: it.recommendation || null, why: it.why || null, researched: Boolean(it.researched), evidence: it.evidence.filter((id) => usable(data.evidence.find((e) => e.id === id))), gap: it.gap || it.unconfirmed || null, reasked: asked.has(it.id), answered: null, kind: it.kind };
+  });
+  const facts = unshownFacts(data).map((it, i) => {
+    it.shown = n;
+    return { no: i + 1, item: it.id, text: it.value, source: factSource(data, it) };
+  });
+  data.sheets.push({ n, at: nowIso(), decisions, facts, queued: pending.length - take.length, answered_at: null, failures_at: data.failures.length });
+  log(data, 'sheet', `sheet ${n}: ${decisions.length} decision(s), ${facts.length} fact(s), ${pending.length - take.length} waiting`);
+}
+
+function currentSheet(data) {
+  const s = data.sheets[data.sheets.length - 1];
+  return s && !s.answered_at ? s : null;
+}
+
+function evidenceText(data, ids, n = 2) {
+  return ids.map((id) => data.evidence.find((e) => e.id === id)).filter(usable).slice(0, n).map((e) => `${e.source}${e.verdict === 'pinned' && e.version ? ` (${e.version})` : ''}, ${e.id}`).join('; ');
+}
+
+function factSource(data, it) {
+  const s = it.source || {};
+  if (it.strength === 'user') return s.quote ? `your words: "${clip(s.quote, 120)}"` : 'you';
+  const ev = it.evidence.map((id) => data.evidence.find((e) => e.id === id)).filter(usable);
+  if (it.strength === 'evidence' && ev.length) return ev.slice(0, 2).map((e) => (e.verdict === 'repo' ? `${e.source}` : `${e.source}${e.version ? ` (${e.version})` : ''}`) + `, ${e.id}`).join('; ');
+  if (it.strength === 'accepted') return `you accepted it${ev.length ? ` (${ev[0].source})` : ''}`;
+  return `my assumption, not confirmed: ${it.unconfirmed || 'no source'}`;
+}
+
+function sheetScreen(state, data) {
+  const s = currentSheet(data);
+  if (!s) return '';
+  const passes = data.research.passes.length;
+  const L = [`**Decisions · ${state.id}**${passes ? ` (research: ${passes} pass${passes > 1 ? 'es' : ''})` : ''}`, ''];
+  for (const d of s.decisions.filter((x) => !x.answered)) {
+    L.push(`${d.no}. **${d.question}**${d.reasked ? ' (reopened)' : ''}`);
+    for (const o of d.options) L.push(`   - ${o.key}) ${o.text}${o.key === d.recommendation ? ' **(recommended)**' : ''}`);
+    if (!d.options.length) L.push('   - (no options: answer in your own words)');
+    const ev = evidenceText(data, d.evidence);
+    if (d.recommendation && d.why) L.push(`   Why ${d.recommendation}: ${d.why}${ev ? ` (${ev})` : d.researched ? '' : ' — my recommendation; no source decides this'}`);
+    if (!d.researched) {
+      const fails = data.failures.filter((f) => f.plan && data.plan.some((p) => p.id === f.plan && p.item === d.item)).map((f) => f.reason);
+      const web = data.failures.find((f) => f.what === 'the web');
+      const timeout = data.failures.find((f) => / researcher$/.test(f.what));
+      const why = d.gap || fails[0] || (web && web.reason) || (timeout && `the ${timeout.what.replace(/^the /, '')} ${timeout.reason}`) || null;
+      if (why && !/preference/.test(why)) L.push(`   Not researched: ${why}.`);
+    }
+    if (!d.recommendation) L.push('   No recommendation: answer it yourself, or "defer" it to design.');
+  }
+  const facts = s.facts;
+  if (facts.length) {
+    L.push('', "**Facts I'll assume** (say if one is wrong)");
+    for (const f of facts) L.push(`${f.no}. ${f.text} (${f.source})`);
+  }
+  const fails = openFailures(data).filter((f) => !/^skipped:/.test(f.reason)).slice(0, 12);
+  if (fails.length) {
+    L.push('', '**Not researched**');
+    for (const f of fails) L.push(`- ${f.what}: ${f.reason}`);
+  }
+  const skipped = skippedSources(data);
+  if (skipped.length) {
+    L.push('', `**Sources skipped** (not relied on)`);
+    for (const k of skipped.slice(0, 8)) L.push(`- ${k.source}: ${k.why}`);
+  }
+  if (s.queued) L.push('', `${s.queued} more decision(s) come on the next sheet.`);
+  const stuck = s.decisions.filter((d) => !d.answered && !d.recommendation);
+  if (s.ok_without_answer && stuck.length) L.push('', `**You replied ok, but ${stuck.map((d) => d.no).join(', ')} ${stuck.length > 1 ? 'have' : 'has'} no recommendation to take.** Answer ${stuck.length > 1 ? 'them' : 'it'} in your own words, or reply **ok** again and design decides ${stuck.length > 1 ? 'them' : 'it'} (shown at H1 under "Design may still choose").`);
+  L.push('', 'Reply **ok** to take my recommendations, or say what to change: **ok, but 2 b**, **3: other: <your words>**, **2 defer**, **fact 1: <correction>**. Plain words work too.');
+  return L.join('\n');
+}
+
+// "proceed" is not an ok: it is the human-only verb that continues a park (factory proceed).
+const ACCEPT = /^(ok|okay|k|yes|y|yep|yeah|go|go ahead|accept(ed)?|accept all|agreed|fine|sure|looks good|lgtm|sounds good|correct|right|confirmed?|as recommended|take (your|the) recommendations?|all recommended|start|start research)[.!]*$/i;
+const ACCEPT_HEAD = /^(ok|okay|yes|yep|fine|sure|agreed|looks good|lgtm|sounds good|accept(?: all)?|go ahead)\s*[,.;:!]?\s*(?:but|except|and|although|though)?\s*[,:;-]?\s*/i;
+// "otherwise ok", "the rest as recommended": an ok for whatever the numbered parts leave open
+const ACCEPT_REST = /^(?:and\s+|but\s+)?(?:otherwise|the rest|rest|others|all others|everything else|all else)\s*(?:is\s+|are\s+|as\s+)?(?:ok|okay|fine|good|recommended|as recommended|as you recommend)$/i;
+// where one numbered answer starts: "2 b", "2: …", "2) …", "fact 1: …", "3 defer", "1a"
+const NUMBERED = String.raw`(?:fact\s*|f)?\d{1,2}(?:\s*[:)]|\s*[a-e](?![a-z])|\s+(?:ok|okay|defer|other)\b)`;
+
+// A sheet reply in plain words: { accept, answers: [{no, choice|text|defer}], facts: [{no, text}] },
+// or null when it is not exactly that shape: the interviewer reads it then (one call, every
+// mapping quoted). Only an unambiguous reply is applied here: an option key, ok, defer, or
+// free words after an explicit "2: …" / "2 other: …". "2 b please", "1 a 2 b and 3 defer" or
+// "3 is b" are never taken word for word as the user's answer.
+function parseSheetReply(text, sheet) {
+  let t = String(text || '').trim();
+  if (!t || !sheet) return null;
+  if (ACCEPT.test(t)) return { accept: true, answers: [], facts: [] };
+  let accept = false;
+  const head = ACCEPT_HEAD.exec(t);
+  if (head && head[0].trim() && t.length > head[0].length) {
+    accept = true;
+    t = t.slice(head[0].length).trim();
+  }
+  // split before every numbered answer: at a separator (newline ; , . and), or bare whitespace
+  const segs = t.split(new RegExp(String.raw`(?:\s*(?:\n|[;,]|\.(?=\s)|\band\b)\s*|(?<!\bfact)\s+)(?=${NUMBERED})|\s*(?:\n|[;,]|\.(?=\s))\s*(?=(?:and\s+|but\s+)?(?:otherwise|the rest|rest|others|all others|everything else|all else)\b)`, 'i')).map((x) => x.trim()).filter(Boolean);
+  const answers = [];
+  const facts = [];
+  for (const seg of segs) {
+    if (ACCEPT_REST.test(seg.replace(/[.!]+$/, ''))) {
+      accept = true;
+      continue;
+    }
+    const m = /^(fact\s*|f)?(\d{1,2})\s*([:)\-.])?\s*(.*)$/i.exec(seg);
+    if (!m || !m[4].trim()) return null;
+    const no = Number(m[2]);
+    const colon = Boolean(m[3] && m[3] !== '.');
+    const body = m[4].trim().replace(/[.!]+$/, '');
+    if (m[1]) {
+      if (!colon || !sheet.facts.some((f) => f.no === no)) return null;
+      facts.push({ no, text: body });
+      continue;
+    }
+    if (!sheet.decisions.some((d) => d.no === no)) return null;
+    if (answers.some((a) => a.no === no)) return null; // two answers to one decision: ask the interviewer
+    let a;
+    const key = /^\(?([a-e])\)?$/i.exec(body);
+    if (key) a = { no, choice: key[1].toLowerCase() };
+    else if (/^(ok|okay|yes|recommended|as recommended|fine|agreed)$/i.test(body)) a = { no, choice: 'recommended' };
+    else if (/^(defer|deferred|later|skip|design( decides)?|you decide|your call|let design decide)$/i.test(body)) a = { no, defer: true };
+    else {
+      const other = /^other\s*[:\-]?\s*(.+)$/i.exec(body);
+      // free words only after "2: " or "2 other …", and never starting with a bare option key
+      // ("2: b please"): those are for the interviewer, who quotes what it maps
+      if (!other && !colon) return null;
+      const words = other ? other[1].trim() : body;
+      if (!other && /^\(?[a-e]\)?(?:[\s,.;:)!-]|$)/i.test(words)) return null;
+      a = { no, text: words };
+    }
+    answers.push(a);
+  }
+  if (!answers.length && !facts.length) return accept ? { accept: true, answers: [], facts: [] } : null;
+  return { accept, answers, facts };
+}
+
+function applySheet(data, sheet, parsed, word, how = 'reply') {
+  const out = { decided: [], open: [], facts: [] };
+  const actor = how === 'interpret' ? 'user (read by the interviewer)' : 'user';
+  for (const a of parsed.answers) {
+    const d = sheet.decisions.find((x) => x.no === a.no);
+    const it = d && item(data, d.item);
+    if (!it || d.answered) continue;
+    if (a.defer) {
+      it.status = 'deferred';
+      it.owner = 'design';
+      it.strength = 'user';
+      it.value = 'deferred to design';
+      itemEvent(it, 'deferred', actor, word.text);
+    } else if (a.choice === 'recommended') {
+      if (!d.recommendation) continue;
+      const o = d.options.find((x) => x.key === d.recommendation);
+      setValue(it, { value: o.text, strength: 'accepted', source: { kind: 'sheet', ref: d.id, word: word.id }, actor: `${actor} (accepted the recommendation)`, text: word.text });
+    } else if (a.choice) {
+      const o = d.options.find((x) => x.key === a.choice);
+      if (!o) continue;
+      setValue(it, { value: o.text, strength: 'user', source: { kind: 'sheet', ref: d.id, word: word.id, quote: a.quote || `${d.no} ${a.choice}` }, actor, text: word.text }); // the user's own words when the interviewer quoted them
+    } else {
+      setValue(it, { value: a.text, strength: 'user', source: { kind: 'word', ref: word.id, quote: a.quote || a.text }, actor, text: word.text });
+    }
+    d.answered = { at: nowIso(), word: word.id, how };
+    out.decided.push(it.id);
+    afterDecision(data, it);
+  }
+  if (parsed.accept) {
+    for (const d of sheet.decisions.filter((x) => !x.answered)) {
+      const it = item(data, d.item);
+      if (!it || !d.recommendation) continue;
+      const o = d.options.find((x) => x.key === d.recommendation);
+      setValue(it, { value: o.text, strength: 'accepted', source: { kind: 'sheet', ref: d.id, word: word.id }, actor: `${actor} (accepted the recommendation)`, text: word.text });
+      d.answered = { at: nowIso(), word: word.id, how };
+      out.decided.push(it.id);
+      afterDecision(data, it);
+    }
+  }
+  for (const f of parsed.facts || []) {
+    const sf = sheet.facts.find((x) => x.no === f.no);
+    const it = sf && item(data, sf.item);
+    if (!it) continue;
+    if (/^(ok|yes|right|correct)$/i.test(f.text)) continue;
+    setValue(it, { value: f.text, strength: 'user', source: { kind: 'word', ref: word.id, quote: f.text }, actor, text: word.text });
+    sf.corrected = word.id;
+    out.facts.push(it.id);
+  }
+  if (parsed.accept) {
+    for (const sf of sheet.facts) {
+      const it = item(data, sf.item);
+      if (it && !sf.corrected && it.strength === 'assumption') setValue(it, { value: it.value, strength: 'accepted', actor: 'user (accepted the facts)', status: 'decided', text: word.text });
+    }
+  }
+  out.open = sheet.decisions.filter((d) => !d.answered).map((d) => d.no);
+  if (!out.open.length) sheet.answered_at = nowIso();
+  return out;
+}
+
+// An ok (or an interpreted "as you recommend") that leaves decisions with no recommendation open:
+// the sheet says so once; the second hands those decisions to design, with the words that did it,
+// so the sheet never loops. Only when nothing else was left open (an unanswered decision that has
+// a recommendation is the user's to answer).
+function okWithoutRecommendation(data, s, r, w, nos) {
+  const stuck = s.decisions.filter((d) => !d.answered && !d.recommendation && nos.includes(d.no));
+  if (!stuck.length || stuck.length !== r.open.length) return;
+  s.ok_without_answer = (s.ok_without_answer || 0) + 1;
+  if (s.ok_without_answer < 2) return;
+  for (const d of stuck) {
+    const it = item(data, d.item);
+    if (!it) continue;
+    it.status = 'deferred';
+    it.owner = 'design';
+    it.strength = 'user';
+    it.value = 'deferred to design';
+    it.deferred_by_ok = true;
+    itemEvent(it, 'deferred', 'user', `you replied ok twice to a decision with no recommendation: design decides it ("${clip(w.text, 80)}")`);
+    d.answered = { at: nowIso(), word: w.id, how: 'ok twice: deferred to design' };
+    r.decided.push(it.id);
+  }
+  r.open = [];
+  s.answered_at = nowIso();
+}
+
+// A decided contradiction settles the user's statement it was about; a decision about an item
+// the user's hand edit took out puts it back or drops it.
+function afterDecision(data, it) {
+  if (it.lost) {
+    const target = item(data, it.lost.item);
+    if (!target) return;
+    const leaveOut = (it.options || [])[1] && it.value === it.options[1].text;
+    if (leaveOut) {
+      target.status = 'dropped';
+      itemEvent(target, 'dropped', 'user (hand edit)', `you removed ${it.lost.where} from the contract and chose to leave it out (${it.id})`);
+    } else itemEvent(target, 'restore', 'user (hand edit)', `put back (${it.id}): ${clip(it.value, 120)}`);
+    return;
+  }
+  if (!it.contradiction) return;
+  const said = item(data, it.contradiction.said);
+  if (!said) return;
+  const tookSource = /^Go by the source/.test(it.value || '');
+  said.superseded = tookSource ? { by: it.id, value: it.value } : null;
+  itemEvent(said, tookSource ? 'superseded' : 'kept', 'user', it.value);
+}
+
+// ---------------------------------------------------------------- redirects
+function startRedirect(data, text, via, gate = null) {
+  const w = addWord(data, text, via);
+  const R = { id: nextId(data.redirects, 'R'), at: nowIso(), gate, word: w.id, text: w.text, status: 'interpreting', clauses: [], from_stage: data.stage };
+  data.redirects.push(R);
+  data.stage = 'redirect';
+  log(data, 'redirect', text);
+  return R;
+}
+
+function currentRedirect(data) {
+  return [...data.redirects].reverse().find((r) => ['interpreting', 'to_confirm'].includes(r.status)) || null;
+}
+
+// The redirect's sentences: what must each be quoted by some clause.
+function sentences(text) {
+  return String(text).split(/(?<=[.;!?])\s+|;\s*/).map((x) => x.trim().replace(/[.;]+$/, '')).filter((x) => x.length >= 6);
+}
+
+// The parts of `text` no quote covers, verbatim, each with real content (more than glue words
+// such as "and", "also", "please"). Quotes are matched without case or spacing differences.
+const GLUE = new Set(['and', 'also', 'then', 'but', 'so', 'please', 'or', 'too', 'as', 'well', 'the', 'a', 'an', 'to', 'it', 'that', 'this', 'with', 'of', 'for', 'in', 'on', 'not', 'just']);
+function unquoted(text, quotes) {
+  const src = String(text);
+  const lower = src.toLowerCase();
+  const covered = new Array(src.length).fill(false);
+  for (const q of quotes) {
+    const words = String(q || '').toLowerCase().trim().split(/\s+/).filter(Boolean);
+    if (!words.length) continue;
+    // the quote's words in order, with any whitespace between them
+    const re = new RegExp(words.map((w) => w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('\\s+'), 'g');
+    let m;
+    while ((m = re.exec(lower))) {
+      for (let i = m.index; i < m.index + m[0].length; i++) covered[i] = true;
+      if (!m[0].length) re.lastIndex++;
+    }
+  }
+  const out = [];
+  let cur = '';
+  const flush = () => {
+    const parts = cur.split(/(?<=[.;!?])\s+|;\s*|\n+/);
+    cur = '';
+    for (const part of parts) {
+      let t = part.replace(/^[\s,.;:!?\-–—()]+|[\s,.;:!?\-–—(]+$/g, '').trim();
+      t = t.replace(/^(?:(?:and|also|then|but|so|plus)\b[\s,]*)+/i, '').trim();
+      if (!t) continue;
+      const content = t.toLowerCase().split(/[^a-z0-9.]+/).filter((w) => w && !GLUE.has(w));
+      if (content.length >= 2 || (content.length === 1 && content[0].length >= 6)) out.push(t);
+    }
+  };
+  for (let i = 0; i < src.length; i++) {
+    if (covered[i]) flush();
+    else cur += src[i];
+  }
+  flush();
+  return out;
+}
+
+function applyRedirect(data, out) {
+  const R = currentRedirect(data);
+  if (!R) return;
+  const clauses = [];
+  for (const c of (out && Array.isArray(out.clauses) ? out.clauses : []).slice(0, 12)) {
+    if (!norm(R.text).includes(norm(c.quote)) || norm(c.quote).length < 4) continue;
+    const it = c.item && c.item !== 'new' ? item(data, c.item) : null;
+    const action = ['research', 'decide', 'fix', 'fact', 'instruction'].includes(c.action) ? c.action : 'instruction';
+    clauses.push({ n: clauses.length + 1, quote: clip(c.quote, 400), item: it ? it.id : null, action, text: clip(c.text || c.quote, 300), tag: ['repo', 'docs'].includes(c.tag) ? c.tag : null });
+  }
+  // conservation: every part of the redirect no clause quotes becomes an instruction, verbatim.
+  // Not only whole sentences: "research X, and decide Y" with only "research X" quoted leaves
+  // "decide Y" over, and that is tracked too.
+  for (const s of unquoted(R.text, clauses.map((c) => c.quote))) clauses.push({ n: clauses.length + 1, quote: s, item: null, action: 'instruction', text: s, tag: null, unread: true });
+  R.clauses = clauses;
+  R.status = 'to_confirm';
+  data.stage = 'redirect_wait';
+}
+
+const ACTION_TEXT = { research: 'research it, then decide', decide: 'put it on the decision sheet', fix: 'change the contract', fact: 'record it as your fact', instruction: 'follow it when the contract is written' };
+
+function redirectScreen(state, data) {
+  const R = currentRedirect(data);
+  if (!R) return '';
+  const L = [`**Your redirect · ${state.id}** — I took it as:`, ''];
+  for (const c of R.clauses) {
+    const it = c.item && item(data, c.item);
+    L.push(`${c.n}. "${c.quote}" → ${ACTION_TEXT[c.action]}${it ? ` (reopens: ${it.text})` : ' (new)'}`);
+  }
+  L.push('', 'Reply **ok** and I restart from the earliest step this touches, or tell me what I got wrong.');
+  return L.join('\n');
+}
+
+const STAGE_OF = { research: 'research', decide: 'research', fix: 'assemble', fact: 'assemble', instruction: 'assemble', readback: 'readback' };
+
+function confirmRedirect(data, word) {
+  const R = currentRedirect(data);
+  R.status = 'confirmed';
+  R.confirmed = { at: nowIso(), word: word.id };
+  for (const c of R.clauses) {
+    let it = c.item ? item(data, c.item) : null;
+    // a version the user states in a redirect ("we run 2.3, not 2.4"): pins come from the user's
+    // words only through the read-back, so the version is read back and every finding judged
+    // again against it. A clause on a pin item, or a stated fact that names a version.
+    const pinChange = (it && it.kind === 'pin') || (!it && c.action === 'fact' && /\b\d+\.\d+/.test(c.quote));
+    if (pinChange) {
+      if (it) {
+        itemEvent(it, 'reopened', 'user (redirect)', c.quote);
+        it.value_before = it.value;
+        it.value = null;
+        it.strength = null;
+        it.status = 'open';
+        it.resolved = null;
+      } else it = newItem(data, { kind: 'fact', text: c.text, value: c.text, status: 'decided', strength: 'user', source: { kind: 'word', ref: R.word, quote: c.quote }, origin: 'redirect' }, 'user (redirect)');
+      it.links = [...new Set([...(it.links || []), R.id])];
+      c.item = it.id;
+      c.stage = 'readback';
+      c.pin_change = true;
+      c.started_at = nowIso();
+      c.pass_at = data.research.passes.length;
+      continue;
+    }
+    if (c.action === 'research' || c.action === 'decide') {
+      if (it) {
+        if (c.tag && !it.tag) it.tag = c.tag;
+        if (!it.tag || it.tag === 'decision') it.tag = c.tag || (it.kind === 'decision' ? 'docs' : it.tag);
+        reopen(it, 'user (redirect)', c.quote);
+        it.needs_research = true;
+      } else {
+        it = newItem(data, { kind: c.action === 'decide' ? 'decision' : 'fact', text: c.text, tag: c.tag || 'docs', impact: 'high', needs_research: true, origin: 'redirect', pins: Object.keys(pinsBySystem(data)) }, 'user (redirect)');
+      }
+      if (!it.pins.length) it.pins = Object.keys(pinsBySystem(data)).slice(0, 2);
+    } else if (c.action === 'fact') {
+      if (it) setValue(it, { value: c.text, strength: 'user', source: { kind: 'word', ref: word.id === R.word ? R.word : R.word, quote: c.quote }, actor: 'user (redirect)' });
+      else it = newItem(data, { kind: 'fact', text: c.text, value: c.text, status: 'decided', strength: 'user', source: { kind: 'word', ref: R.word, quote: c.quote }, origin: 'redirect' }, 'user (redirect)');
+    } else {
+      it = newItem(data, { kind: 'instruction', text: c.text, value: c.quote, status: 'open', strength: 'user', source: { kind: 'word', ref: R.word, quote: c.quote }, origin: 'redirect' }, 'user (redirect)');
+    }
+    it.links = [...new Set([...(it.links || []), R.id])];
+    c.item = it.id;
+    c.stage = STAGE_OF[c.action];
+    c.started_at = nowIso();
+    c.pass_at = data.research.passes.length;
+    planFor(data, it);
+  }
+  // the decisions the redirect touches are asked again once they are researched
+  data.counters.research_passes = 0;
+  data.counters.writer_attempts = 0;
+  data.counters.readiness_cycles = 0;
+  const earliest = R.clauses.map((c) => ORDER[c.stage]).reduce((m, x) => Math.min(m, x), 9);
+  R.restart = Object.keys(ORDER).find((k) => ORDER[k] === earliest) || 'assemble';
+  log(data, 'redirect_confirmed', `${R.clauses.length} clause(s); restart at ${R.restart}`);
+}
+
+// Did a clause get done? (shown at H1, item by item)
+function clauseOutcome(data, R, c) {
+  const it = c.item && item(data, c.item);
+  if (!it) return { done: false, how: 'not linked to anything' };
+  if (c.pin_change) {
+    // done when a version was confirmed from words given with or after this redirect
+    const pins = data.items.filter((x) => x.kind === 'pin' && x.status === 'decided' && x.value && (x.id === it.id || (x.history || []).some((h) => h.at >= R.at)));
+    const fresh = pins.filter((p) => p.source && p.source.kind === 'word' && num(p.source.ref) >= num(R.word));
+    if (!fresh.length) return { done: false, how: pins.length ? `the version was not changed: ${pins.map((p) => `${p.system} ${p.value}`).join(', ')} (${byWhom(pins[0])})` : 'no version is confirmed yet' };
+    return { done: true, how: `read back and confirmed: ${fresh.map((p) => `${p.system} ${p.value}`).join(', ')}; every source judged again against it` };
+  }
+  if (c.action === 'research') {
+    const fresh = it.evidence.map((id) => data.evidence.find((e) => e.id === id)).filter((e) => usable(e) && Math.max(...(e.passes || [e.pass || 0])) > (c.pass_at || 0));
+    if (!FINAL.has(it.status)) return { done: false, how: `still ${it.status}` };
+    if (!fresh.length) return { done: false, how: `no source for the confirmed version was found${it.gap ? ` (${it.gap})` : ''}` };
+    return { done: true, how: `researched (${fresh.slice(0, 2).map((e) => e.source).join('; ')})${it.kind === 'decision' ? `; decided: ${clip(it.value, 120)} (${byWhom(it)})` : ''}` };
+  }
+  if (c.action === 'decide') return FINAL.has(it.status) && it.status !== 'dropped' ? { done: true, how: `${it.status === 'deferred' ? 'deferred to design' : `decided: ${clip(it.value, 140)}`} (${byWhom(it)})` } : { done: false, how: `still ${it.status}` };
+  const last = data.checks[data.checks.length - 1];
+  const handled = !last || !(last.objections || []).some((o) => o.severity === 'blocker' && o.check === 'instructions_handled');
+  if (it.covered && it.covered.where && handled) return { done: true, how: `in the contract: ${it.covered.where}` };
+  return { done: false, how: it.covered ? 'God Eye says it is not handled' : 'not in the contract' };
+}
+
+// ---------------------------------------------------------------- the contract
+function byWhom(it) {
+  if (it.status === 'deferred') return 'deferred to design';
+  if (it.strength === 'user') return 'you';
+  if (it.strength === 'accepted' && ['intent', 'pin', 'scope'].includes(it.kind)) return 'you confirmed it on the read-back';
+  if (it.strength === 'accepted') return 'recommended; you accepted';
+  if (it.strength === 'evidence') return 'evidence';
+  return 'my assumption';
+}
+
+function sectionLines(data) {
+  const live = data.items.filter((it) => it.status !== 'dropped');
+  const decisions = live.filter((it) => it.kind === 'decision' && ['decided', 'deferred'].includes(it.status)).map((it) => {
+    const ev = evidenceText(data, it.evidence, 2);
+    return `- ${it.text} → ${it.status === 'deferred' ? 'deferred to design' : clip(it.value, 300)} (${byWhom(it)}${ev ? `; ${ev}` : ''})`;
+  });
+  for (const p of live.filter((it) => it.kind === 'pin' && it.value)) decisions.unshift(`- ${p.system} version → ${p.value} (${byWhom(p)}${p.source && p.source.quote ? `: "${clip(p.source.quote, 80)}"` : ''})`);
+  for (const p of live.filter((it) => it.kind === 'pin' && !it.value)) decisions.unshift(`- ${p.system} version → not confirmed${(p.allows || []).length ? ` (the repository allows ${p.allows.map((a) => `"${a.range}"`).join(', ')}; sources were judged against that range)` : ''}`);
+  const facts = live.filter((it) => it.kind === 'fact' && ['decided', 'assumed'].includes(it.status) && it.value && !it.superseded).map((it) => `- ${clip(it.value, 300)} (${factSource(data, it)})`);
+  const design = live.filter((it) => it.status === 'deferred' && (it.kind === 'design' || it.kind === 'fact' || it.kind === 'question')).map((it) => `- ${it.text}${it.unconfirmed ? ` (not researched: ${it.unconfirmed})` : ''}`);
+  const gaps = openFailures(data).map((f) => `- ${f.what}: ${f.reason}`);
+  return { decisions, facts, design, gaps };
+}
+
+function writeSections(text, data) {
+  const contract = require('./contract');
+  const s = sectionLines(data);
+  let out = text;
+  // v2's CLI sections give way to v3's
+  for (const old of ['assumptions (evidence-backed)', 'clarifications (settled)', 'deferred to design']) out = dropSection(out, old);
+  out = contract.setSection(out, SECTIONS.decisions, SECTION_COMMENT, s.decisions.length ? s.decisions : ['- None'], /^##\s+assumptions\s*$/i);
+  out = contract.setSection(out, SECTIONS.facts, SECTION_COMMENT, s.facts.length ? s.facts : ['- None'], /^##\s+assumptions\s*$/i);
+  out = contract.setSection(out, SECTIONS.design, SECTION_COMMENT, s.design.length ? s.design : ['- None'], /^##\s+assumptions\s*$/i);
+  out = contract.setSection(out, SECTIONS.gaps, SECTION_COMMENT, s.gaps.length ? s.gaps : ['- None'], /^##\s+assumptions\s*$/i);
+  return out;
+}
+
+function dropSection(text, key) {
+  const all = String(text).split('\n');
+  const start = all.findIndex((l) => /^##\s+/.test(l) && l.replace(/^##\s+/, '').trim().toLowerCase() === key);
+  if (start < 0) return text;
+  let end = all.findIndex((l, i) => i > start && /^##\s+/.test(l));
+  if (end < 0) end = all.length;
+  return [...all.slice(0, start), ...all.slice(end)].join('\n');
+}
+
+function contractHash(root, state) {
+  return require('./contract').hash(root, state);
+}
+
+// The contract is an input only of the stages that read it (the read-back reads the draft, the
+// writer and the readiness check the text): a hand edit while research runs (the long stage), a
+// redirect or a sheet answer is read does not throw their results away.
+function stageContractHash(root, state, stage) {
+  return ['readback', 'assemble', 'check'].includes(stage) ? contractHash(root, state) : null;
+}
+
+// The writer's text, checked; the CLI-owned sections written from the record.
+function applyWriter(root, state, data, out) {
+  const contract = require('./contract');
+  const res = { written: false, refused: null };
+  if (!out || typeof out.contract !== 'string' || !out.contract.trim()) {
+    res.refused = 'no contract text';
+    return res;
+  }
+  const next = writeSections(out.contract.replace(/\s+$/, '\n'), data);
+  const parsed = contract.parse(next);
+  const probs = contract.problems(parsed);
+  if (!parsed.intent.present) res.refused = 'the contract has no Intent section';
+  else if (probs.length) res.refused = `the contract has problems: ${probs.slice(0, 4).join('; ')}`;
+  else if (/^## Reply format|^# Factory [a-z-]+ — this run/m.test(next)) res.refused = "the contract carries the agent's own instructions";
+  if (res.refused) return res;
+  // nothing leaves the contract silently: once the factory has written a version (or the user
+  // edited one), an acceptance criterion, constraint or non-goal the new text no longer has must be
+  // listed under `removed` with the item, blocker or redirect it rests on
+  const removedNow = [];
+  if (data.contract.written_hash) {
+    const before = contract.parse(contract.read(root, state.id));
+    const key = (t) => norm(t).replace(/[.;]+$/, '');
+    const gone = [
+      ...before.acs.filter((a) => !parsed.acs.some((b) => b.id === a.id)).map((a) => ({ ref: a.id, text: a.text })),
+      ...before.constraints.filter((c) => !parsed.constraints.some((d) => key(d) === key(c))).map((c) => ({ ref: 'Constraints', text: c })),
+      ...before.nonGoals.filter((c) => !parsed.nonGoals.some((d) => key(d) === key(c))).map((c) => ({ ref: 'Non-goals', text: c })),
+    ];
+    const listed = Array.isArray(out.removed) ? out.removed : [];
+    const known = (b) => Boolean(b) && Boolean(item(data, b) || data.redirects.some((R) => R.id === String(b).toUpperCase()) || (data.blockers || []).some((x) => x.ref === b) || data.checks.some((k) => (k.objections || []).some((o) => o.ref === b)));
+    const unexplained = [];
+    for (const g of gone) {
+      const l = listed.find((x) => (x.ref === g.ref || (x.text && key(x.text) === key(g.text))) && known(x.because));
+      if (l) removedNow.push({ ref: g.ref, text: clip(g.text, 200), because: String(l.because).toUpperCase() === String(l.because) ? l.because : String(l.because), why: clip(l.why || '', 200) });
+      else unexplained.push(g.ref === 'Constraints' || g.ref === 'Non-goals' ? `${g.ref}: "${clip(g.text, 80)}"` : g.ref);
+    }
+    if (unexplained.length) {
+      res.refused = `the new text drops ${unexplained.join(', ')} with no reason: list each under removed with the item (I-n), blocker or redirect it rests on, or keep it`;
+      return res;
+    }
+  }
+  writeText(jobPaths(root, state.id).contract, next);
+  if (removedNow.length) data.contract.removed = [...(data.contract.removed || []), ...removedNow.map((r) => ({ ...r, at: nowIso() }))].slice(-40);
+  res.written = true;
+  const sections = contract.sections(next);
+  const acIds = new Set(parsed.acs.map((a) => a.id));
+  const has = (where) => {
+    const w = String(where || '').trim();
+    if (/^(E-)?AC-\d+$/i.test(w)) return acIds.has(w.toUpperCase());
+    return Object.keys(sections).includes(w.toLowerCase());
+  };
+  for (const it of data.items) it.covered = null;
+  for (const c of Array.isArray(out.covers) ? out.covers : []) {
+    const it = item(data, c.item);
+    if (!it || !has(c.where)) continue;
+    it.covered = { where: clip(c.where, 60), how: clip(c.how, 200) };
+  }
+  for (const u of Array.isArray(out.uncovered) ? out.uncovered : []) {
+    const it = item(data, u.item);
+    if (it) it.uncovered = clip(u.why, 200);
+  }
+  for (const it of data.items) if (it.kind === 'instruction' && it.covered && it.status === 'open') { it.status = 'done'; itemEvent(it, 'done', 'contract-writer', it.covered.where); }
+  data.contract.written_hash = contractHash(root, state);
+  data.contract.edited_by_hand = false;
+  return res;
+}
+
+// ---------------------------------------------------------------- readiness
+function liveForCoverage(it) {
+  if (it.status === 'dropped' || it.status === 'deferred' || it.superseded || it.lost) return false;
+  if (['design', 'question'].includes(it.kind)) return false;
+  if (it.kind === 'intent' || it.kind === 'scope') return false;
+  if (it.kind === 'pin') return Boolean(it.value);
+  return ['decided', 'assumed', 'done'].includes(it.status) || it.kind === 'instruction';
+}
+
+function deterministic(root, state, data) {
+  const contract = require('./contract');
+  const text = contract.read(root, state.id);
+  const parsed = contract.parse(text);
+  const out = [];
+  const add = (check, stage, ref, why) => out.push({ check, stage, ref, why: clip(why, 300), severity: 'blocker', by: 'cli' });
+  for (const p of contract.problems(parsed)) add('acs_testable', 'assemble', 'contract', p);
+  const covered = new Set(parsed.verifyCommands.flatMap((v) => v.covers));
+  for (const ac of parsed.acs) if (ac.evidence.some((t) => t === 'test' || t === 'run') && !covered.has(ac.id)) add('acs_testable', 'assemble', ac.id, `${ac.id} needs ${ac.evidence.join('/')} evidence but no verify command covers it`);
+  const sections = contract.sections(text);
+  const acIds = new Set(parsed.acs.map((a) => a.id));
+  for (const it of data.items.filter(liveForCoverage)) {
+    const w = it.covered && it.covered.where;
+    const ok = w && (/^(E-)?AC-\d+$/i.test(w) ? acIds.has(w.toUpperCase()) : Object.keys(sections).includes(w.toLowerCase()));
+    if (!ok) add(it.kind === 'instruction' ? 'instructions_handled' : it.strength === 'user' ? 'facts_honoured' : 'self_consistent', 'assemble', it.id, `${it.id} (${clip(it.text, 120)}) is not in the contract${w ? ` (${w} is gone)` : ''}${it.uncovered ? `: ${it.uncovered}` : ''}`);
+  }
+  for (const it of data.items) {
+    if (!['decision', 'question'].includes(it.kind) || it.status === 'dropped') continue;
+    if (it.impact === 'high' && !['decided', 'deferred'].includes(it.status)) add('decisions_closed', 'sheet', it.id, `${it.id} (${clip(it.text, 120)}) is neither decided nor deferred`);
+  }
+  // what the writer wrote (the factory's own sections list rejected sources on purpose)
+  let own = text;
+  for (const k of Object.values(SECTIONS)) own = dropSection(own, k.replace(/^##\s+/, '').toLowerCase());
+  for (const e of data.evidence) if (!usable(e) && own.includes(e.source)) add('facts_honoured', 'assemble', e.id, `the contract cites ${e.source}, which is ${e.verdict}`);
+  for (const R of data.redirects.filter((r) => r.status === 'confirmed')) {
+    for (const c of R.clauses) {
+      const it = c.item && item(data, c.item);
+      if (!it) add('instructions_handled', 'assemble', R.id, `clause ${c.n} of ${R.id} is linked to nothing`);
+      else if (['research', 'decide'].includes(c.action) && !FINAL.has(it.status)) add('instructions_handled', c.action === 'decide' ? 'sheet' : 'research', it.id, `clause ${c.n} of ${R.id} ("${clip(c.quote, 80)}") is still ${it.status}`);
+    }
+  }
+  return out;
+}
+
+function earliest(blockers) {
+  return blockers.map((b) => b.stage).filter((s) => ORDER[s] !== undefined).sort((a, b) => ORDER[a] - ORDER[b])[0] || 'assemble';
+}
+
+// A blocker goes back to its stage: what that means for the record.
+function sendBack(root, state, data, blockers, S) {
+  const stage = earliest(blockers);
+  data.counters.readiness_cycles = (data.counters.readiness_cycles || 0) + 1;
+  data.sent_back = { blockers: blockers.length, stage };
+  data.blockers = blockers.map((b) => ({ ...b }));
+  log(data, 'back', `${blockers.length} blocker(s): back to ${stage}`);
+  if (stage === 'assemble') {
+    if (data.counters.writer_attempts >= S.writer_attempts) {
+      data.parked = { kind: 'writer', stage: 'assemble', reason: `The contract still fails its readiness check after ${data.counters.writer_attempts} writer attempt(s): ${blockers.slice(0, 4).map((b) => `${b.ref}: ${b.why || b.issue}`).join('; ')}` };
+      return 'park';
+    }
+    return 'assemble';
+  }
+  if (stage === 'readback') {
+    data.readback_objections = blockers.filter((b) => b.stage === 'readback');
+    return 'readback';
+  }
+  if (stage === 'research') {
+    for (const b of blockers.filter((x) => x.stage === 'research')) {
+      const it = item(data, b.ref);
+      if (it && !it.needs_research) reopen(it, b.by === 'cli' ? 'readiness check' : 'God Eye', b.why || b.issue);
+      else if (!it) newItem(data, { kind: 'fact', text: b.issue || b.why, tag: 'docs', impact: 'high', needs_research: true, origin: 'check', pins: Object.keys(pinsBySystem(data)) }, 'God Eye');
+    }
+    data.counters.research_passes = 0;
+    return 'research';
+  }
+  // the sheet: a decision God Eye says is missing becomes one
+  for (const b of blockers.filter((x) => x.stage === 'sheet')) {
+    const it = item(data, b.ref);
+    if (!it) newItem(data, { kind: 'decision', text: b.issue || b.why, status: 'to_decide', impact: 'high', origin: 'check', extra: { researched: false, why: b.fix || null } }, 'God Eye');
+    else if (FINAL.has(it.status) && it.status !== 'dropped') reopen(it, 'God Eye', b.issue || b.why);
+  }
+  for (const it of data.items) if (it.kind === 'decision' && it.needs_research) it.needs_research = false;
+  return 'route';
+}
+
+function readinessInput(root, state, data) {
+  const live = data.items.filter((it) => it.status !== 'dropped');
   return {
-    job: state.id,
-    ...(logged ? { id: logged.id } : {}),
-    ...(row ? { issue: row.issue, settled_by: row.settled_by, answer: row.answer, ...(row.was !== 'proposed' && row.was !== 'open' ? { was: row.was } : {}) } : {}),
-    answers: list.length,
-    message: row ? `${row.issue}${row.question ? ` (${row.question})` : ''} settled by ${row.settled_by === 'user' ? 'your answer' : 'the accepted default'}: ${clip(row.answer, 120)}` : `Recorded the answer to "${clip(q, 80)}".`,
+    contract: jobPaths(root, state.id).contract,
+    focus: 'readiness',
+    checklist: CHECKLIST,
+    stated: live.filter((it) => it.strength === 'user' && it.source && it.source.quote).map((it) => ({ id: it.id, text: it.value || it.text, quote: it.source.quote, covered: it.covered ? it.covered.where : null })),
+    decisions: live.filter((it) => it.kind === 'decision' || it.kind === 'question').map((it) => ({ id: it.id, text: it.text, value: it.value, status: it.status, by: byWhom(it), impact: it.impact })),
+    instructions: live.filter((it) => it.kind === 'instruction').map((it) => ({ id: it.id, text: it.text, quote: it.value, covered: it.covered ? it.covered.where : null })),
+    facts: live.filter((it) => it.kind === 'fact' && it.value).map((it) => ({ id: it.id, text: it.value, source: factSource(data, it) })),
+    design_may_choose: live.filter((it) => it.status === 'deferred').map((it) => it.text),
+    gaps: openFailures(data).map((f) => `${f.what}: ${f.reason}`),
   };
 }
 
-// Numbered chat replies ("1 yes, 2 trunk ports too", one per line or comma-separated; "Q-4 no"
-// names the question itself) as answers to the current question set. null when the text is
-// not that shape. An item that ends in "?" is a question to Claude, not an answer: the whole
-// message is then left alone.
-function parseNumbered(text) {
-  const t = String(text || '').trim();
-  if (!t) return null;
-  if (/^(defaults|accept (all )?defaults|use (the )?defaults|all defaults)\.?$/i.test(t)) return { all_defaults: true, items: [] };
-  const parts = t.includes('\n') ? t.split('\n').map((x) => x.trim()).filter(Boolean) : t.split(/[,;]\s*(?=(?:q-?)?\d{1,2}\s*[.):\-]?\s+\S|skip\s+(?:q-?)?\d{1,2}\s*$|skip\s+(?:q-?)?\d{1,2}\s*[,;])/i).map((x) => x.trim());
-  const items = [];
-  for (const p of parts) {
-    // "skip 2": no answer, the question takes its default next round
-    const sk = p.match(/^skip\s+(q-?)?(\d{1,2})\.?$/i);
-    if (sk) {
-      items.push({ n: Number(sk[2]), ...(sk[1] ? { q: `Q-${Number(sk[2])}` } : {}), skip: true });
-      continue;
-    }
-    const m = p.match(/^(q-?)?(\d{1,2})\s*[.):\-]?\s+(.+)$/i);
-    if (!m) return null;
-    const answerText = m[3].trim();
-    if (/\?\s*$/.test(answerText)) return null;
-    items.push({ n: Number(m[2]), ...(m[1] ? { q: `Q-${Number(m[2])}` } : {}), text: answerText });
-  }
-  if (!items.length || items.every((it) => it.skip)) return null;
-  return { all_defaults: false, items };
+function applyCheck(root, state, data, out, S) {
+  const g = out || {};
+  const objections = (Array.isArray(g.objections) ? g.objections : []).slice(0, 20).map((o) => ({
+    check: CHECKLIST.includes(o.check) ? o.check : 'self_consistent',
+    severity: o.severity === 'blocker' ? 'blocker' : 'note',
+    stage: ORDER[o.stage] !== undefined ? o.stage : 'assemble',
+    ref: clip(o.ref, 60),
+    issue: clip(o.issue, 400),
+    fix: clip(o.fix, 300),
+    by: 'god-eye',
+  }));
+  const checklist = {};
+  for (const k of CHECKLIST) checklist[k] = Boolean(g.checklist && g.checklist[k] === true);
+  // a "false" on the checklist with no objection is an objection too (it is never silently a pass)
+  for (const k of CHECKLIST) if (!checklist[k] && !objections.some((o) => o.check === k && o.severity === 'blocker')) objections.push({ check: k, severity: 'blocker', stage: 'assemble', ref: 'contract', issue: `God Eye answered ${k} false without saying why`, fix: '', by: 'god-eye' });
+  const rec = { n: data.checks.length + 1, at: nowIso(), contract_hash: contractHash(root, state), deterministic: [], checklist, objections, restatement: g.restatement || null, ok: !objections.some((o) => o.severity === 'blocker') };
+  data.checks.push(rec);
+  return rec;
 }
 
-// Apply a numbered reply to the job's current question set. Returns the receipt, or null when
-// the job has no open question set or no item names one of its questions (the hook leaves the
-// message alone then: it was just a numbered message). All or nothing: an item for a question
-// outside the set, the same question twice, a question already settled, or a default that does
-// not exist refuses the whole reply before anything is written. "defaults" accepts the defaults
-// there are and names the questions that still need words.
-function applyNumbered(root, parsed, { jobId, via = 'chat' } = {}) {
+// ---------------------------------------------------------------- what runs next (the brief)
+function readbackInput(root, state, data) {
+  return {
+    mode: 'readback',
+    job: state.id,
+    title: state.title,
+    contract: jobPaths(root, state.id).contract,
+    words: data.words.map((w) => ({ id: w.id, via: w.via, text: w.text })),
+    items: data.items.filter((it) => it.status !== 'dropped').map(slimItem),
+    previous: data.readback ? { intent: data.readback.intent, scope: data.readback.scope } : null,
+    objections: (data.readback_objections || []).map((b) => ({ issue: b.issue || b.why, fix: b.fix || '' })),
+  };
+}
+
+function slimItem(it) {
+  return { id: it.id, kind: it.kind, text: it.text, value: it.value, status: it.status, strength: it.strength, tag: it.tag, ...(it.system ? { system: it.system } : {}) };
+}
+
+function researchPass(data, S) {
+  const retry = data.research.retry;
+  const ids = retry ? retry.items : researchItems(data, S).map((it) => it.id);
+  const items = ids.map((id) => item(data, id)).filter(Boolean);
+  const pins = Object.entries(pinsBySystem(data)).map(([system, version]) => ({ system, version }));
+  const stated = data.items.filter((it) => it.strength === 'user' && it.kind === 'fact' && it.status !== 'dropped').map((it) => ({ id: it.id, text: it.value || it.text }));
+  const plan = items.map((it) => {
+    const pe = planFor(data, it);
+    return { id: pe.id, item: it.id, what: it.text, tag: it.kind === 'decision' ? 'decision' : it.tag || 'docs', pins: it.pins, ...(it.options ? { options: it.options.map((o) => o.text) } : {}) };
+  });
+  const repo = plan.filter((p) => p.tag === 'repo' || p.tag === 'decision');
+  const docs = plan.filter((p) => p.tag === 'docs' || p.tag === 'decision');
+  // a first pass runs every researcher it needs; a retry only the ones that failed (none when
+  // only the brief writer failed: its researchers' findings are kept)
+  const want = (mode) => (!retry ? true : retry.brief_only ? false : (retry.failed || []).includes(mode));
+  const scouts = [];
+  const avoid = data.evidence.filter((e) => !usable(e) && /^https?:/.test(e.source)).map((e) => ({ source: e.source, why: e.verdict === 'other_version' ? 'documents another version' : e.verdict === 'unpinned' ? 'a moving page (stable/latest), not the pinned version' : e.verdict }));
+  const failedSources = data.failures.filter((f) => /^https?:/.test(f.what) && /HTTP|unreachable|timed out/i.test(f.reason)).map((f) => ({ source: f.what, why: f.reason }));
+  if (repo.length && want('repo')) scouts.push({ mode: 'repo', label: 'research · repo', plan: repo });
+  if (docs.length && want('docs')) {
+    if (S.web) scouts.push({ mode: 'docs', label: 'research · docs', plan: docs });
+    else addFailure(data, { what: 'the web', reason: 'web research is off by policy (intent_research.web)' });
+  }
+  const priorEvidence = data.evidence.filter((e) => ids.includes(e.item) && usable(e)).map((e) => ({ plan: e.plan, claim: e.claim, source: e.source, verdict: e.verdict }));
+  return { ids, plan, pins, stated, scouts, avoid: [...avoid, ...failedSources], priorEvidence };
+}
+
+// What the stage `factory wfargs clarify` briefs now (the Workflow tool runs it): its agents in groups (a later group gets the
+// earlier replies under INPUTS). Throws when clarify waits on the user or is done.
+function stagePlan(root, state) {
+  const data = get(root, state);
+  if (data.tampered) fail(`${state.id}'s clarify.json fails its seal (edited by hand?). Nothing was started.`, 'tampered');
+  if (WAITS.has(data.stage)) fail(`Clarify waits for the user's reply (${data.stage.replace('_wait', '')}): show the screen from factory next and record their words with factory clarify reply "<their words>". Nothing was started.`, 'not_waiting_for_workflow', { stage: data.stage });
+  if (data.stage === 'ready') fail('Clarify is done: run factory next for gate H1. Nothing was started.', 'not_waiting_for_workflow', { stage: data.stage });
+  const S = settings(root, state);
+  // which agent plays each part: config/workflows/clarify.json
+  const roles = readJson(require('../lib/paths').pluginPath('config', 'workflows', 'clarify.json')).agents;
+  const A = (key, label, mode, input, timeout, schema, attempts = 2) => ({ role: roles[key].role, label, mode, input, timeout_sec: timeout, schema, attempts });
+  const stage = data.stage;
+  let groups = [];
+  if (stage === 'readback') groups = [[A('interviewer', 'read-back', 'readback', readbackInput(root, state, data), S.agent_sec.interviewer, 'readback')]];
+  else if (stage === 'redirect') {
+    const R = currentRedirect(data);
+    groups = [[A('interviewer', 'redirect', 'redirect', { mode: 'redirect', redirect: { id: R.id, text: R.text }, items: data.items.filter((it) => it.status !== 'dropped').map(slimItem) }, S.agent_sec.interviewer, 'redirect')]];
+  } else if (stage === 'interpret') {
+    const s = currentSheet(data);
+    const w = data.words.find((x) => x.id === data.pending_reply);
+    groups = [[A('interviewer', 'interpret', 'interpret', { mode: 'interpret', reply: { id: w.id, text: w.text }, sheet: { decisions: s.decisions.filter((d) => !d.answered).map((d) => ({ no: d.no, question: d.question, options: d.options.map((o) => ({ key: o.key, text: o.text })), recommendation: d.recommendation })), facts: s.facts.map((f) => ({ no: f.no, text: f.text })) } }, S.agent_sec.interviewer, 'interpret')]];
+  } else if (stage === 'research') {
+    const p = researchPass(data, S);
+    const common = { pins: p.pins, stated: p.stated, minutes: Math.max(1, Math.round(S.research_sec / 60)), avoid: p.avoid, ...(S.search_mcp ? { search_tool: S.search_mcp } : {}) };
+    const scouts = p.scouts.map((s) => A(s.mode, s.label, s.mode, { mode: s.mode, plan: s.plan, ...common }, S.research_sec, 'research', 1));
+    const brief = A('brief', 'research brief', 'brief', { plan: p.plan, pins: p.pins, stated: p.stated, evidence: p.priorEvidence, failures: data.failures.map((f) => `${f.what}: ${f.reason}`) }, S.agent_sec['brief-writer'], 'brief');
+    groups = scouts.length ? [scouts, [brief]] : [[brief]];
+  } else if (stage === 'assemble') {
+    groups = [[A('writer', 'contract', 'write', writerInput(root, state, data), S.agent_sec['contract-writer'], 'contract-write')]];
+  } else if (stage === 'check') {
+    groups = [[A('check', 'readiness', 'readiness', readinessInput(root, state, data), S.agent_sec['god-eye'], 'readiness')]];
+  } else fail(`Clarify is at an unknown stage (${stage}).`, 'internal');
+  // what each group is called while it runs (the console's live step list)
+  const PH = { readback: ['read your words back'], redirect: ['read your redirect back'], interpret: ['read your sheet answer'], assemble: ['write the contract'], check: ['readiness check'] };
+  const phases = stage === 'research' ? groups.map((g) => (g.some((a) => a.role === roles.brief.role) ? 'research brief' : `research (${g.map((a) => a.mode).join(', ')})`)) : PH[stage];
+  return { stage, rev: data.rev || 0, groups, phases, contract_hash: stageContractHash(root, state, stage) };
+}
+
+function writerInput(root, state, data) {
+  const rb = data.readback || { intent: {}, scope: { in: [], out: [] } };
+  const live = data.items.filter((it) => it.status !== 'dropped' && !['intent'].includes(it.kind));
+  return {
+    contract: jobPaths(root, state.id).contract,
+    intent: rb.intent,
+    scope: rb.scope,
+    items: live.map((it) => ({ id: it.id, kind: it.kind, text: it.text, value: it.value, status: it.status, strength: it.strength, by: byWhom(it), source: it.kind === 'fact' || it.kind === 'pin' ? factSource(data, it) : null, ...(it.superseded ? { superseded_by: it.superseded.by } : {}) })),
+    evidence: data.evidence.filter(usable).map((e) => ({ id: e.id, item: e.item, claim: e.claim, source: e.source })),
+    instructions: live.filter((it) => it.kind === 'instruction').map((it) => ({ id: it.id, text: it.text, quote: it.value })),
+    blockers: (data.blockers || []).map((b) => ({ check: b.check, ref: b.ref, issue: b.issue || b.why, fix: b.fix || '' })),
+    ...(data.contract.edited_by_hand ? { hand_edited: 'The user edited the contract file by hand since the last version the factory wrote. Start from the file as it is now and keep every change they made; change only what the items and blockers below require.' } : {}),
+    design_may_choose: live.filter((it) => it.status === 'deferred').map((it) => it.text),
+    gaps: data.failures.map((f) => `${f.what}: ${f.reason}`),
+  };
+}
+
+// ---------------------------------------------------------------- recording a stage
+function ledgerNote(root, state, data, outcome, detail = {}) {
+  require('./ledger').append(root, state.id, { kind: 'clarify', stage: data.stage, outcome, rev: data.rev || 0, detail });
+}
+
+// `factory record` for workflow clarify: apply the stage's replies, then move on by the rules.
+function record(root, state, env) {
+  const data = get(root, state);
+  // a record that fails its seal is never written over (that would reseal the hand edit)
+  if (data.tampered) fail(`${state.id}'s clarify.json fails its seal (edited by hand?). Nothing recorded; the user runs factory reseal in their own terminal to keep the file as it is.`, 'tampered');
+  const d = env.data || {};
+  const S = settings(root, state);
+  if (d.stage !== data.stage) return { status: 'stale', message: `The clarify record moved on (it is at ${data.stage}, the run was for ${d.stage}). Nothing recorded; run factory next.` };
+  const outputs = d.outputs || {};
+  // how each agent came back: the workflow's roster (workflows/clarify.js puts it in data.runs)
+  const runs = Array.isArray(d.runs) ? d.runs : Array.isArray(env.agents) ? env.agents : [];
+  const failedRun = (label) => {
+    const r = runs.filter((x) => x.label === label || x.label === `${label} (retry)`).pop();
+    return runWhy(r);
+  };
+  const stage = data.stage;
+  let next = null;
+  let result = {};
+  const agentFailed = (label, who) => {
+    const why = failedRun(label);
+    addFailure(data, { what: `the ${who}`, reason: why });
+    data.parked = { kind: 'agent', stage, reason: `The ${who} failed twice at the ${stage} stage (${why}); nothing was recorded from it.` };
+    return 'park';
+  };
+  if (stage === 'readback') {
+    const out = outputs['read-back'];
+    if (!out) next = agentFailed('read-back', 'interviewer');
+    else {
+      applyReadback(root, state, data, out);
+      data.readback_objections = null;
+      next = 'readback_wait';
+    }
+  } else if (stage === 'redirect') {
+    const out = outputs.redirect;
+    if (!out) next = agentFailed('redirect', 'interviewer');
+    else {
+      applyRedirect(data, out);
+      next = 'redirect_wait';
+    }
+  } else if (stage === 'interpret') {
+    const out = outputs.interpret;
+    const s = currentSheet(data);
+    const w = data.words.find((x) => x.id === data.pending_reply);
+    data.pending_reply = null;
+    if (!out || !s || !w) {
+      result.note = 'The interviewer could not read that reply: answer by number (e.g. "1 a, 2: <your words>").';
+      next = 'sheet_wait';
+    } else {
+      const answers = (out.answers || []).filter((a) => norm(w.text).includes(norm(a.quote || '')) && norm(a.quote || '').length >= 2).map((a) => ({ no: Number(a.decision), ...(a.choice === 'defer' ? { defer: true } : ['recommended', 'a', 'b', 'c', 'd', 'e'].includes(a.choice) ? { choice: a.choice, quote: clip(a.quote, 300) } : { text: clip(a.text || a.quote, 400), quote: a.quote }) }));
+      const facts = (out.facts || []).filter((f) => norm(w.text).includes(norm(f.quote || ''))).map((f) => ({ no: Number(f.fact), text: clip(f.text, 400) }));
+      const r = applySheet(data, s, { accept: false, answers, facts }, w, 'interpret');
+      // "as you recommend" for a decision that has no recommendation is an ok without an answer
+      okWithoutRecommendation(data, s, r, w, answers.filter((a) => a.choice === 'recommended').map((a) => a.no));
+      result.applied = r;
+      next = r.open.length ? 'sheet_wait' : 'route';
+      if (r.open.length) result.note = `Still open on the sheet: ${r.open.join(', ')}.`;
+    }
+  } else if (stage === 'research') {
+    const p = researchPass(data, S);
+    const pass = { items: p.ids, scouts: p.scouts.map((s) => ({ label: s.label, mode: s.mode })), brief: 'research brief' };
+    const r = applyResearch(root, state, data, outputs, runs, S, pass);
+    next = r.next === 'park' ? 'park' : r.next === 'research' ? 'research' : 'route';
+    result.research = { pass: data.counters.research_passes, failures: data.research.passes[data.research.passes.length - 1].failures };
+  } else if (stage === 'assemble') {
+    data.counters.writer_attempts += 1;
+    const out = outputs.contract;
+    if (!out) next = agentFailed('contract', 'contract writer');
+    else {
+      const w = applyWriter(root, state, data, out);
+      if (w.refused) {
+        const b = [{ check: 'acs_testable', stage: 'assemble', ref: 'contract', why: `the CLI refused the writer's contract: ${w.refused}`, severity: 'blocker', by: 'cli' }];
+        next = sendBack(root, state, data, b, S);
+        result.refused = w.refused;
+      } else next = 'check';
+    }
+  } else if (stage === 'check') {
+    const out = outputs.readiness;
+    if (!out) next = agentFailed('readiness', 'God Eye readiness check');
+    else {
+      const rec = applyCheck(root, state, data, out, S);
+      const blockers = rec.objections.filter((o) => o.severity === 'blocker');
+      if (blockers.length) {
+        next = sendBack(root, state, data, blockers, S);
+        if (next === 'park') data.parked.reason = `God Eye's readiness check still blocks after ${data.counters.writer_attempts} writer attempt(s): ${blockers.slice(0, 3).map((b) => `${b.check} (${b.ref}): ${b.issue}`).join('; ')}`;
+      } else next = 'ready';
+    }
+  }
+  return finish(root, state, data, next, S, result);
+}
+
+// Move to the next stage (routing by current state), save, and say what happens now.
+function finish(root, state, data, next, S, result = {}) {
+  if (next === 'route') next = advance(data, S);
+  if (next === 'assemble' && data.stage !== 'assemble' && data.stage !== 'check') data.counters.writer_attempts = 0;
+  if (next === 'check') next = enterCheck(root, state, data, S);
+  // the readiness cycle cap: work sent back more often than the cap allows parks where it
+  // would have gone (resume: one more cycle; proceed: H1 with the blockers shown open)
+  if (data.sent_back && next !== 'park') {
+    const sb = data.sent_back;
+    if (data.counters.readiness_cycles > S.readiness_cycles) {
+      const last = data.blockers || [];
+      data.parked = { kind: 'check', stage: next, reason: `The readiness check sent the work back ${data.counters.readiness_cycles} times (the cap is ${S.readiness_cycles}); still open: ${last.slice(0, 4).map((b) => `${b.check} (${b.ref}): ${clip(b.issue || b.why, 140)}`).join('; ')}.` };
+      next = 'park';
+    }
+    void sb;
+  }
+  data.sent_back = null;
+  if (next === 'ready') {
+    data.contract.checked_hash = contractHash(root, state);
+    data.blockers = null;
+    for (const R of data.redirects.filter((r) => r.status === 'confirmed')) R.status = 'done';
+  }
+  if (next === 'park') {
+    data.stage = data.parked.stage;
+    save(root, state.id, data);
+    ledgerNote(root, state, data, 'park', { reason: data.parked.reason });
+    return { status: 'park', park_from: 'clarify', park_reason: `${data.parked.reason} Reply "resume" for one more try${data.parked.kind === 'agent' ? '' : ', or "proceed" to go on with the gaps shown'}.`, stage: data.stage, ...result, message: 'Parked.' };
+  }
+  data.stage = next;
+  data.parked = null;
+  save(root, state.id, data);
+  ledgerNote(root, state, data, next, { counters: data.counters, caps: { research_passes: S.research_passes, writer_attempts: S.writer_attempts }, failures: data.failures.length });
+  if (next === 'ready') {
+    const b = require('./invalidation').current(root, state);
+    const last = data.checks[data.checks.length - 1] || {};
+    require('./ledger').append(root, state.id, { kind: 'step', step: 'clarify', ok: true, bound: { contract: b.contract }, detail: { version: 3, items: data.items.length, decisions: data.items.filter((x) => x.kind === 'decision').length, sheets: data.sheets.length, research_passes: data.research.passes.length, failures: data.failures.length, checks: data.checks.length, notes: (last.objections || []).filter((o) => o.severity === 'note').length, ...(data.proceeded ? { proceeded: data.proceeded } : {}), ...((last.objections || []).some((o) => o.severity === 'blocker') ? { approved: false, god_eye_objects: (last.objections || []).filter((o) => o.severity === 'blocker').length } : {}) } });
+    return { status: 'ok', next_gate: state.epic ? 'EH1' : 'H1', stage: next, ...result, message: 'The contract passed its readiness check. Run factory next: gate H1 shows it.' };
+  }
+  if (WAITS.has(next)) {
+    return { status: 'needs_user', stage: next, screen: screen(state, data), ...result, message: `Show the screen to the user as it is, then stop. The reply hook records a plain ok or a structured sheet answer itself (it tells you so); any other words of theirs you record verbatim with factory clarify reply "<their words>".${result.note ? ` ${result.note}` : ''}` };
+  }
+  return { status: 'continue', stage: next, ...result, message: `Clarify moves on to ${next}: run factory next (it names the stage to run).` };
+}
+
+function screen(state, data) {
+  if (data.stage === 'readback_wait') return readbackScreen(state, data);
+  if (data.stage === 'sheet_wait') return sheetScreen(state, data);
+  if (data.stage === 'redirect_wait') return redirectScreen(state, data);
+  return '';
+}
+
+// ---------------------------------------------------------------- replies (no agent)
+function reply(root, { jobId, text, via = 'cli' }) {
+  const job = require('./job');
+  const state = job.resolve(root, jobId);
+  if (['closed', 'cancelled', 'abandoned'].includes(state.status)) fail(`${state.id} is ${state.status}; nothing to reply to.`, 'not_active');
+  if (state.approvals && (state.approvals.H1 || state.approvals.EH1)) fail(`${state.id}'s contract is approved: clarify takes no more replies. To change it, start an amendment (factory amend start --reason "…").`, 'approved');
+  if (state.status === 'parked') fail(parkedMessage(state), 'parked');
+  const t = String(text || '').trim();
+  if (!t) fail('Say the reply: factory clarify reply "<the user\'s words>".', 'bad_input');
+  const data = get(root, state);
+  if (data.tampered) fail(`${state.id}'s clarify.json fails its seal.`, 'tampered');
+  const S = settings(root, state);
+  sync(root, state, data);
+  const last = data.words[data.words.length - 1];
+  if (last && last.text === t && /chat/.test(last.via) !== (via === 'chat') && Date.now() - Date.parse(last.at) < 10 * 60 * 1000) return { job: state.id, stage: data.stage, duplicate: true, message: 'Already recorded (the reply hook applied it): run factory next.' };
+  if (!WAITS.has(data.stage)) {
+    // words outside a reply screen: a redirect (the user changes course)
+    if (['ready', 'assemble', 'check', 'research', 'readback'].includes(data.stage) && /\S/.test(t)) return redirect(root, { jobId: state.id, text: t, via });
+    fail(`Clarify is not waiting for a reply (it is at ${data.stage}): run factory next.`, 'not_waiting');
+  }
+  const w = markHeard(root, addWord(data, t, via === 'chat' ? 'reply (chat)' : 'reply'));
+  if (w.duplicate) return { job: state.id, stage: data.stage, duplicate: true, message: 'Already recorded (the same reply came twice).' };
+  let msg;
+  let next;
+  if (data.stage === 'readback_wait') {
+    if (ACCEPT.test(t)) {
+      confirmReadback(data, w, S);
+      judge(root, data);
+      data.counters.research_passes = 0;
+      next = 'route';
+      msg = 'Read-back confirmed.';
+      const queued = data.redirects.find((r) => r.status === 'queued');
+      if (queued) {
+        queued.status = 'interpreting';
+        next = 'redirect';
+        msg = `Read-back confirmed; your earlier denial (${queued.id}) is read back next.`;
+      }
+    } else {
+      next = 'readback';
+      msg = 'Your words are recorded; the read-back runs again with them.';
+    }
+  } else if (data.stage === 'redirect_wait') {
+    if (ACCEPT.test(t)) {
+      confirmRedirect(data, w);
+      const R = data.redirects[data.redirects.length - 1];
+      next = R.restart === 'readback' ? 'readback' : 'route';
+      msg = `Redirect confirmed: ${R.clauses.length} item(s), restarting at ${R.restart}.`;
+    } else {
+      const R = currentRedirect(data);
+      R.text = `${R.text}\n${t}`;
+      R.status = 'interpreting';
+      next = 'redirect';
+      msg = 'Your correction is recorded; the redirect is read again.';
+    }
+  } else {
+    const s = currentSheet(data);
+    const parsed = parseSheetReply(t, s);
+    if (!parsed) {
+      data.pending_reply = w.id;
+      next = 'interpret';
+      msg = 'Recorded; the interviewer reads your words against the sheet (one short call).';
+    } else {
+      const r = applySheet(data, s, parsed, w);
+      if (parsed.accept) okWithoutRecommendation(data, s, r, w, s.decisions.filter((d) => !d.answered && !d.recommendation).map((d) => d.no));
+      next = r.open.length ? 'sheet_wait' : 'route';
+      msg = `Recorded: ${r.decided.length} decision(s)${r.facts.length ? `, ${r.facts.length} fact(s) corrected` : ''}.${r.open.length ? ` Still open: ${r.open.join(', ')} (no recommendation, or not answered).` : ''}`;
+    }
+  }
+  const res = finish(root, state, data, next, S);
+  require('./events').append(root, { event: 'clarify_reply', job: state.id, via, stage: res.stage, words: w.id });
+  return { job: state.id, word: w.id, ...res, message: `${msg} ${res.message}` };
+}
+
+// While clarify is parked, words are not a reply: only the user's resume or proceed (human-only)
+// moves it, so nothing the main session relays is recorded as a redirect behind the park.
+function parkedMessage(state) {
+  return `${state.id} is parked (${clip((state.park && state.park.reason) || 'clarify', 200)}). Nothing was recorded: the user replies "resume"${state.park && state.park.from === 'clarify' ? ' or "proceed"' : ''} in chat or runs it in their own terminal; their other words wait until then.`;
+}
+
+function redirect(root, { jobId, text, via = 'cli', gate = null }) {
+  const job = require('./job');
+  const state = job.resolve(root, jobId);
+  if (state.approvals && (state.approvals.H1 || state.approvals.EH1)) fail(`${state.id}'s contract is approved: start an amendment instead (factory amend start --reason "…").`, 'approved');
+  if (state.status === 'parked') fail(parkedMessage(state), 'parked');
+  if (!['active'].includes(state.status)) fail(`${state.id} is ${state.status}; nothing to redirect.`, 'not_active');
+  const t = String(text || '').trim();
+  if (!t) fail('Say the redirect: factory clarify redirect "<the user\'s words>".', 'bad_input');
+  const data = get(root, state);
+  if (data.tampered) fail(`${state.id}'s clarify.json fails its seal.`, 'tampered');
+  const R = startRedirect(data, t, via === 'denial' ? 'denial' : via === 'chat' ? 'redirect (chat)' : 'redirect', gate);
+  markHeard(root, data.words.find((w) => w.id === R.word));
+  save(root, state.id, data);
+  ledgerNote(root, state, data, 'redirect', { redirect: R.id });
+  return { job: state.id, redirect: R.id, stage: data.stage, status: 'continue', message: `Redirect ${R.id} recorded. Run factory next: the interviewer reads it back to you (one short call).` };
+}
+
+// A chat message the prompt hook may apply: only an unmistakable reply while clarify waits
+// (ok on a read-back or redirect, a numbered sheet reply). Anything else is left for the main
+// session to record with factory clarify reply. Returns the receipt, or null.
+function chatReply(root, text, { jobId } = {}) {
   const job = require('./job');
   let state;
   try {
     state = job.resolve(root, jobId);
   } catch {
-    return null; // no current job (or one the CLI can't read): an ordinary message
-  }
-  if (state.status !== 'active' || !inClarify(state)) return null;
-  const set = questionSet(state);
-  if (!set.length) return null;
-  const data = ensure(root, state);
-  if (!data) return null;
-  const issueOf = (q) => resolveRef(data, state, q.id);
-  const open = set.filter((q) => {
-    const u = issueOf(q);
-    return u && u.status === 'proposed';
-  });
-  if (!open.length) return null;
-  const log = state.question_log || [];
-  const listed = () => set.map((q, i) => `${i + 1} = ${q.id}`).join(', ');
-  const noDefault = parsed.all_defaults ? open.filter((q) => isNone(issueOf(q).default)) : [];
-  if (parsed.all_defaults && noDefault.length === open.length) fail(`No open question has a proposed default (${open.map((q) => q.id).join(', ')}): answer them in words. Nothing was recorded.`, 'no_default');
-  const items = parsed.all_defaults
-    ? open.filter((q) => !noDefault.includes(q)).map((q) => ({ q, text: 'default' }))
-    : parsed.items.map((it) => ({ q: it.q ? log.find((x) => x.id === it.q) : set[it.n - 1], text: it.text, n: it.n, label: it.q || String(it.n), skip: Boolean(it.skip) }));
-  if (!parsed.all_defaults) {
-    // nothing in it names a question of this set: not an answer set at all
-    if (!items.some((it) => it.q && set.includes(it.q))) return null;
-    const seen = new Set();
-    for (const it of items) {
-      if (!it.q) fail(`There is no question ${it.label}: this round asked ${set.length} (${listed()}). Nothing was recorded.`, 'bad_input');
-      if (seen.has(it.q.id)) fail(`${it.q.id} is answered twice in that reply. Nothing was recorded.`, 'bad_input');
-      seen.add(it.q.id);
-      const u = issueOf(it.q);
-      if (!u) fail(`${it.q.id} is not a clarify question of ${state.id}. Nothing was recorded.`, 'bad_input');
-      if (it.skip) continue;
-      if (ACCEPT.test(String(it.text).trim()) && isNone(u.default)) fail(`${it.q.id} has no proposed default to accept: answer it in words. Nothing was recorded.`, 'no_default');
-      if (u.status !== 'proposed') fail(`${it.q.id} (${it.label}) is already settled (${u.status}${u.answer ? `: ${clip(u.answer, 60)}` : ''}), so this reply was not read as answers. To change an answer, say so and run factory answer ${it.q.id} "…". Nothing was recorded.`, 'already_settled');
-    }
-  }
-  const rows = [];
-  for (const it of items) if (!it.skip) rows.push(answer(root, { jobId: state.id, ref: it.q.id, text: it.text, via }));
-  const skipped = items.filter((it) => it.skip).map((it) => it.q.id);
-  const still = `${noDefault.length ? ` Still open (no default, answer in words): ${noDefault.map((q) => q.id).join(', ')}.` : ''}${skipped.length ? ` Skipped: ${skipped.join(', ')} (a skipped question takes its default next round; one without a default stays open).` : ''}`;
-  return { job: state.id, answered: rows.map((r) => ({ id: r.id, issue: r.issue, answer: r.answer, settled_by: r.settled_by })), message: `Recorded ${rows.length} answer(s): ${rows.map((r) => `${r.id || r.issue} → ${clip(r.answer, 60)}`).join('; ')}.${still}` };
-}
-
-// `factory clarify note U-n "…"`: context for the next round (the editor and the analysts read it).
-function note(root, { jobId, ref, text, via = 'cli' }) {
-  const job = require('./job');
-  const state = job.resolve(root, jobId);
-  const data = ensure(root, state);
-  if (!data) fail(`${state.id} has no clarify ledger yet: clarify has not run.`, 'no_ledger');
-  if (state.approvals && (state.approvals.H1 || state.approvals.EH1)) fail(`${state.id}'s contract is approved: clarify's issues no longer change (start an amendment instead).`, 'approved');
-  const t = String(text || '').replace(/\s+/g, ' ').trim();
-  if (!t) fail('Say the note: factory clarify note <U-n|contract> "<note>".', 'bad_input');
-  const R = String(ref || '').trim().toUpperCase();
-  const round = (state.counters.clarify_rounds || 0) + 1;
-  if (R && R !== 'CONTRACT') {
-    const u = resolveRef(data, state, R);
-    if (!u) fail(`${state.id} has no issue ${R}. Issues: ${data.issues.map((x) => x.id).join(', ') || 'none'}.`, 'bad_input');
-    u.notes.push({ round, actor: via === 'chat' ? 'user (chat)' : 'user', text: clip(t, 400), at: nowIso() });
-    u.applied_round = u.status === 'settled' ? null : u.applied_round;
-    event(u, round, 'note', 'user', t);
-  } else {
-    data.notes = data.notes || [];
-    data.notes.push({ round, actor: 'user', ref: 'contract', text: clip(t, 400), at: nowIso(), applied: false });
-  }
-  save(root, state.id, data);
-  return { job: state.id, ref: R || 'contract', message: `Noted for ${R || 'the contract'}; clarify takes it into account next round (run factory next).` };
-}
-
-// `factory clarify split U-n <alias>` (human-only: your terminal, or the chat reply "split U-n
-// <alias>"): undo a wrong fold. The alias becomes its own issue again, asked next round (or
-// deferred to design, as its parent was); the parent keeps its status.
-function split(root, { jobId, ref, alias, channel }) {
-  require('./human').requireHumanChannel(channel);
-  const job = require('./job');
-  const state = job.resolve(root, jobId);
-  if (state.approvals && (state.approvals.H1 || state.approvals.EH1)) fail(`${state.id}'s contract is approved: clarify's issues no longer change (start an amendment instead).`, 'approved');
-  const data = ensure(root, state);
-  if (!data) fail(`${state.id} has no clarify ledger yet: clarify has not run.`, 'no_ledger');
-  const R = String(ref || '').trim().toUpperCase();
-  const A = String(alias || '').trim().toUpperCase();
-  // "split U-7 U-19", or just "split U-19" (the alias names its parent)
-  const parent = data.issues.find((u) => (A ? u.id === R : (u.aliases || []).some((a) => a.id === R)));
-  const aliasId = A || R;
-  if (!parent) fail(`${state.id} has no issue ${A ? R : `with the alias ${R}`}.`, 'bad_input');
-  const a = (parent.aliases || []).find((x) => x.id === aliasId);
-  if (!a) fail(`${aliasId} is not folded into ${parent.id}${(parent.aliases || []).length ? ` (its aliases: ${parent.aliases.map((x) => x.id).join(', ')})` : ' (it has no aliases)'}.`, 'bad_input');
-  if (data.issues.some((u) => u.id === aliasId)) fail(`${aliasId} is already an issue of its own.`, 'bad_input');
-  require('./human').confirmTyped(channel, state.id, `split ${aliasId} out of ${parent.id}`);
-  const round = (state.counters.clarify_rounds || 0) + 1;
-  parent.aliases = parent.aliases.filter((x) => x.id !== aliasId);
-  event(parent, round, 'split', 'user', `${aliasId} is a different issue`);
-  const owner = parent.owner === 'design' ? 'design' : 'user';
-  // its own question id stays with it; a new question is asked if it never had one
-  const u = cleanIssue({ id: aliasId, text: a.text, kind: parent.kind, impact: parent.impact, owner, source: 'split', round, ...(a.question_id && owner === 'user' ? { question_id: a.question_id } : {}) }, { round });
-  event(u, round, 'split', 'user', `split from ${parent.id}: not the same issue`);
-  data.issues = [...data.issues, u].sort((x, y) => num(x.id) - num(y.id));
-  save(root, state.id, data);
-  require('./decisions').write(root, { job: state.id, action: 'human.split', chosen: 'split', rule: 'human', during: state.last_decision_id || null, issue: u.id, from: parent.id, via: channel });
-  return { job: state.id, issue: u.id, from: parent.id, status: u.status, owner: u.owner, message: `${u.id} is its own issue again (${u.status}, owner ${u.owner}); ${parent.id} keeps its status. Claude continues with factory next: clarify ${u.owner === 'user' ? 'asks about it' : 'hands it to design'}.` };
-}
-
-// ---------------------------------------------------------------- views
-function nextAction(u) {
-  if (u.status === 'settled' || u.status === 'dropped') return 'none';
-  if (u.status === 'deferred_to_design') return 'ground/decide settle it';
-  if (u.question_id) return `answer: factory answer ${u.question_id} "…"${isNone(u.default) ? '' : ` (or --default: ${clip(u.default, 60)})`}`;
-  return 'asked next round';
-}
-
-const OWNER_ORDER = { user: 0, design: 1 };
-const STATUS_ORDER = { proposed: 0, open: 1, deferred_to_design: 2, settled: 3, dropped: 4 };
-
-function rows(data) {
-  return data.issues
-    .slice()
-    .sort((a, b) => STATUS_ORDER[a.status] - STATUS_ORDER[b.status] || OWNER_ORDER[a.owner] - OWNER_ORDER[b.owner] || num(a.id) - num(b.id))
-    .map((u) => ({ id: u.id, subject: u.subject, title: clip(u.text, 140), kind: u.kind, impact: u.impact, status: u.status, owner: u.owner, settled_by: u.settled_by, question_id: u.question_id, default: u.default, answer: u.answer ? clip(u.answer, 140) : null, aliases: (u.aliases || []).map((a) => a.id), next: nextAction(u), ...(u.reason ? { reason: clip(u.reason, 160) } : {}) }));
-}
-
-function totals(data) {
-  const t = { issues: data.issues.length, open: 0, proposed: 0, settled: 0, deferred_to_design: 0, dropped: 0, by_owner: { user: 0, design: 0 } };
-  for (const u of data.issues) {
-    t[u.status] = (t[u.status] || 0) + 1;
-    if (!FINAL.has(u.status)) t.by_owner[u.owner] = (t.by_owner[u.owner] || 0) + 1;
-  }
-  t.closed = t.settled + t.deferred_to_design + t.dropped;
-  return t;
-}
-
-function trend(data) {
-  const r = (data.rounds || []).filter((x) => x.ledger);
-  const list = r.map((x) => ({ round: x.round, opened: x.ledger.opened, settled: x.ledger.settled, deferred: x.ledger.deferred, asked: x.ledger.asked, progress: x.ledger.progress, degraded: Boolean(x.ledger.degraded) }));
-  const last = list.slice(-2);
-  const word = !list.length ? (data.migration ? 'no v2 rounds yet (migrated)' : 'no rounds yet') : last.length === 2 && last.every((x) => !x.progress && !x.degraded) ? 'stalled' : last.some((x) => x.settled > x.opened) ? 'converging' : last.some((x) => x.opened > x.settled) ? 'growing' : 'steady';
-  return { rounds: list, trend: word };
-}
-
-function view(state, data) {
-  const t = totals(data);
-  const L = limits(state);
-  const tr = trend(data);
-  const logQ = Object.fromEntries((state.question_log || []).map((q) => [q.id, q]));
-  const questions = data.issues.filter((u) => u.status === 'proposed' && u.owner === 'user' && u.question_id).map((u) => ({ id: u.question_id, issue: u.id, question: (logQ[u.question_id] && logQ[u.question_id].question) || u.draft || u.text, default: isNone(u.default) ? null : u.default }));
-  return {
-    job: state.id,
-    version: data.version,
-    totals: t,
-    open_by_owner: t.by_owner,
-    questions,
-    answer_commands: questions.map((q) => `factory answer ${q.id} "<answer>"${q.default ? ` (or: factory answer ${q.id} --default)` : ''}`),
-    issues: rows(data),
-    deferred_to_design: data.issues.filter((u) => u.status === 'deferred_to_design').map((u) => ({ id: u.id, subject: u.subject, title: clip(u.text, 140) })),
-    rounds: tr.rounds,
-    trend: tr.trend,
-    limits: { ceiling: L.ceiling, no_progress_rounds: L.no_progress, rounds_counted: L.counted, ...(L.before_v2 ? { rounds_before_v2: L.before_v2 } : {}), no_progress_streak: (state.counters && state.counters.clarify_no_progress) || 0 },
-    notes: (data.notes || []).slice(-10),
-    dropped: droppedLines(data),
-    ...(data.migration ? { migration: data.migration } : {}),
-  };
-}
-
-function statusText(v) {
-  const L = [];
-  L.push(`Clarify ledger — ${v.job}: ${v.totals.issues} issue(s), ${v.totals.closed} closed (${v.totals.settled} settled, ${v.totals.deferred_to_design} deferred to design, ${v.totals.dropped} dropped); open by owner: user ${v.open_by_owner.user}, design ${v.open_by_owner.design}`);
-  L.push(`Rounds counted ${v.limits.rounds_counted} of ${v.limits.ceiling} (ceiling${v.limits.rounds_before_v2 ? `; ${v.limits.rounds_before_v2} round(s) before clarify v2 not counted` : ''}); parks after ${v.limits.no_progress_rounds} rounds with no progress (now ${v.limits.no_progress_streak}). Trend: ${v.trend}.`);
-  L.push('');
-  const w = { id: 6, subject: 28, status: 18, owner: 7 };
-  const pad = (s, n) => (String(s).length > n ? `${String(s).slice(0, n - 1)}…` : String(s).padEnd(n));
-  L.push(`${pad('ID', w.id)} ${pad('SUBJECT', w.subject)} ${pad('STATUS', w.status)} ${pad('OWNER', w.owner)} NEXT`);
-  for (const r of v.issues) L.push(`${pad(r.id, w.id)} ${pad(r.subject || '—', w.subject)} ${pad(r.status === 'settled' ? `settled:${r.settled_by}` : r.status, w.status)} ${pad(r.owner, w.owner)} ${r.next}${r.aliases.length ? ` [aliases ${r.aliases.join(', ')}]` : ''}`);
-  if (!v.issues.length) L.push('(no issues)');
-  if (v.rounds.length) {
-    L.push('', 'Round  opened  settled  deferred  asked  progress');
-    for (const r of v.rounds) L.push(`${String(r.round).padEnd(6)} ${String(r.opened).padEnd(7)} ${String(r.settled).padEnd(8)} ${String(r.deferred).padEnd(9)} ${String(r.asked).padEnd(6)} ${r.degraded ? 'degraded (not counted)' : r.progress ? 'yes' : 'no'}`);
-  }
-  if ((v.dropped || []).length) {
-    L.push('', 'Dropped:');
-    for (const x of v.dropped) L.push(`  ${x.line}`);
-  }
-  if (v.issues.some((r) => r.aliases.length)) L.push('', 'Two different issues folded into one? Reply "split <U-n> <alias>" in chat, or run factory clarify split <U-n> <alias> in your own terminal: the alias becomes its own issue again.');
-  if (v.questions.length) {
-    L.push('', 'Answer with:');
-    for (const c of v.answer_commands) L.push(`  ${c}`);
-  }
-  if (v.migration) {
-    const m = v.migration;
-    L.push('', `Migrated from v${m.from}: ${m.folded.length} duplicate(s) folded${m.folded.length ? ` (${m.folded.map((x) => `${x.id}→${x.into}`).join(', ')})` : ''}; ${m.matched_answers.length} free-form answer(s) matched${m.matched_answers.length ? ` (${m.matched_answers.map((x) => x.issue).join(', ')})` : ''}; ${m.deferred.length} deferred to design${m.deferred.length ? ` (${m.deferred.map((x) => x.id).join(', ')})` : ''}; ceiling ${m.ceiling} rounds.`);
-    if (m.matched_answers.length) {
-      L.push('  Free-form answers matched by word overlap (check them; factory answer U-n "…" corrects one):');
-      for (const x of m.matched_answers) L.push(`    "${x.question}" → ${x.issue}: ${x.answer}`);
-    }
-    if (m.unmatched_answers.length) L.push(`  Not matched: ${m.unmatched_answers.map((x) => `"${x.question}"`).join('; ')}`);
-    if (m.tampered_ledger) L.push('  The ledger file failed its seal (edited by hand?), so it was rebuilt from the question log.');
-  }
-  return L.join('\n');
-}
-
-// `factory clarify status`: read-only (a v1 job is shown migrated, not written).
-function status(root, { jobId, json = false } = {}) {
-  const job = require('./job');
-  const state = job.resolve(root, jobId);
-  const data = ensure(root, state);
-  if (!data) {
-    const msg = { job: state.id, ledger: false, message: 'No clarify ledger yet: it is created by the first clarify round.' };
-    return json ? msg : `${state.id}: ${msg.message}`;
-  }
-  const v = view(state, data);
-  return json ? v : statusText(v);
-}
-
-// For `factory next` while clarify is the step: a short ledger summary.
-function nextSummary(root, state) {
-  try {
-    const data = ensure(root, state);
-    if (!data) return null;
-    const v = view(state, data);
-    return { open_by_owner: v.open_by_owner, settled: v.totals.settled, deferred_to_design: v.totals.deferred_to_design, questions: v.questions, answer_commands: v.answer_commands, trend: v.trend, status_command: `factory clarify status --job ${state.id}` };
-  } catch {
     return null;
   }
+  if (state.status !== 'active' || (state.approvals && (state.approvals.H1 || state.approvals.EH1))) return null;
+  const data = load(root, state.id);
+  if (!data || data.tampered || !WAITS.has(data.stage)) return null;
+  const t = String(text || '').trim();
+  if (!t || /\?\s*$/.test(t) || t.includes('\n\n')) return null;
+  if (data.stage === 'sheet_wait') {
+    const s = currentSheet(data);
+    if (!s || !parseSheetReply(t, s)) return null;
+  } else if (!ACCEPT.test(t)) return null;
+  return reply(root, { jobId: state.id, text: t, via: 'chat' });
 }
 
-// ---------------------------------------------------------------- no issue vanishes
-// A guard factory record applies to every clarify round: each issue known before the round (and
-// each alias), and each issue the workflow says it opened, is still in the ledger with a known
-// status; a newly dropped issue carries the actor and the reason that dropped it. prior: the
-// ledger before the round ({ issues: [{ id, text, status, aliases: [{ id }] }] }).
-function invariant(prior, data, created = []) {
-  const problems = [];
-  const where = new Map();
-  for (const u of data.issues) {
-    where.set(u.id, u);
-    for (const a of u.aliases || []) where.set(a.id, u);
-    if (!STATUSES.includes(u.status)) problems.push(`${u.id} has no known status (${u.status})`);
+// ---------------------------------------------------------------- sync, readiness, views
+// On every factory next: a new H1 denial becomes a redirect; a contract edited by hand since it
+// passed (or since the writer wrote it) is checked again.
+function sync(root, state, data) {
+  let changed = false;
+  const H = ['H1', 'EH1'];
+  const approvedAt = (g) => (state.approvals && state.approvals[g] ? state.approvals[g].at : '');
+  const fresh = (state.denials || []).filter((x) => H.includes(x.gate) && x.at > approvedAt(x.gate) && x.at > (data.denials_seen || ''));
+  if (fresh.length) {
+    // two denials before clarify saw either (two chat messages at H1): one redirect with both,
+    // so neither is left half-read
+    const texts = [...new Set(fresh.map((d) => String(d.reason || '').trim()).filter(Boolean))];
+    const open = currentRedirect(data);
+    if (open && open.status === 'interpreting' && open.gate) {
+      open.text = [open.text, ...texts].join('\n');
+      addWord(data, texts.join('\n'), 'denial');
+    } else startRedirect(data, texts.join('\n') || '(no reason given)', 'denial', fresh[fresh.length - 1].gate);
+    data.denials_seen = fresh[fresh.length - 1].at;
+    changed = true;
   }
-  const before = prior ? prior.issues : [];
-  for (const p of before) {
-    if (!where.has(p.id)) problems.push(`${p.id} (${clip(p.text, 60)}) vanished from the ledger`);
-    for (const a of p.aliases || []) if (!where.has(a.id)) problems.push(`${a.id} (an alias of ${p.id}) vanished from the ledger`);
+  if (handEdit(root, state, data)) changed = true;
+  return changed;
+}
+
+// The user edited contract.md by hand (a hash the factory neither wrote nor checked). Before the
+// readiness check passes, the next writer is told to keep the edit. Once it has passed (or while
+// it runs), the edited text is checked again from the start: the deterministic checks first, and
+// an item the edit took out of the contract (an AC the user deleted) becomes a decision on the
+// sheet: put it back, or leave it out (the item is then dropped by the user). An edit never
+// silently undoes what the user said, and the writer never silently undoes the edit.
+function handEdit(root, state, data) {
+  const cur = contractHash(root, state);
+  const C = data.contract;
+  if (!C.written_hash || !cur || [C.written_hash, C.checked_hash, C.seen_hash].includes(cur)) return false;
+  C.seen_hash = cur;
+  C.edited_by_hand = true;
+  C.hand_edits = [...(C.hand_edits || []), { at: nowIso(), hash: cur, stage: data.stage }].slice(-20);
+  log(data, 'edited', `contract.md changed by hand at ${data.stage}`);
+  if (!['ready', 'check'].includes(data.stage)) return true;
+  const S = settings(root, state);
+  data.counters.writer_attempts = 0;
+  data.counters.readiness_cycles = 0;
+  const lost = lostCoverage(root, state, data);
+  for (const it of lost) {
+    const d = newItem(data, { kind: 'decision', text: `You took ${it.covered.where} out of the contract by hand; it was where the contract honoured ${it.id}: ${clip(it.value || it.text, 160)}`, status: 'to_decide', impact: 'high', origin: 'edit', extra: { researched: true, lost: { item: it.id, where: it.covered.where } } }, 'cli');
+    d.options = [
+      { key: 'a', text: `Put it back: the contract honours ${it.id} again (your other edits stay)`, consequences: 'the writer restores it and keeps the rest of your edit' },
+      { key: 'b', text: `Leave it out: drop ${it.id}`, consequences: `${it.id} is listed at H1 as dropped by you` },
+    ];
+    // the edit is the user's latest word; their own earlier words are not overruled silently
+    d.recommendation = it.strength === 'user' ? null : 'b';
+    d.why = it.strength === 'user' ? `${it.id} is something you said ("${clip((it.source && it.source.quote) || it.value, 100)}"): only you can drop it` : 'you removed it yourself';
+    itemEvent(it, 'uncovered', 'user (hand edit)', `${it.covered.where} was removed from contract.md`);
+    it.covered = null;
   }
-  for (const id of created) if (!where.has(id)) problems.push(`${id}, opened this round, vanished from the ledger`);
-  const wasDropped = new Set(before.filter((u) => u.status === 'dropped').map((u) => u.id));
-  for (const u of data.issues) {
-    if (u.status !== 'dropped' || wasDropped.has(u.id)) continue;
-    const h = dropEvent(u);
-    if (!h || !h.actor || !String(h.text || '').trim()) problems.push(`${u.id} (${clip(u.text, 60)}) was dropped without a recorded reason and actor`);
-  }
-  return problems;
-}
-// Who dropped an issue, and why: its last drop event.
-function dropEvent(u) {
-  return (u.history || []).slice().reverse().find((x) => ['dropped', 'dismissed'].includes(x.event)) || null;
-}
-// "dropped by judge: <reason>", for H1 and clarify status.
-function droppedLines(data) {
-  return data.issues
-    .filter((u) => u.status === 'dropped')
-    .sort((a, b) => num(a.id) - num(b.id))
-    .map((u) => {
-      const h = dropEvent(u) || {};
-      // 0.15.0 dropped on a dismissal with no reason: its note is "dismissed by the judge: " alone
-      const why = String(h.text || '').trim() || (/:\s*$/.test(String(u.note || '')) ? '' : String(u.note || '').trim());
-      return { id: u.id, subject: u.subject, text: clip(u.text, 160), actor: h.actor || null, reason: clip(why, 200), line: `${u.id}: ${clip(u.text, 160).replace(/\s+/g, ' ')} (dropped by ${h.actor || 'unknown'}: ${clip(why || 'no reason recorded', 200).replace(/\s+/g, ' ')})` };
-    });
-}
-
-// What the analysis could not do, so nobody mistakes the contract for checked from every angle.
-// Clarify here does no research (no scouts, no web): its equivalent of a failed mapper is an
-// analyst angle that failed twice and was gone on without (--accept-degraded). Read from the
-// latest round that ran the analysts and counted; a later round that ran every angle clears it.
-// Shown in every round result while it holds, and at H1. null when every angle ran.
-function analysisGaps(data) {
-  const rounds = ((data && data.rounds) || []).filter((r) => !r.quiet && r.ledger && !r.ledger.degraded);
-  const last = rounds[rounds.length - 1];
-  const missing = last && Array.isArray(last.degraded) ? last.degraded.filter(Boolean) : [];
-  if (!missing.length) return null;
-  const one = missing.length === 1;
-  return {
-    missing_angles: missing,
-    round: last.round,
-    text: `Analysis incomplete: ${missing.join(', ')} failed and clarify went on without ${one ? 'it' : 'them'} (--accept-degraded) in round ${last.round}, so the contract was not checked from ${one ? 'that angle' : 'those angles'}.`,
-  };
-}
-
-// God Eye's blockers and majors in a critique: what it objects to. The workflow sends them as
-// god_eye_objects; a critique from before them (0.15.0 counted them as "approve with notes")
-// is read through this.
-function godEyeObjections(crit) {
-  return ((crit && crit.items) || [])
-    .filter((it) => it && it.issue && ['blocker', 'major'].includes(it.severity))
-    .map((it) => ({ ref: it.ref || null, severity: it.severity, issue: String(it.issue).slice(0, 300), ...(it.suggestion ? { suggestion: String(it.suggestion).slice(0, 300) } : {}) }));
-}
-
-// What H1 / EH1 must show besides the contract (factory next carries it as `clarify` on the
-// gate): issues dropped, with who dropped them and why; analyst angles gone on without; what
-// God Eye still objects to.
-function h1Summary(root, state) {
-  try {
-    const raw = load(root, state.id);
-    if (!raw || raw.tampered) return null;
-    const data = ensure(root, state, raw);
-    const out = {};
-    const dropped = droppedLines(data);
-    if (dropped.length) out.dropped = dropped.map((x) => x.line);
-    const gaps = analysisGaps(data);
-    if (gaps) out.analysis_incomplete = gaps.text;
-    // God Eye's objections to this very contract (it did not approve; nothing was left to ask)
-    const crit = readJson(path.join(jobPaths(root, state.id).critiquesDir, 'intent.json'), null);
-    const hash = require('./invalidation').current(root, state).contract;
-    const objects = !crit ? [] : Array.isArray(crit.god_eye_objects) ? crit.god_eye_objects : crit.approved_with_notes && !(crit.verdict === 'approve' && crit.intent_confirmed !== false) ? godEyeObjections(crit) : [];
-    if (crit && crit.hash === hash && objects.length) {
-      out.god_eye_objects = objects.map((o) => `${o.severity}${o.ref ? ` (${o.ref})` : ''}: ${clip(o.issue, 240)}${o.suggestion ? ` — suggests: ${clip(o.suggestion, 160)}` : ''}`);
-    }
-    return Object.keys(out).length ? { ...out, status_command: `factory clarify status --job ${state.id}` } : null;
-  } catch {
-    return null;
-  }
-}
-
-// ---------------------------------------------------------------- the CLI-owned contract sections
-function clarificationLines(data) {
-  return data.issues
-    .filter((u) => u.status === 'settled' && ['user', 'assumption_accepted'].includes(u.settled_by) && u.answer)
-    .sort((a, b) => num(a.id) - num(b.id))
-    .map((u) => `- ${u.id}${u.question_id ? ` (${u.question_id})` : ''}: ${clip(u.text, 200).replace(/\s+/g, ' ')} → ${clip(u.answer, 300).replace(/\s+/g, ' ')} (${u.settled_by === 'user' ? 'answered by user' : 'default accepted'})`);
-}
-function deferredLines(data) {
-  return data.issues
-    .filter((u) => u.status === 'deferred_to_design')
-    .sort((a, b) => num(a.id) - num(b.id))
-    .map((u) => `- ${u.id}: ${clip(u.text, 240).replace(/\s+/g, ' ')} (settled in ground/decide)`);
-}
-// Rewrite the CLI-owned sections of the contract from the ledger. Returns true when it changed.
-function writeContract(root, state, data) {
-  const contract = require('./contract');
-  const f = jobPaths(root, state.id).contract;
-  if (!fs.existsSync(f)) return false;
-  const text = fs.readFileSync(f, 'utf8');
-  const next = contract.setDeferred(contract.setClarified(text, clarificationLines(data)), deferredLines(data));
-  if (next === text) return false;
-  fs.writeFileSync(f, next);
+  data.stage = lost.length ? advance(data, S) : enterCheck(root, state, data, S);
+  if (data.stage === 'route') data.stage = advance(data, S);
   return true;
 }
 
-// For ground and decide: what clarify handed over.
-function deferredText(data) {
-  const d = (data && data.issues ? data.issues : []).filter((u) => u.status === 'deferred_to_design');
-  if (!d.length) return '';
-  return ['- Deferred to design by clarify (implementation detail: settle these here, cite your sources; they did not block H1):', ...d.map((u) => `  - ${u.id} [${u.kind}] ${clip(u.text, 200)}${u.aliases && u.aliases.length ? ` (also raised as ${u.aliases.map((a) => a.id).join(', ')})` : ''}`)].join('\n');
+// Live items the contract no longer honours where the writer said it did (an AC or a section
+// that is gone from the current text).
+function lostCoverage(root, state, data) {
+  const contract = require('./contract');
+  const text = contract.read(root, state.id);
+  const parsed = contract.parse(text);
+  const acIds = new Set(parsed.acs.map((a) => a.id));
+  const sections = Object.keys(contract.sections(text));
+  return data.items.filter((it) => liveForCoverage(it) && it.covered && it.covered.where && !(/^(E-)?AC-\d+$/i.test(it.covered.where) ? acIds.has(it.covered.where.toUpperCase()) : sections.includes(it.covered.where.toLowerCase())));
 }
-function deferredFor(root, state) {
-  try {
-    return deferredText(ensure(root, state));
-  } catch {
-    return '';
+
+// The readiness check, deterministic half first: a blocker goes back without spending God Eye.
+// Returns the next stage ('check' runs God Eye).
+function enterCheck(root, state, data, S) {
+  data.stage = 'check';
+  const det = deterministic(root, state, data);
+  if (!det.length) return 'check';
+  data.checks.push({ n: data.checks.length + 1, at: nowIso(), contract_hash: contractHash(root, state), deterministic: det, checklist: null, objections: det, ok: false });
+  let next = sendBack(root, state, data, det, S);
+  if (next === 'route') next = advance(data, S);
+  return next;
+}
+
+function ready(root, state) {
+  const data = load(root, state.id);
+  if (!data) {
+    // a job clarify v3 never touched: v2 jobs approved before the upgrade keep their record
+    const approved = state.approvals && (state.approvals.H1 || state.approvals.EH1);
+    return Boolean(approved);
   }
+  if (data.tampered || data.stage !== 'ready') return false;
+  const H = ['H1', 'EH1'];
+  const approvedAt = (g) => (state.approvals && state.approvals[g] ? state.approvals[g].at : '');
+  if ((state.denials || []).some((x) => H.includes(x.gate) && x.at > approvedAt(x.gate) && x.at > (data.denials_seen || ''))) return false;
+  return contractHash(root, state) === data.contract.checked_hash;
+}
+
+// For factory next while clarify is the step: run, or wait on the user (with the screen).
+function nextInfo(root, state) {
+  const data = get(root, state);
+  if (data.tampered) return { stage: null, run: null, waiting_for_user: false, error: `clarify.json fails its seal (edited by hand?): nothing in clarify runs or records until the user looks at it and, to keep the file as it now is, runs factory reseal --job ${state.id} in their own terminal (human-only)`, status_command: `factory clarify status --job ${state.id}` };
+  const migrating = !load(root, state.id);
+  const changed = sync(root, state, data);
+  if (changed || migrating) save(root, state.id, data);
+  const waiting = WAITS.has(data.stage);
+  return {
+    stage: data.stage,
+    // the stage runs as a workflow: factory wfargs clarify → Workflow factory:clarify → factory record
+    run: RUNS.has(data.stage) ? 'factory wfargs clarify' : null,
+    workflow: RUNS.has(data.stage) ? 'clarify' : null,
+    waiting_for_user: waiting,
+    ...(waiting ? { screen: screen(state, data), reply_command: 'factory clarify reply "<the user\'s words>"' } : {}),
+    ...(data.migration && migrating ? { migrated: data.migration } : {}),
+    status_command: `factory clarify status --job ${state.id}`,
+  };
+}
+
+function waitingForUser(root, state) {
+  const data = load(root, state.id);
+  if (!data || data.tampered || !WAITS.has(data.stage)) return null;
+  return { readback_wait: 'clarify read-back waits for your ok or your edit', sheet_wait: 'clarify decision sheet waits for your answers', redirect_wait: 'clarify waits for you to confirm how it read your redirect' }[data.stage];
+}
+
+function h1View(root, state, data = load(root, state.id)) {
+  if (!data || data.tampered) return null;
+  const contract = require('./contract');
+  const text = contract.read(root, state.id);
+  const p = contract.parse(text);
+  const live = data.items.filter((it) => it.status !== 'dropped');
+  const checked = [];
+  for (const it of live) {
+    const s = it.source || {};
+    if (it.kind === 'pin') {
+      for (const c of it.candidates || []) {
+        if (c.source.kind !== 'word') continue;
+        const ok = compatible(it.value || '', c.version) || compatible(c.version, it.value || '');
+        checked.push({ item: it.id, quote: c.source.quote, text: `${it.system} ${c.version}`, ok, where: ok ? `every source cited documents ${it.value}` : `you confirmed ${it.value} on the read-back (${it.resolved ? it.resolved.by : 'conflict'})` });
+      }
+      continue;
+    }
+    if (it.strength !== 'user' || !s.quote || !['fact', 'decision', 'instruction', 'question'].includes(it.kind)) continue;
+    const sup = it.superseded;
+    const w = data.words.find((x) => x.id === (s.kind === 'sheet' ? s.word : s.ref));
+    checked.push({ item: it.id, quote: clip(s.quote, 200), text: it.value || it.text, ok: !sup && Boolean(it.covered || it.status === 'deferred'), where: sup ? `you went by the source instead: ${clip(sup.value, 160)}` : it.covered ? it.covered.where : it.status === 'deferred' ? 'deferred to design' : 'not in the contract', ...(w && w.relayed ? { relayed: true } : {}) });
+  }
+  const last = data.checks[data.checks.length - 1] || null;
+  const objections = last ? (last.objections || []).map((o) => ({ check: o.check, severity: o.severity, issue: o.issue || o.why, fix: o.fix || '', ref: o.ref, open: o.severity === 'blocker' })) : [];
+  const redirects = data.redirects.map((R) => {
+    const clauses = R.clauses.map((c) => ({ quote: c.quote, action: c.action, ...clauseOutcome(data, R, c) }));
+    return { id: R.id, words: R.text, done: clauses.filter((c) => c.done).length, of: clauses.length, clauses };
+  });
+  const v = {
+    goal: p.goal,
+    done: p.acs.map((a) => ({ id: a.id, text: a.text, evidence: a.evidence })),
+    checked,
+    decisions: live.filter((it) => it.kind === 'decision' && ['decided', 'deferred'].includes(it.status)).map((it) => ({ item: it.id, text: it.text, value: it.status === 'deferred' ? 'deferred to design' : it.value, by: byWhom(it) })),
+    design_may_choose: live.filter((it) => it.status === 'deferred').map((it) => it.text),
+    // the versions research went by (or that none was confirmed: then only the repo's range)
+    versions: live.filter((it) => it.kind === 'pin').map((it) => (it.value ? `${it.system} ${it.value} (${byWhom(it)})` : `${it.system}: no exact version confirmed${(it.allows || []).length ? `; the repository allows ${it.allows.map((a) => a.range).join(', ')}` : ''}`)),
+    gaps: openFailures(data).map((f) => ({ what: f.what, reason: f.reason })),
+    skipped: skippedSources(data),
+    objections,
+    proceeded: data.proceeded || null,
+    redirects,
+    edited_by_hand: Boolean(data.contract.edited_by_hand),
+    hand_edits: (data.contract.hand_edits || []).length,
+    removed: (data.contract.removed || []).map((r) => `${r.ref}${r.ref === 'Constraints' || r.ref === 'Non-goals' ? ` "${r.text}"` : ` (${r.text})`}: because ${r.because}${r.why ? ` — ${r.why}` : ''}`),
+    // the user's words as the factory received them: through the reply hook or a gate verb, or
+    // relayed by the main session (which the user should recognise as theirs before approving)
+    words: { total: data.words.length, relayed: data.words.filter((w) => w.relayed).map((w) => ({ id: w.id, via: w.via, text: clip(w.text, 200) })) },
+  };
+  // the 0.6.1 guarantees, under the names the gate skill shows: what was dropped (who, why),
+  // what research could not do, and God Eye's objections, which are never approval
+  const dropped = data.items.filter((it) => it.status === 'dropped').map((it) => {
+    const h = [...(it.history || [])].reverse().find((x) => /dropped/.test(x.event)) || {};
+    return `${it.id}: ${clip(it.text, 160)} (dropped by ${h.actor || 'nobody'}: ${h.text ? clip(h.text, 160) : 'no reason recorded'})`;
+  });
+  if (dropped.length) v.dropped = dropped;
+  if (v.gaps.length) v.research_incomplete = `Research is incomplete: ${v.gaps.map((g) => `${g.what}: ${g.reason}`).join('; ')}.`;
+  const open = objections.filter((o) => o.open);
+  if (open.length) {
+    v.god_eye_objects = open.map((o) => `${o.severity} (${o.ref || o.check}): ${clip(o.issue, 240)}${o.fix ? ` — suggests: ${clip(o.fix, 160)}` : ''}`);
+    v.approved = false;
+  }
+  v.status_command = `factory clarify status --job ${state.id}`;
+  v.screen = h1Screen(state, v);
+  return v;
+}
+
+function h1Screen(state, v) {
+  const L = [`**Contract · ${state.id} ${state.title}**`, '', `**Goal:** ${v.goal}`, '', '**Done means**'];
+  for (const a of v.done) L.push(`- ${a.id} ${a.text}`);
+  if (v.checked.length) {
+    L.push('', '**Checked against what you said**');
+    for (const c of v.checked) L.push(`- ${c.ok ? '✓' : '✗'} "${c.quote}"${c.relayed ? ' †' : ''} → ${c.where}`);
+  }
+  if (v.decisions.length) {
+    L.push('', '**Decisions and who made them**');
+    for (const d of v.decisions) L.push(`- ${d.text} → ${d.value} (${d.by})`);
+  }
+  if (v.versions.length) L.push('', `**Versions researched against:** ${v.versions.join('; ')}.`);
+  if (v.design_may_choose.length) L.push('', `**Design may still choose:** ${v.design_may_choose.join('; ')}.`);
+  if (v.gaps.length) L.push('', '**Research gaps**', ...v.gaps.map((g) => `- ${g.what}: ${g.reason}`));
+  if (v.skipped.length) L.push('', `**Sources skipped:** ${v.skipped.length} (${[...new Set(v.skipped.map((x) => x.why))].join('; ')}); none of them is relied on.`);
+  const open = v.objections.filter((o) => o.open);
+  const notes = v.objections.filter((o) => !o.open);
+  // God Eye's objections are never approval: with one open, the screen never says the checks pass
+  if (open.length) L.push('', '**God Eye objects** (it did not approve this contract; you chose to proceed: `approve` takes it on over them, `deny <what must change>` sends it back)', ...open.map((o) => `- ${o.check} (${o.ref}): ${o.issue}`));
+  else L.push('', `**God Eye:** all ${CHECKLIST.length} checks pass${notes.length ? `; remarks: ${notes.map((o) => o.issue).join('; ')}` : ''}.`);
+  if (v.dropped) L.push('', '**Dropped**', ...v.dropped.map((x) => `- ${x}`));
+  if (v.removed && v.removed.length) L.push('', '**Taken out of the contract**', ...v.removed.map((x) => `- ${x}`));
+  for (const R of v.redirects) {
+    L.push('', `**Your redirect ${R.id}:** ${R.done} of ${R.of} done`);
+    for (const c of R.clauses) L.push(`- ${c.done ? '✓' : '✗'} "${clip(c.quote, 120)}" — ${c.how}`);
+  }
+  if (v.words.relayed.length) L.push('', `† ${v.words.relayed.length} of the ${v.words.total} things you said reached the factory only through the assistant (factory clarify reply / redirect, or the request it filed) and match no message the reply hook saw from you: check they are your words before you approve (factory clarify status lists them).`);
+  if (v.edited_by_hand || v.hand_edits) L.push('', `You edited the contract by hand${v.hand_edits > 1 ? ` (${v.hand_edits} times)` : ''}${v.edited_by_hand ? ' after the writer' : ''}; the edited text went through the readiness check again.`);
+  return L.join('\n');
+}
+
+function view(root, state, data) {
+  const s = currentSheet(data);
+  return {
+    job: state.id,
+    version: 3,
+    stage: data.stage,
+    rev: data.rev || 0,
+    items: data.items.map((it) => ({ ...it, history: (it.history || []).slice(-6), route: route(it, data, null) })),
+    evidence: data.evidence,
+    pins: data.items.filter((it) => it.kind === 'pin').map((it) => ({ id: it.id, system: it.system, value: it.value, status: it.status, strength: it.strength })),
+    sheet: s ? { n: s.n, decisions: s.decisions.filter((d) => !d.answered), facts: s.facts, queued: s.queued } : null,
+    sheets: data.sheets.length,
+    research: { passes: data.research.passes.length, summary: data.research.summary || null },
+    failures: data.failures,
+    redirects: data.redirects,
+    checks: data.checks.map((c) => ({ n: c.n, ok: c.ok, objections: c.objections })),
+    parked: data.parked,
+    migration: data.migration,
+    words: data.words.length,
+    h1: data.stage === 'ready' || data.proceeded ? h1View(root, state, data) : null,
+  };
+}
+
+const STATUS_WORD = { open: 'open', to_decide: 'on the sheet', decided: 'decided', assumed: 'assumed', deferred: 'to design', done: 'done', dropped: 'dropped' };
+
+function statusText(state, data) {
+  const L = [`Clarify — ${state.id}: stage ${data.stage}; ${data.items.length} item(s), ${data.evidence.length} finding(s), ${data.research.passes.length} research pass(es), ${data.sheets.length} sheet(s), ${data.failures.length} failure(s)`];
+  if (data.parked) L.push(`Parked: ${data.parked.reason}`);
+  L.push('');
+  const pad = (s, n) => (String(s).length > n ? `${String(s).slice(0, n - 1)}…` : String(s).padEnd(n));
+  L.push(`${pad('ID', 6)} ${pad('KIND', 11)} ${pad('STATUS', 13)} ${pad('BY', 12)} WHAT`);
+  for (const it of data.items) L.push(`${pad(it.id, 6)} ${pad(it.kind, 11)} ${pad(STATUS_WORD[it.status] || it.status, 13)} ${pad(it.strength ? byWhom(it) : '—', 12)} ${clip(it.text, 70)}${it.value && it.kind !== 'intent' ? ` → ${clip(it.value, 60)}` : ''}`);
+  const drops = data.items.filter((it) => it.status === 'dropped');
+  if (drops.length) {
+    L.push('', 'Dropped:');
+    for (const it of drops) {
+      const h = [...(it.history || [])].reverse().find((x) => /dropped/.test(x.event)) || {};
+      L.push(`  ${it.id}: ${clip(it.text, 100)} (dropped by ${h.actor || 'nobody'}: ${h.text ? clip(h.text, 120) : 'no reason recorded'})`);
+    }
+  }
+  const relayed = data.words.filter((w) => w.relayed);
+  if (relayed.length) {
+    L.push('', 'Your words as the assistant relayed them (factory clarify reply / redirect, job new --request), matching no message the reply hook saw from you:');
+    for (const w of relayed) L.push(`  ${w.id} (${w.via}): ${clip(w.text, 160)}`);
+  }
+  if (data.failures.length) {
+    L.push('', 'Not researched / failed:');
+    for (const f of data.failures) L.push(`  - ${f.what}: ${f.reason}`);
+  }
+  if (WAITS.has(data.stage)) L.push('', screen(state, data));
+  if (data.migration) L.push('', `Migrated from clarify v${data.migration.from}: ${data.migration.summary}.`);
+  return L.join('\n');
+}
+
+function status(root, { jobId, json = false, h1 = false } = {}) {
+  const job = require('./job');
+  const state = job.resolve(root, jobId);
+  const data = peek(root, state);
+  if (!data) {
+    const msg = { job: state.id, record: false, message: 'No clarify v3 record: this job\'s contract was approved before clarify v3 (its clarify-ledger.json stays as it was; ground and decide still read it).' };
+    return json ? msg : `${state.id}: ${msg.message}`;
+  }
+  if (data.tampered) {
+    const msg = { job: state.id, record: false, tampered: true, message: 'clarify.json fails its seal (edited by hand?).' };
+    return json ? msg : `${state.id}: ${msg.message}`;
+  }
+  if (h1) {
+    const v = h1View(root, state, data);
+    return json ? v : (v ? v.screen : 'No contract yet.');
+  }
+  return json ? view(root, state, data) : statusText(state, data);
+}
+
+// ---------------------------------------------------------------- parks: resume and proceed
+function onResume(root, state) {
+  const data = load(root, state.id);
+  if (!data || data.tampered || !data.parked) return;
+  if (data.parked.kind === 'research') data.counters.research_passes = Math.max(0, data.counters.research_passes - 1);
+  if (data.parked.kind === 'writer') data.counters.writer_attempts = Math.max(0, data.counters.writer_attempts - 1);
+  if (data.parked.kind === 'check') data.counters.readiness_cycles = Math.max(0, (data.counters.readiness_cycles || 0) - 1);
+  log(data, 'resumed', data.parked.reason);
+  data.parked = null;
+  save(root, state.id, data);
+}
+
+// `proceed` (human-only): go on from a cap park with the gaps explicit.
+function proceed(root, { jobId, channel }) {
+  const human = require('./human');
+  human.requireHumanChannel(channel);
+  const job = require('./job');
+  const state = job.resolve(root, jobId);
+  if (state.status !== 'parked' || !state.park || state.park.from !== 'clarify') fail(`${state.id} is not parked by clarify; "proceed" only continues a clarify park.`, 'not_parked');
+  const data = load(root, state.id);
+  if (data && data.tampered) fail(`${state.id}'s clarify.json fails its seal (edited by hand?); nothing was done.`, 'tampered');
+  if (!data || !data.parked) fail(`${state.id}'s clarify record has no park to proceed from.`, 'not_parked');
+  if (data.parked.kind === 'agent') fail(`${state.id} parked because an agent failed (${data.parked.reason}); there is nothing to proceed with. Reply "resume" to try again.`, 'not_proceedable');
+  human.confirmTyped(channel, state.id, 'proceed with the gaps shown');
+  const S = settings(root, state);
+  const was = data.parked;
+  data.proceeded = { at: nowIso(), from: was.kind, reason: was.reason, channel };
+  data.parked = null;
+  let next;
+  if (was.kind === 'research') {
+    for (const it of data.items) if (it.needs_research) {
+      it.needs_research = false;
+      if (it.kind === 'decision') it.researched = false;
+      addFailure(data, { what: it.text, reason: 'not researched: you chose to proceed after research failed' });
+    }
+    data.research.retry = null;
+    next = 'route';
+  } else next = 'ready';
+  state.status = 'active';
+  state.park = null;
+  state.resumed = { at: nowIso(), from: 'clarify', step: 'proceed' };
+  state.repeat = { key: null, count: 0 };
+  job.save(root, state);
+  const res = finish(root, state, data, next, S);
+  require('./decisions').write(root, { job: state.id, action: 'human.proceed', chosen: 'proceed', rule: 'human', channel, from: was.kind });
+  return { job: state.id, ...res, message: `Proceeding from the ${was.kind} cap with the gaps shown${next === 'ready' ? ': H1 lists the open objections' : ''}. ${res.message}` };
+}
+
+// ---------------------------------------------------------------- for ground, decide, floors, the console
+function briefText(root, state) {
+  const data = load(root, state.id);
+  if (!data || data.tampered) return '';
+  const L = [];
+  const pins = pinsBySystem(data);
+  if (Object.keys(pins).length) L.push(`- Versions (confirmed in clarify): ${Object.entries(pins).map(([s, v]) => `${s} ${v}`).join(', ')}. Research these versions only.`);
+  const facts = data.items.filter((it) => it.kind === 'fact' && ['decided', 'assumed'].includes(it.status) && it.value);
+  if (facts.length) L.push('- Facts clarify settled (with sources):', ...facts.slice(0, 20).map((it) => `  - ${clip(it.value, 200)} (${factSource(data, it)})`));
+  const dec = data.items.filter((it) => it.kind === 'decision' && it.status === 'decided');
+  if (dec.length) L.push('- Decisions made in clarify:', ...dec.slice(0, 15).map((it) => `  - ${clip(it.text, 160)} → ${clip(it.value, 160)} (${byWhom(it)})`));
+  if (data.failures.length) L.push('- Research gaps clarify left:', ...data.failures.slice(0, 10).map((f) => `  - ${f.what}: ${f.reason}`));
+  return L.join('\n');
+}
+
+function deferredText(root, state) {
+  const data = load(root, state.id);
+  if (!data || data.tampered) return data ? '' : require('./clarify-migrate').legacyDeferredText(root, state);
+  const d = data.items.filter((it) => it.status === 'deferred');
+  if (!d.length) return '';
+  return ['- Design may choose (clarify handed these over; settle them here, cite your sources):', ...d.map((it) => `  - ${it.id} ${clip(it.text, 200)}${it.unconfirmed ? ` (clarify could not research it: ${it.unconfirmed})` : ''}`)].join('\n');
+}
+
+function inClarify(state) {
+  return !(state.approvals && (state.approvals.H1 || state.approvals.EH1));
+}
+
+// For the console: the stage, the items, the sheet, the failures (the latest state).
+function consoleBlock(root, state) {
+  const data = load(root, state.id);
+  if (!data || data.tampered) return null;
+  const s = currentSheet(data);
+  const count = (st) => data.items.filter((it) => it.status === st).length;
+  return {
+    version: 3,
+    stage: data.stage,
+    waiting_for_user: WAITS.has(data.stage),
+    totals: { items: data.items.length, decided: count('decided') + count('done'), assumed: count('assumed'), deferred: count('deferred'), open: count('open') + count('to_decide'), dropped: count('dropped') },
+    questions: s ? s.decisions.filter((d) => !d.answered).map((d) => ({ id: `${d.no}`, question: clip(d.question, 200), recommendation: d.recommendation ? clip((d.options.find((o) => o.key === d.recommendation) || {}).text, 140) : null })) : [],
+    items: data.items.slice(0, 80).map((it) => ({ id: it.id, kind: it.kind, text: clip(it.text, 160), value: it.value ? clip(it.value, 140) : null, status: it.status, by: it.strength ? byWhom(it) : null, tag: it.tag })),
+    failures: data.failures.slice(0, 20).map((f) => ({ what: clip(f.what, 160), reason: clip(f.reason, 160) })),
+    // research gaps still open (a later pass may have settled an earlier failure)
+    gaps: openFailures(data).slice(0, 20).map((f) => ({ what: clip(f.what, 160), reason: clip(f.reason, 160) })),
+    pins: data.items.filter((it) => it.kind === 'pin' && it.status !== 'dropped').map((it) => ({ id: it.id, text: clip(`${it.system ? `${it.system} ` : ''}${it.value || it.text}`, 80), by: byWhom(it) })),
+    // every finding with its source and the CLI's verdict on it (usable or why not)
+    evidence: data.evidence.slice(0, 60).map((e) => ({ id: e.id, item: e.item, claim: clip(e.claim, 200), source: clip(e.source, 200), version: e.version || null, retrieved_at: e.retrieved_at || null, verdict: e.verdict || null, usable: usable(e) })),
+    dropped: data.items.filter((it) => it.status === 'dropped').map((it) => { const h = [...(it.history || [])].reverse().find((x) => x.event === 'dropped') || {}; return { id: it.id, text: clip(it.text, 160), actor: h.actor || null, reason: h.text || null }; }),
+    sheets: data.sheets.length,
+    passes: data.research.passes.length,
+    checks: data.checks.length,
+    redirects: data.redirects.map((R) => ({ id: R.id, status: R.status, clauses: R.clauses.length })),
+    migration: data.migration ? { from: data.migration.from, summary: data.migration.summary } : null,
+  };
+}
+
+// `factory clarify split`: v3 has no folded issues (migration made each alias its own item).
+function split(root, { jobId }) {
+  const state = require('./job').resolve(root, jobId);
+  return { job: state.id, message: 'Clarify v3 keeps no folded issues: every item has its own id (migration turned each v2 alias into its own item). Nothing to split; factory clarify status lists them.' };
 }
 
 module.exports = {
-  KINDS, OWNERS, STATUSES, SETTLED_BY, FINAL,
-  tokens, subjectKey, subjectOf, vocabulary, sameIssue, findSame, isImplementationFact, classify, limits, cleanIssue, settle, event,
-  empty, load, save, migrate, ensure, advance, mergeIssues, acceptDefaults, questionSet, resolveRef, applyAnswer, answer, parseNumbered, applyNumbered, note, split, inClarify, isNone, defaultValue,
-  rows, totals, trend, view, statusText, status, nextSummary, clarificationLines, deferredLines, writeContract, deferredText, deferredFor, openIds,
-  invariant, droppedLines, analysisGaps, godEyeObjections, h1Summary,
+  STAGES, WAITS, KINDS, STATUSES, STRENGTH, CHECKLIST, SECTIONS,
+  file, load, save, get, peek, empty, settings, addWord, newItem, item, setValue, reopen,
+  pinOf, compatible, urlVersion, inRange, verdictOf, usable, judge, route, advance,
+  applyReadback, readbackScreen, parseSheetReply, applySheet, sheetScreen, buildSheet,
+  startRedirect, applyRedirect, confirmRedirect, redirectScreen, sentences,
+  applyWriter, writeSections, sectionLines, deterministic, applyCheck,
+  stagePlan, stageContractHash, record, reply, redirect, chatReply, sync, ready, nextInfo, waitingForUser, notePrompt, promptHeard, runWhy,
+  h1View, h1Summary: (root, state) => h1View(root, state), view, status, statusText, onResume, proceed, briefText, deferredText, inClarify, consoleBlock, split, ACCEPT,
 };

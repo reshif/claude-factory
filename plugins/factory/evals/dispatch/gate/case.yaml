@@ -37,6 +37,6 @@ graders:
   - type: "regex"
     name: "outcome"
     target: "last_message"
-    pattern: "H1[\\s\\S]{0,200}(approve|deny)"
+    pattern: "H1[\\s\\S]{ 0,200 }(approve|deny)"
     flags: "i"
     weight: 1

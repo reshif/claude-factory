@@ -29,8 +29,9 @@ function goldens() {
   return fs.readdirSync(GOLDEN).filter((f) => f.endsWith('.json')).sort().map((f) => {
     const [role, variant = null] = f.replace(/\.json$/, '').split('.');
     assert.ok(ROLE_OUTPUTS[role], `${f}: names a known role`);
-    // god-eye: the base example and "intent-*" variants are intent critiques; design/plan are plain critiques.
-    const schema = role === 'god-eye' && variant && !variant.startsWith('intent') ? 'critique' : role === 'integrator' && variant === 'wave' ? 'integrate-wave' : ROLE_OUTPUTS[role][0];
+    // a variant named after one of the role's schemas uses it (interviewer.redirect, god-eye.readiness,
+    // researcher.research); integrator.wave is integrate-wave; the rest use the role's first schema.
+    const schema = variant && ROLE_OUTPUTS[role].includes(variant) ? variant : role === 'integrator' && variant === 'wave' ? 'integrate-wave' : ROLE_OUTPUTS[role][0];
     assert.ok(ROLE_OUTPUTS[role].includes(schema));
     return { file: f, role, variant, schema, value: readJson(path.join(GOLDEN, f)) };
   });
@@ -119,30 +120,43 @@ function invariants(schema, o, { role } = {}) {
       if (!/(plan|slices)\.json$/.test(o.path)) e.push(`path ${o.path} is not plan.json or slices.json`);
       break;
     case 'critique':
-    case 'intent-critique':
       if (o.verdict === 'approve' && o.items.some((i) => SERIOUS.includes(i.severity))) e.push('approve with a blocker or major item');
       if (o.verdict === 'revise' && !o.items.some((i) => i.severity !== 'minor')) e.push('revise on minor items alone');
-      if (schema === 'intent-critique' && o.intent_confirmed === false && o.verdict === 'approve') e.push('approve with intent not confirmed');
       break;
-    case 'analyst':
-      for (const q of o.questions) {
-        if (q.options && (q.options.length < 2 || q.options.length > 4)) e.push(`"${q.question}": options must be 2-4`);
-        if (q.question.includes('\n')) e.push('a question spans lines');
+    case 'readiness':
+      if ((o.verdict === 'ready') !== !o.objections.some((x) => x.severity === 'blocker')) e.push('ready exactly when no objection is a blocker');
+      for (const [k, v] of Object.entries(o.checklist)) if (v === false && !o.objections.some((x) => x.check === k)) e.push(`${k} is false with no objection`);
+      for (const x of o.objections) if (x.severity === 'blocker' && !x.fix.trim()) e.push(`a ${x.check} blocker with no fix`);
+      break;
+    case 'readback':
+      for (const t of o.took) if (!t.quote.trim()) e.push(`took "${t.text}" with no quote`);
+      for (const p of o.pins) if (p.source === 'repo' && !/^[\w./@-]+:\d+$/.test(p.file || '')) e.push(`repo pin ${p.system} without path:line`);
+      for (const p of o.plan) if (p.tag === 'decision' && p.options && p.options.length === 1) e.push(`decision "${p.what}" with a single option`);
+      break;
+    case 'redirect':
+      if (!o.clauses.length) e.push('a redirect with no clause');
+      for (const c of o.clauses) if (c.action === 'research' && !c.tag) e.push(`research clause "${c.quote}" says neither docs nor repo`);
+      break;
+    case 'interpret':
+      for (const a of o.answers) {
+        if (!a.quote.trim()) e.push(`decision ${a.decision} mapped with no quote`);
+        if (a.choice === 'other' && !a.text.trim()) e.push(`decision ${a.decision}: other with no words`);
       }
-      if (o.focus === 'intent' && !o.restatement) e.push('the intent gate gives no restatement');
-      if (o.focus !== 'intent' && o.questions.some((q) => q.category === 'intent')) e.push('an intent question outside the intent focus');
       break;
-    case 'judge':
-      if (o.questions.length > 5) e.push('more questions than any budget');
-      if (o.questions.some((q) => q.category === 'intent') && o.questions.some((q) => q.category !== 'intent')) e.push('intent questions mixed with others (the rest must be held)');
-      if (o.held && o.held.length && !o.questions.some((q) => q.category === 'intent')) e.push('held questions with no intent question open');
-      for (const d of o.dismissed) if (!d.reason.trim()) e.push(`dismissed "${d.question}" without a reason`);
+    case 'research':
+      for (const x of o.evidence) {
+        if (!x.quote.trim()) e.push(`finding "${x.claim}" with no quote`);
+        if (o.mode === 'docs' && !/^https?:\/\//.test(x.source)) e.push(`docs finding "${x.claim}" not from a URL`);
+        if (o.mode === 'repo' && !/^[\w./@-]+:\d+(-\d+)?$/.test(x.source)) e.push(`repo finding "${x.claim}" not at path:line`);
+      }
       break;
-    case 'contract-edit':
-      if (!/^## Intent$/m.test(o.contract)) e.push('the revised contract has no Intent section');
-      for (const a of o.applied) if (!a.ref.trim() || !a.change.trim()) e.push('an applied change without its ref or what changed');
-      for (const s of o.skipped) if (!s.reason.trim()) e.push(`skipped ${s.ref} without a reason`);
-      for (const r of o.removed || []) if (!r.because.trim()) e.push(`removed ${r.ref} without a reason`);
+    case 'brief':
+      for (const r of o.records) if (r.recommendation !== null && !r.options.some((x) => x.key === r.recommendation)) e.push(`${r.plan}: the recommendation names no option`);
+      break;
+    case 'contract-write':
+      if (!/^## Intent$/m.test(o.contract)) e.push('the contract has no Intent section');
+      for (const c of o.covers) if (!/^((E-)?AC-\d+|[A-Z][\w -]+)$/.test(c.where)) e.push(`${c.item} covered at "${c.where}" (an AC id or a section)`);
+      for (const r of o.removed || []) if (!String(r.because).trim()) e.push(`removed ${r.ref} without a reason`);
       break;
     case 'researcher':
       for (const c of o.claims) if (!SOURCE.test(c.source)) e.push(`claim "${c.claim}" has source "${c.source}" (file:line, "command → output", URL or UNVERIFIED)`);
@@ -196,9 +210,12 @@ test('golden outputs match their schemas strictly and hold their semantic invari
     ['critique', { verdict: 'approve', items: [{ issue: 'i', severity: 'blocker' }] }],
     ['builder', { status: 'blocked', summary: 's' }],
     ['lesson', { lessons: [], nothing_to_learn: false }],
-    ['judge', { questions: [{ question: 'a', category: 'intent', why: 'w', default: 'd' }, { question: 'b', category: 'scope', why: 'w', default: 'd' }], dismissed: [] }],
     ['researcher', { topic: 't', claims: [{ claim: 'c', source: 'I think so' }], unknowns: [] }],
-    ['contract-edit', { contract: '# x\n\n## Goal\nno intent here', applied: [], skipped: [], removed: [{ ref: 'AC-2', because: '' }] }],
+    ['contract-write', { contract: '# x\n\n## Goal\nno intent here', covers: [], uncovered: [], removed: [{ ref: 'AC-2', because: '' }] }],
+    ['readiness', { verdict: 'ready', restatement: { problem: 'p', outcome: 'o' }, checklist: { intent_clear: false }, objections: [] }],
+    ['brief', { summary: 's', records: [{ plan: 'P-1', decision: 'd', options: [{ key: 'a', text: 't', consequences: 'c' }], evidence: [], recommendation: 'b', why: 'w' }], facts: [], gaps: [] }],
+    ['interpret', { answers: [{ decision: 1, choice: 'other', text: '', quote: '' }], facts: [], unclear: [] }],
+    ['research', { mode: 'docs', evidence: [{ plan: 'P-1', claim: 'c', source: 'src/x.js:1', source_tier: 'official', quote: 'q', confidence: 'high' }], unresolved: [] }],
   ];
   for (const [schema, value] of bad) assert.ok(invariants(schema, value).length > 0, `${schema} invariant rejects ${JSON.stringify(value)}`);
   // strict mode catches a field the schema lacks (the option-generator drift the audit found)
@@ -217,7 +234,8 @@ test('each "Your final message" recipe names every schema field, in order, and n
     // a bullet may name several fields before its colon ("- `pros`, `cons`, `risks`: …")
     const bullets = [...prose.matchAll(/^- (`[^:\n]*?)(?: \(|:)/gm)].flatMap((m) => [...m[1].matchAll(/`([a-z_]+)`/g)].map((x) => x[1]));
     const top = new Set(ROLE_OUTPUTS[role].flatMap((s) => Object.keys(schemaOf(s).properties)));
-    const order = bullets.filter((b) => top.has(b));
+    // a role with several modes may list a field in more than one (god-eye's verdict): its first place counts
+    const order = [...new Set(bullets.filter((b) => top.has(b)))];
     for (const p of top) assert.ok(order.includes(p), `${role}: \`${p}\` has its own bullet`);
     const keys = Object.keys(example);
     assert.deepEqual(keys, order.filter((k) => keys.includes(k)), `${role}: example keys follow the recipe's order`);
@@ -253,26 +271,66 @@ async function runWorkflow(root, next, agents, extra = []) {
   return { record: F.record(root, result), result, calls };
 }
 
+// Clarify v3 through the real workflow, each agent answering with its golden (patched only where
+// the golden names ids or files this job does not have: plan ids, item ids, the contract on disk).
+// Stops at H1. Returns every screen it showed and the record results.
+const { grab } = require('./helpers/clarify3-crew');
+function clarifyAgents(root, J) {
+  return (role, text) => {
+    const inp = grab(text, 'CLARIFY INPUT (JSON):') || {};
+    const planOf = (tag) => (inp.plan || []).find((p) => p.tag === tag) || {};
+    switch (role) {
+      case 'interviewer':
+        assert.equal(inp.mode, 'readback');
+        return golden('interviewer');
+      case 'researcher':
+        if (inp.mode === 'repo') {
+          const g = golden('researcher', 'research');
+          return { ...g, evidence: g.evidence.map((e) => ({ ...e, plan: planOf('repo').id })) };
+        }
+        return { mode: 'docs', web_available: true, versions: [], evidence: [], unresolved: inp.plan.map((p) => ({ plan: p.id, reason: 'a preference: no documentation decides it' })), failed_sources: [] };
+      case 'brief-writer': {
+        const g = golden('brief-writer');
+        return { ...g, records: g.records.map((r) => ({ ...r, plan: planOf('decision').id })), facts: g.facts.map((f) => ({ ...f, plan: planOf('repo').id })) };
+      }
+      case 'contract-writer': {
+        const g = golden('contract-writer');
+        // the contract on disk (the rest of the job builds to it), with the golden's coverage map shape
+        return { ...g, contract: fs.readFileSync(path.join(F.jobDir(root, J), 'contract.md'), 'utf8'), covers: inp.items.map((x) => ({ item: x.id, where: 'Goal', how: g.covers[0].how })) };
+      }
+      case 'god-eye':
+        assert.match(text, /Focus: \*\*readiness/);
+        return golden('god-eye', 'readiness');
+      default:
+        throw new Error(`unexpected clarify agent ${role}`);
+    }
+  };
+}
+async function clarifyToH1(root, J, { reply = () => 'ok' } = {}) {
+  const screens = [];
+  const records = [];
+  for (let i = 0; i < 12; i++) {
+    const n = F.cli(root, ['next']);
+    if (!(n.action === 'skill' && n.skill === 'clarify')) return { next: n, screens, records };
+    if (n.clarify.waiting_for_user) {
+      screens.push(n.clarify);
+      const r = F.cli(root, ['clarify', 'reply', reply(n.clarify)]);
+      assert.ok(!r.error, JSON.stringify(r));
+      continue;
+    }
+    const { record } = await runWorkflow(root, { workflow: 'clarify' }, clarifyAgents(root, J));
+    records.push(record);
+  }
+  throw new Error('clarify did not reach H1');
+}
+
 test('golden replay: bug@low through the real workflows, with an unverifiable finding that keeps blocking', async () => {
   const root = F.makeRepo();
-  const J = F.cli(root, ['job', 'new', '--title', 'Fix add', '--type', 'bug', '--risk', 'low']).job;
+  const J = F.cli(root, ['job', 'new', '--title', 'Fix add', '--type', 'bug', '--risk', 'low', '--request', 'fix add: add(2, 3) should return 5']).job;
   fs.writeFileSync(path.join(F.jobDir(root, J), 'contract.md'), F.contractText());
   let verdict = 'unverifiable';
-  let clarifyRound = 0;
   const agents = (role, text, raw) => {
     switch (role) {
-      case 'intent-analyst':
-        return /Your focus: \*\*intent\*\*/.test(text) ? golden('intent-analyst', 'intent') : { ...golden('intent-analyst'), focus: (/Your focus: \*\*(\w+)\*\*/.exec(text) || [])[1], questions: [] };
-      case 'judge':
-        return clarifyRound === 1 ? golden('judge') : golden('judge', 'none');
-      case 'god-eye':
-        return golden('god-eye', 'intent-approve');
-      case 'contract-editor': {
-        // clarify v2: the editor applies the user's answer (round 2) to the contract it was given, as its golden shows
-        const cur = fs.readFileSync(path.join(F.jobDir(root, J), 'contract.md'), 'utf8');
-        const g = golden('contract-editor');
-        return { ...g, contract: cur.replace('## Non-goals\n', '## Non-goals\n- Numeric strings are not converted\n') };
-      }
       case 'researcher':
         return golden('researcher', null, { topic: (/Topic: \*\*([\w ]+)\*\*/.exec(text) || [])[1] });
       case 'builder': {
@@ -312,14 +370,18 @@ test('golden replay: bug@low through the real workflows, with an unverifiable fi
   // finding-verifier gets the finding after its pointer, not in its instruction file
   const agentsWithPrompt = (role, text, prompt) => agents(role, role === 'finding-verifier' ? prompt : text, prompt);
 
-  for (clarifyRound = 1; clarifyRound <= 2; clarifyRound++) {
-    const { record } = await runWorkflow(root, { workflow: 'fanout-judge', config: 'clarify' }, agentsWithPrompt);
-    if (clarifyRound === 1) {
-      assert.equal(record.status, 'needs_user', JSON.stringify(record));
-      assert.equal(record.questions[0].question, golden('judge').questions[0].question, "the judge's golden question reaches the user");
-      F.cli(root, ['answer', '--id', record.questions[0].id, '--answer', 'Numbers only'], { allowFail: false });
-    } else assert.equal(record.status, 'ok', JSON.stringify(record));
-  }
+  // clarify v3: the read-back's plan is researched; the sheet shows the brief writer's decision and
+  // the repo fact; the user takes the recommendation; the writer and God Eye's readiness check pass
+  const c = await clarifyToH1(root, J);
+  assert.deepEqual(c.screens.map((x) => x.stage), ['readback_wait', 'sheet_wait']);
+  assert.match(c.screens[1].screen, /Whether numeric strings are added or rejected/);
+  assert.match(c.screens[1].screen, /a\) Reject them with a TypeError \*\*\(recommended\)\*\*/);
+  assert.match(c.screens[1].screen, /add is implemented in src\/add\.js and subtracts \(src\/add\.js:1, E-1\)/, 'the repo finding, checked at its line, is a fact the sheet shows');
+  const rec = JSON.parse(fs.readFileSync(path.join(F.jobDir(root, J), 'clarify.json'), 'utf8'));
+  const dec = rec.items.find((x) => x.kind === 'decision');
+  assert.deepEqual([dec.value, dec.strength], ['Reject them with a TypeError', 'accepted']);
+  assert.equal(rec.evidence[0].verdict, 'repo');
+  assert.equal(c.records[c.records.length - 1].status, 'ok');
   assert.equal(F.cli(root, ['next']).step, 'H1');
   F.reply(root, 'approve');
 
@@ -363,9 +425,9 @@ test('golden replay: full@high decide and decompose (options, threat model, arch
   const root = F.makeRepo();
   const J = F.cli(root, ['job', 'new', '--title', 'Auth math', '--type', 'feature', '--risk', 'high']).job;
   const dir = F.jobDir(root, J);
-  fs.writeFileSync(path.join(dir, 'contract.md'), F.contractText({ ac: '- AC-1: add(2, 3) returns 5 (evidence: test)\n- AC-2: sub(5, 3) returns 2 (evidence: test)' }));
-  const clarify = (role, text) => (role === 'intent-analyst' ? golden('intent-analyst', 'intent') : role === 'judge' ? golden('judge', 'none') : golden('god-eye', 'intent-approve'));
-  assert.equal((await runWorkflow(root, { workflow: 'fanout-judge', config: 'clarify' }, clarify)).record.status, 'ok');
+  fs.writeFileSync(path.join(dir, 'contract.md'), F.contractText({ ac: '- AC-1: add(2, 3) returns 5 (evidence: test)\n- AC-2: sub(5, 3) returns 2 (evidence: test)', verify: '`node tests/add.test.js` (AC-1)\n- `node tests/sub.test.js` (AC-2)' }));
+  const c = await clarifyToH1(root, J);
+  assert.equal(c.next.step, 'H1', JSON.stringify(c.next).slice(0, 600));
   assert.equal(F.cli(root, ['next']).step, 'H1');
   F.reply(root, 'approve');
   assert.equal((await runWorkflow(root, { workflow: 'ground' }, (role, text) => golden('researcher', null, { topic: (/Topic: \*\*([\w ]+)\*\*/.exec(text) || [])[1] }))).record.status, 'ok');

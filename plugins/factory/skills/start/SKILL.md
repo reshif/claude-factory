@@ -24,7 +24,7 @@ Repeat until you reach a stop point:
 
 | action | what you do |
 |---|---|
-| `skill` | Follow the factory skill named in `skill` (clarify, ship, distill, amend), then go back to step 1. For clarify, `clarify` carries the ledger summary: open issues by owner, the open questions and the exact `answer_commands`. |
+| `skill` | Follow the factory skill named in `skill` (clarify, ship, distill, amend), then go back to step 1. For clarify, `clarify` carries the stage, and either `run` (run the clarify workflow for that stage) or the `screen` to show while it waits on the user (`waiting_for_user`). |
 | `workflow` | Run it as described under **Running a workflow** below, then go back to step 1. |
 | `cli` | Run exactly the `command` shown. Read its JSON. If it failed, show the user the message and run `factory next` again (the CLI decides whether to retry or park). |
 | `evidence` | A criterion needs a doc or diff record, not a code change. For each AC in `acs`, check the build (the job worktree) shows it, then run its line in `commands` yourself with the real file path (relative to the repository root). If it isn't there, tell the user and stop. Then go back to step 1. |
@@ -43,15 +43,15 @@ Repeat until you reach a stop point:
 3. Write the JSON result the workflow returns, unchanged, to `.factory/scratch/envelope.json` and run `factory record --file .factory/scratch/envelope.json`.
 4. Act on the record result's `status`:
    - `ok` / `fix` / `retry` / `revise` / `stale` / `error` / `park` → go back to the loop. Nothing for the user here: `factory next` handles retries, fix rounds and parking.
-   - Any `needs_user` result from the **clarify** workflow, or one carrying `god_eye_objects` or `analysis_incomplete` → follow **factory:clarify** ("Read the result"); it owns how questions, revise and retry rounds, God Eye's objections and failed angles are handled.
+   - Any result from the **clarify** workflow (`factory wfargs clarify`) → follow **factory:clarify** ("Each turn"); it owns how screens, parks, research failures and God Eye's objections are handled (`continue` just loops back to step 1).
    - `needs_user` with `questions` from **ground** → ask the user exactly those questions, in that order, as one numbered list, then **stop**. When they answer, record each with `factory answer --question "…" --answer "…"` and continue the loop.
 
 **No Workflow tool?** Run the same brief by hand with the Agent tool: start every item of the fan-out in one message (parallel) with `subagent_type` set to the item's `agent_type` (e.g. `factory:researcher`), its `prompt`, and the item's `model` if it has one, requiring JSON that matches its `schema`; retry a failed item once; then do the judge / critique / verifier / builder-tester steps exactly as the workflow script (`workflows/<name>.js`) does, and build the result envelope with the same fields. Record it the same way.
 
 ## Rules
-- Human gates are the user's. Never approve, deny, resume, waive or confirm on their behalf, and never run those commands (the guard blocks them). The user replies in chat: `approve`, `deny <what must change>`, `resume`, `cancel job`, `abandon job`, `waive <floor> <reason>`, `merged <commit>`, `confirm AC-n`, `accept lesson Ln`, `split U-n <alias>`, `dismiss finding <id> <why>`, `accept finding <id> <why>`, `confirm environment <hash|none>`, and while clarify waits, numbered answers (`1 yes, 2 …`, `defaults`). The reply hook applies them before you see the message.
+- Human gates are the user's. Never approve, deny, resume, proceed, waive or confirm on their behalf, and never run those commands (the guard blocks them). The user replies in chat: `approve`, `deny <what must change>`, `resume`, `proceed` (go on from a clarify cap with the gaps shown), `cancel job`, `abandon job`, `waive <floor> <reason>`, `merged <commit>`, `confirm AC-n`, `accept lesson Ln`, `dismiss finding <id> <why>`, `accept finding <id> <why>`, `confirm environment <hash|none>`, and while clarify waits, `ok` or a structured sheet answer (`ok, but 2 b`, `fact 1: …`). The reply hook applies them before you see the message.
 - When the user has to run a human-only command themselves (`factory approve`, `factory resume`, `factory reseal`, …), say: "run this in your own terminal; it will ask you to type a code shown there." Never ask them for that code, never ask them to paste it here, and never accept "it's done" in its place: run `factory next` to see what was applied.
-- During clarify you never edit the contract and never answer for the user: record what the user said with `factory answer`, add context with `factory clarify note`, show `factory clarify status` when they ask what is open, and run `factory next`.
+- During clarify you never research on your own and never answer for the user: record what they said, verbatim, with `factory clarify reply "…"` (or `factory clarify redirect "…"` when they change direction), show `factory clarify status` when they ask what is open, and run `factory next`. The user may edit `contract.md` themselves; the CLI checks it again.
 - If the user says the requirements changed, follow **factory:amend**.
 - Don't claim the job is done until `factory next` says `done` (the Stop hook checks floors).
 - `factory why --format md` explains every routing decision if the user asks why something happened.

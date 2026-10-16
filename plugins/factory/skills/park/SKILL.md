@@ -13,6 +13,7 @@ The CLI parked the job (`reason` in the `factory next` output). Parking is how t
    - what you'd suggest (e.g. "one more review round is reasonable — the last round confirmed only one small issue", or "this needs a plan change: T2 needs files outside its paths"),
    - their options, as exact replies:
      - **`resume`** — continue; the cap that stopped it gets one more round (for budgets, +50%; for a serious finding no verifier could settle, one more re-verification: it is never dropped, and it blocks ship until confirmed or refuted; the user may instead settle it: **`dismiss finding <id> <why>`** (not a problem) or **`accept finding <id> <why>`** (a known risk that ships), listed in the completion report)
+     - **`proceed`** — only for a clarify park at a research, contract-writer or readiness cap (the reason says so; never after an agent failed): go on with the gaps shown, and H1 lists God Eye's open objections as objections, not approval
      - **`cancel job`** or **`abandon job`** — stop for good; files are kept
      - **`waive ci_reverify <reason>`** — only when the CI re-verify floor can't be met (no `factory-gate` workflow and no local merge to re-verify)
      - or tell you what to change (you may then need **factory:amend**).

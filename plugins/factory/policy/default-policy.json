@@ -69,8 +69,6 @@
   ],
   "checks": [],
   "limits": {
-    "max_intent_rounds": 10,
-    "clarify_no_progress_rounds": 2,
     "max_design_critique_rounds": 2,
     "max_plan_validate_rounds": 3,
     "retry_limit": 3,
@@ -91,6 +89,21 @@
     "integrate_each_wave": true
   },
   "lessons_max_per_job": 3,
+  "intent_research": {
+    "web": true,
+    "search_mcp": null
+  },
+  "clarify": {
+    "max_research_passes": 2,
+    "max_sheet_decisions": 5,
+    "max_writer_attempts": 2,
+    "max_readiness_cycles": 3,
+    "research_minutes": {
+      "low": 6,
+      "medium": 10,
+      "high": 15
+    }
+  },
   "ci": {
     "required_check": "factory-gate"
   },

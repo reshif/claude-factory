@@ -7,6 +7,14 @@ const os = require('os');
 const path = require('path');
 const { spawnSync } = require('child_process');
 
+const readJson = (f) => {
+  try {
+    return JSON.parse(fs.readFileSync(f, 'utf8'));
+  } catch {
+    return null;
+  }
+};
+
 const PLUGIN = path.resolve(__dirname, '..', '..');
 const BIN = path.join(PLUGIN, 'bin', 'factory');
 
@@ -282,7 +290,7 @@ function say(root, text) {
   } catch {
     ctx = '';
   }
-  const status = /Applied your reply/.test(ctx) ? 'applied' : /NOT applied/.test(ctx) ? 'refused' : 'ignored';
+  const status = /Applied your reply|Recorded your reply/.test(ctx) ? 'applied' : /NOT applied|NOT recorded/.test(ctx) ? 'refused' : 'ignored';
   let code = null;
   if (status === 'refused') {
     const lines = fs.readFileSync(path.join(root, '.factory', 'log', 'events.jsonl'), 'utf8').trim().split('\n').map((l) => JSON.parse(l));
@@ -311,8 +319,47 @@ function relayWave(root, text) {
   return { ok: Boolean(r.ok), kind: r.ok ? 'integrated' : r.kind, route: Object.keys(r.route || {}), reconciled: Boolean(r.reconciled), failures: (r.failures || []).map((f) => `\`${f.cmd}\` exited ${f.code}`), message: r.ok ? `Wave ${m[2]} integrated.` : r.message || `${r.kind}` };
 }
 
+// Clarify v3 to the readiness check, the way its stages record it, with no agent: a read-back
+// that plans nothing, the user's "ok", the contract writer returning the contract on disk (or
+// `contract`), God Eye's checklist all true. Leaves the job at gate H1 (factory next shows it).
+// `checklist` overrides God Eye's answers; `objections` adds its objections.
+// `until`: stop when clarify reaches that stage, before its agents run.
+function clarify(root, { contract = null, readback = null, objections = [], checklist = {}, until = null } = {}) {
+  const J = require('../../cli/core/job').resolve(root).id;
+  const file = path.join(jobDir(root, J), 'contract.md');
+  if (contract) fs.writeFileSync(file, contract);
+  const parse = require('../../cli/core/contract').parse;
+  const ready = { intent_clear: true, scope_bounded: true, acs_testable: true, self_consistent: true, facts_honoured: true, instructions_handled: true, decisions_closed: true, ...checklist };
+  const results = [];
+  for (let i = 0; i < 12; i++) {
+    const n = cli(root, ['next']);
+    if (!(n.action === 'skill' && n.skill === 'clarify')) break;
+    const c = n.clarify || {};
+    if (until && c.stage === until) return { status: 'at', stage: c.stage };
+    if (c.waiting_for_user) {
+      results.push(cli(root, ['clarify', 'reply', 'ok']));
+      continue;
+    }
+    const brief = cli(root, ['wfargs', 'clarify']);
+    if (brief.error) throw new Error(`wfargs clarify: ${JSON.stringify(brief)}`);
+    const text = fs.readFileSync(file, 'utf8');
+    const p = parse(text);
+    const outputs = {
+      readback: { 'read-back': readback || { intent: { problem: p.intent.problem || 'p', who: p.intent.who || 'w', outcome: p.intent.outcome || 'o', success: p.intent.success || 's' }, scope: { in: [], out: [] }, took: [], pins: [], plan: [], questions: [], design_may_choose: [] } },
+      // the writer honours every item in the Goal (a test contract has no better place)
+      assemble: { contract: { contract: text, covers: ((readJson(path.join(jobDir(root, J), 'clarify.json')) || {}).items || []).map((x) => ({ item: x.id, where: 'Goal' })), uncovered: [] } },
+      check: { readiness: { verdict: objections.some((o) => o.severity === 'blocker') ? 'blocked' : 'ready', restatement: { problem: 'p', outcome: 'o' }, checklist: ready, objections } },
+    }[brief.stage];
+    if (!outputs) throw new Error(`clarify helper: no script for stage ${brief.stage}`);
+    const r = record(root, envelope(brief, 'ok', { stage: brief.stage, rev: brief.rev, outputs }));
+    results.push(r);
+    if (r.status === 'ok' || r.status === 'park') break;
+  }
+  return results[results.length - 1] || null;
+}
+
 function jobDir(root, id) {
   return path.join(root, '.factory', 'jobs', id);
 }
 
-module.exports = { PLUGIN, BIN, sh, write, makeRepo, cli, reply, say, built, relayVerify, relayWave, contractText, envelope, record, jobDir, adrText, noAdrText, threatModelText, recommendationText, contractsDocText, DIAGRAM };
+module.exports = { PLUGIN, BIN, sh, write, makeRepo, cli, reply, say, built, clarify, relayVerify, relayWave, contractText, envelope, record, jobDir, adrText, noAdrText, threatModelText, recommendationText, contractsDocText, DIAGRAM };

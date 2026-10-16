@@ -17,11 +17,10 @@ const events = (root) => fs.readFileSync(path.join(root, '.factory', 'log', 'eve
 function grounded(root, { risk = 'low' } = {}) {
   const J = F.cli(root, ['job', 'new', '--title', 'Two tasks', '--type', 'bug', '--risk', risk]).job;
   fs.writeFileSync(path.join(F.jobDir(root, J), 'contract.md'), F.contractText());
-  let b = F.cli(root, ['wfargs', 'fanout-judge', '--config', 'clarify']);
-  F.record(root, F.envelope(b, 'ok', { analysts: [], degraded: [], judge: { questions: [], dismissed: [] }, critique: { verdict: 'approve', items: [] } }));
+  F.clarify(root);
   F.cli(root, ['next']);
   F.reply(root, 'approve');
-  b = F.cli(root, ['wfargs', 'ground']);
+  let b = F.cli(root, ['wfargs', 'ground']);
   F.record(root, F.envelope(b, 'ok', { topics: [{ topic: 'codebase', claims: [{ claim: 'x', source: 'src/add.js:1' }], unknowns: [] }], degraded: [] }));
   F.cli(root, ['next']);
   return J;
@@ -386,11 +385,10 @@ test('P2.3: each wave is integrated and checked on the job branch; a same-wave b
   F.sh(root, 'git add -A && git commit -qm slug');
   const J = F.cli(root, ['job', 'new', '--title', 'Rename slug', '--type', 'bug', '--risk', 'low']).job;
   fs.writeFileSync(path.join(F.jobDir(root, J), 'contract.md'), F.contractText({ goal: 'make_slug replaces slugify; report titles use it.', verify: '`node tests/slug.test.js` (AC-1)', ac: '- AC-1: make_slug("a b") returns "a-b" (evidence: test)' }));
-  let b = F.cli(root, ['wfargs', 'fanout-judge', '--config', 'clarify']);
-  F.record(root, F.envelope(b, 'ok', { analysts: [], degraded: [], judge: { questions: [], dismissed: [] }, critique: { verdict: 'approve', items: [] } }));
+  F.clarify(root);
   F.cli(root, ['next']);
   F.reply(root, 'approve');
-  b = F.cli(root, ['wfargs', 'ground']);
+  let b = F.cli(root, ['wfargs', 'ground']);
   F.record(root, F.envelope(b, 'ok', { topics: [{ topic: 'codebase', claims: [], unknowns: [] }], degraded: [] }));
   F.cli(root, ['next']);
   // the planner forgot that T2 calls T1's function: same wave, disjoint paths
