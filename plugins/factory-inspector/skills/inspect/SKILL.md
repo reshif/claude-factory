@@ -20,7 +20,7 @@ Then show `factory-inspect report --format md` (open findings, then a **Factory 
 ## Explain the findings
 Group them by class (**deviation**, **ambiguity**, **gap**), highest severity first, in plain words. For each, give the evidence (decision ids, job) and the inspector's question, and say what you think the likely cause is when the records support it and what would fix it (a skill wording, a recipe version bump, a cap change) — but **don't change recipes, floors, policy or skills**; those are the user's.
 
-Before explaining any finding, read `${CLAUDE_SKILL_DIR}/references/findings-guide.md`: what each class covers, how to weigh the health rules (a failed guard, Stop or prompt hook is high severity), and what to say about intent parks and dropped questions. Skip it when the report has no open findings.
+Before explaining any finding, read `${CLAUDE_SKILL_DIR}/references/findings-guide.md`: what each class covers, how to weigh the health rules (a failed guard, Stop or prompt hook is high severity), what to say about intent parks and dropped questions, and the outcome rules (work or exports lost by ship, drive stops nobody was told about). Skip it when the report has no open findings.
 
 ## The user decides
 They reply, and the inspector's hook applies it:
