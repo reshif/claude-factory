@@ -608,5 +608,7 @@ test('0.9.0 loops: R6 checks the caps a clarify line names (writer_rounds), and 
 test('the plan probe is the CLI\'s own step inside decompose (factory 0.10.0 port review): routing to it is not a step outside the recipe', () => {
   const M = require('../inspector/model');
   assert.ok(M.SPECIAL_STEPS.has('plan_probe'));
+  // factory 0.11: the environment check and repair before realize are router steps outside the recipe
+  assert.ok(M.SPECIAL_STEPS.has('env_check') && M.SPECIAL_STEPS.has('env_repair'));
   assert.ok(!M.SPECIAL_STEPS.has('probe'), 'only the factory\'s own name');
 });

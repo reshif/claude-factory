@@ -9,5 +9,17 @@
       "option": "Limit at the load balancer",
       "reason": "It can't key by client id (findings, interfaces: deploy/lb.conf:12)."
     }
-  ]
+  ],
+  "decisions": [
+    {
+      "id": "D-1",
+      "title": "Where requests are limited",
+      "chosen": "O-1 Token-bucket middleware in the API"
+    }
+  ],
+  "layout": {
+    "files": 4,
+    "new": 2,
+    "changed": 2
+  }
 }

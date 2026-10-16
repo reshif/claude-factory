@@ -161,7 +161,7 @@ is a `notify` event. `policy.notify: false` turns them off; so does `FACTORY_NOT
 
 Every park carries `kind` and `next` (`state.park`, the `factory next` output, the drive's stop,
 the inbox): budget, scope_violation, review_rounds, verify_fix_rounds, no_progress, plan_invalid,
-environment_broken, unverified_finding, clarify, dependency_conflict, needs_paths,
+environment_broken, environment_repair, unverified_finding, clarify, dependency_conflict, needs_paths,
 task_exhausted, tasks_not_done, regression, conflict, design, epic_gate, manual, other. A
 workflow's park is also its own decision row (`action: "park"`, rule `park.<kind>`), so `factory
 why` lists every park with its reason and next step. A park recorded by an older factory (no kind) is
@@ -175,7 +175,27 @@ typed from its reason.
   `needs_work: integration` with the dropped lines as its input and is rebuilt on the merged
   code automatically, once (`recovery` event, record status `retry`); a second regression parks
   with kind `regression`.
-- **environment_broken** parks once with the command and its output; **scope_violation**
+- **The sealed build environment is checked before any task** (0.11, ported from
+  copilot-factory 0.11.0). Once the environment is confirmed (and not none), the router's step
+  before realize is `factory env check --job J` (rule `env.check`), a CLI step the drive runs
+  itself (a long step): setup, services up/health/down in a scratch worktree, the result sealed
+  in `jobs/<J>/env-check.json` for the environment's hash. A failing check is a result, not a
+  step error. Until it passes, `wfargs realize` and `task start` are refused
+  (`environment_unchecked`): no attempt is spent. A failure routes the repair loop: the drive
+  hands back `fanout-judge` with config `env_repair` (the planner in repair mode, with the
+  failure, this machine's tool inventory, the lint and the earlier rounds; per-call model, moved
+  to the stronger one when a round makes no progress) for the main session to run with the
+  Workflow tool; `factory record` accepts its result only for a repair the router opened, lints
+  the candidate against the machine and checks it in a scratch worktree, sandboxed (no tokens, no
+  login shell, its `prefix` run too, what it leaves running killed) and under
+  `decompose.plan_probe` (false: not run; `"lint"`: lint only). A passing candidate parks the job
+  with one `environment_repair` question: the full diff and the whole environment, sealed only by
+  the user's `approve environment <hash>` (or `a`) through the reply hook; sealing moves only the
+  environment part of an approved combined gate, and only when the plan and design are as
+  approved (else the gate is asked again). `c` ("I fixed it on my machine") or a plain resume
+  re-checks the sealed environment with a fresh machine inventory. No progress after four
+  rounds: a specific `environment_broken` question, never a bare resume.
+- **environment_broken** (a builder that finds the environment broken mid-build) parks once with the command and its output; **scope_violation**
   restarts from the job branch; an invalid reply gets the schema's correction turn: unchanged.
 - **Transient errors** (rate limits, 5xx, network): Claude Code retries API errors inside each
   agent call itself, and a workflow agent that still fails returns nothing (`no_result`, an
@@ -271,3 +291,5 @@ like a lesson. The inbox and the drive's `done` stop list open proposals.
 | the plan probe run by the runner between planner and God Eye | after the decompose workflow's `plan` phase, `factory next` names the CLI step `factory plan probe` (a long step: only in a fresh drive call); it runs detached, bounded by the call's time, and the next call picks up its result; then the `critique` phase | only the CLI can run commands, and a probe inside `factory record` could outlive the Bash call; decompose costs one more hand-off |
 | the ground ledger's second look run inside the runner | `factory record` checks the ledger, writes `ground.reask.json` and returns `retry`; the ground workflow runs again with only those probes | the same: the ledger check needs the fetched files |
 | `task grant` run by the runner for a builder's `needs_paths` | the builder asks with `task built --status blocked --reason needs_paths --paths …`; the CLI checks the grant (exact files, inside allowed paths, no other task's files) and the workflow retries without spending an attempt | there is no runner; `task grant`, `deps fetch`, `plan probe` and `record` stay refused to agents (the guard, xargs forms included, and the CLI while an agent works); a builder may record only the task it started, once per attempt, and a granted path is one exact file |
+| (0.11.0) the router names `factory env check --job J`; `factory run` runs the repair loop's planner | the drive runs `env check --job` itself (a long step, fresh drive only) and hands back `fanout-judge --config env_repair` as a workflow stop; the escalated model rides on the brief's judge per call | only the CLI runs commands and only the Workflow tool runs agents; `factory env check --job` and `factory doctor --machine` are refused to agents (guard, and the CLI while an agent works); an agent may check a proposal (`env check --proposed`, sandboxed) |
+| (0.11.0) `factory plan probe` probes on every call | a current probe record (same plan, environment and mode) is reused | the probe runs detached and its record is picked up by the next call; drop `probe.json` to probe again after a policy change |

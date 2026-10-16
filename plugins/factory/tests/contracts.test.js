@@ -462,7 +462,8 @@ test('golden replay: full@high decide and decompose (options, threat model, arch
       return golden('threat-modeler', null, { path: path.join(dir, 'threat-model.md') });
     }
     if (role === 'architect') {
-      fs.writeFileSync(path.join(dir, 'adr-001-math.md'), F.adrText({ job: J, acs: ['AC-1', 'AC-2'], threats: ['TH-1'] }));
+      // 0.11 (intentional): the ADR's Project layout names the files the plan's tasks own
+      fs.writeFileSync(path.join(dir, 'adr-001-math.md'), F.adrText({ job: J, acs: ['AC-1', 'AC-2'], threats: ['TH-1'], layout: F.layoutLines([['src/add.js', 'changed', 'AC-1'], ['tests/add.test.js', 'changed', 'AC-1'], ['src/sub.js', 'new', 'AC-2'], ['tests/sub.test.js', 'new', 'AC-2']]) }));
       assert.equal(F.cli(root, ['doc', 'check', path.join(dir, 'adr-001-math.md')]).ok, true);
       return golden('architect', null, { paths: [path.join(dir, 'adr-001-math.md')] });
     }
