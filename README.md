@@ -4,10 +4,10 @@ Turns a request into a verified, merged change. Claude does the work through spe
 
 | Plugin | Version | What it is |
 |---|---|---|
-| `factory` | 0.15.1 | The orchestrator: skills, hooks, the `factory` CLI, workflows, agents, recipes, templates and the console |
-| `factory-inspector` | 0.5.1 | An independent auditor: checks each job against the rulebook it declared and the factory's health |
+| `factory` | 0.16.0 | The orchestrator: skills, hooks, the `factory` CLI, workflows, agents, recipes, templates and the console |
+| `factory-inspector` | 0.6.0 | An independent auditor: checks each job against the rulebook it declared and the factory's health |
 
-0.12.0 adds the console's **Blueprint** view (the factory as an engineering drawing set) and makes every view show review data faithfully: unverified findings stay visibly blocking, outcomes are coloured by what they mean, and the Crew's tools come from the agent files. 0.12.1: when clarify asks you questions, the Blueprint shows it as your turn (a Q callout at Contract), matching the Board. 0.13.0: the Blueprint's agent banks show each workflow run step by step while it works (✓ done, ● at work, ○ not yet, – skipped, ✕ failed, who runs in each step), worked out from the agents the hooks see start and the brief's plan, and each job's section view lists its workflow runs. 0.14.0: clarify v2 — every clarify question is an issue in one sealed ledger the CLI owns (`factory clarify status`), a settled issue is never asked again in other words, you answer with a numbered reply or `factory answer Q-n`, implementation details go to design, a contract editor is the one writer of the contract during clarify, and clarify parks when it stops making progress instead of on a round count (inspector 0.4.0 checks the new ceiling, stalled rounds and re-raised issues). 0.14.1: the Blueprint's Build detail follows the wave at work (it showed only waves 1 and 2). 0.14.3: the Blueprint's replay speed is a dropdown from 1 s/s (real time) through 1, 2, 5 and 10 min/s to 1 and 4 h/s, 1 min/s by default and remembered per browser. 0.15.0: outcome integrity and builds that work — an unverified serious finding is carried until a verifier or you settle it (`dismiss|accept finding`), a task is done only when this attempt's builder finished and its dependencies are merged, `task verify` decides (the tester only relays it), retries continue from the last attempt, each worktree runs in a build environment you confirm, the plan names its interfaces and every wave is integrated and checked before the next, and terminal approvals need a random code shown only on your terminal (inspector 0.5.0 flags a lost finding and a task done without its builder). A job mid-build when you upgrade keeps going: see *Upgrading with a job mid-build* under Evidence. 0.15.1: narrow clarify fixes — the job title's own words no longer fold two different questions into one, no issue is dropped without who and why (H1 lists each drop), two failed clarify rounds in a row park the job naming the analysts, a round that went on without a failed angle says so, God Eye's blockers and majors are never shown as approval (H1 lists them under **God Eye objects**), Claude never asks you for a terminal's confirmation code, and the hooks name a Node too old for them (14+; `factory doctor` checks it). A job mid-clarify when you upgrade keeps going.
+0.12.0 adds the console's **Blueprint** view (the factory as an engineering drawing set) and makes every view show review data faithfully: unverified findings stay visibly blocking, outcomes are coloured by what they mean, and the Crew's tools come from the agent files. 0.12.1: when clarify asks you questions, the Blueprint shows it as your turn (a Q callout at Contract), matching the Board. 0.13.0: the Blueprint's agent banks show each workflow run step by step while it works (✓ done, ● at work, ○ not yet, – skipped, ✕ failed, who runs in each step), worked out from the agents the hooks see start and the brief's plan, and each job's section view lists its workflow runs. 0.14.0: clarify v2 — every clarify question is an issue in one sealed ledger the CLI owns (`factory clarify status`), a settled issue is never asked again in other words, you answer with a numbered reply or `factory answer Q-n`, implementation details go to design, a contract editor is the one writer of the contract during clarify, and clarify parks when it stops making progress instead of on a round count (inspector 0.4.0 checks the new ceiling, stalled rounds and re-raised issues). 0.14.1: the Blueprint's Build detail follows the wave at work (it showed only waves 1 and 2). 0.14.3: the Blueprint's replay speed is a dropdown from 1 s/s (real time) through 1, 2, 5 and 10 min/s to 1 and 4 h/s, 1 min/s by default and remembered per browser. 0.15.0: outcome integrity and builds that work — an unverified serious finding is carried until a verifier or you settle it (`dismiss|accept finding`), a task is done only when this attempt's builder finished and its dependencies are merged, `task verify` decides (the tester only relays it), retries continue from the last attempt, each worktree runs in a build environment you confirm, the plan names its interfaces and every wave is integrated and checked before the next, and terminal approvals need a random code shown only on your terminal (inspector 0.5.0 flags a lost finding and a task done without its builder). A job mid-build when you upgrade keeps going: see *Upgrading with a job mid-build* under Evidence. 0.15.1: narrow clarify fixes — the job title's own words no longer fold two different questions into one, no issue is dropped without who and why (H1 lists each drop), two failed clarify rounds in a row park the job naming the analysts, a round that went on without a failed angle says so, God Eye's blockers and majors are never shown as approval (H1 lists them under **God Eye objects**), Claude never asks you for a terminal's confirmation code, and the hooks name a Node too old for them (14+; `factory doctor` checks it). A job mid-clarify when you upgrade keeps going. 0.16.0: clarify v3 — clarify reads your words back first (intent, scope, your facts quoted, the versions research will use), runs one time-boxed research pass on the repo and the docs for those versions (another version's or a moving page never counts as evidence), asks at most five decisions on one sheet you answer in one reply (`ok`, `ok, but 2 b`, or plain words), then a contract writer writes the contract once and a readiness check (the CLI's checks, then God Eye's fixed checklist) sends any blocker back to its stage; a denial or `factory clarify redirect` is read back as tracked items reported done or not done at H1; at a research, contract or readiness cap you may say `proceed` (yours only) to go on with the gaps shown (inspector 0.6.0 checks clarify v3's caps, parks, research gaps and objections you proceeded past). A job mid-clarify, at H1, after a denial or parked in clarify when you upgrade is carried over: see *Upgrading to clarify v3* in plugins/factory/docs/DESIGN-CLARIFY-v3.md.
 
 ## How it fits together
 
@@ -30,7 +30,7 @@ flowchart TB
 
   subgraph line[" "]
     direction LR
-    s1["<b>Contract</b><br/>clarify<br/>intent first<br/>gate H1"]
+    s1["<b>Contract</b><br/>clarify<br/>read-back · research · sheet<br/>gate H1"]
     s2["<b>Design</b><br/>ground · decide<br/>ADR + Mermaid<br/>gate H2"]
     s3["<b>Plan</b><br/>decompose<br/>task waves<br/>gate H3"]
     s4["<b>Build</b><br/>realize<br/>reconcile<br/>worktree per task"]
@@ -40,7 +40,7 @@ flowchart TB
     s1 --> s2 --> s3 --> s4 --> s5 --> s6 --> s7
   end
 
-  agents["<b>Workflows + agents</b><br/>ground · fanout-judge · decompose · realize · reconcile<br/>analysts · architect · planner · builders · testers · reviewers"]
+  agents["<b>Workflows + agents</b><br/>clarify · ground · fanout-judge · decompose · realize · reconcile<br/>interviewer · researchers · architect · planner · builders · testers · reviewers"]
 
   record["<b>factory record</b><br/>validates the result · rejects stale ones · checks docs against templates<br/>seals it into the ledger · then back to factory next"]:::cli
 
@@ -131,6 +131,7 @@ The `UserPromptSubmit` hook applies these **before Claude sees them**; nothing e
 | `approve` | Approve the waiting gate. Bound to the document's hash: if it changed since you saw it, the approval is refused. |
 | `deny <what must change>` | Send it back with your reason. |
 | `resume` | Un-park; the cap that stopped it gets one more round. |
+| `proceed` | Clarify parked at its research, contract or readiness cap: go on to H1 with the gaps and God Eye's objections shown (never as approval). Yours only, like `resume`. |
 | `cancel job` · `abandon job` | Stop for good; files are kept. |
 | `merged <commit>` | Record a local merge (when there's no GitHub PR). |
 | `confirm AC-3` | Confirm a criterion whose evidence type is `human`. |
@@ -138,12 +139,11 @@ The `UserPromptSubmit` hook applies these **before Claude sees them**; nothing e
 | `accept lesson L4` · `reject lesson L4 <why>` | Decide on a proposed lesson. |
 | `ack finding F3` · `fixed finding F3` · `wontfix finding F3 <why>` | Settle an inspector finding. |
 | `inspect mode <recipe\|all> on\|off\|sample <N>` | How often the inspector runs. |
-| `1 yes, 2 trunk ports too` · `skip 2` · `defaults` | While clarify waits on you: your answers to the questions it showed, by number (`Q-4 no` names one by id). All or nothing; a message that isn't that shape is left alone. |
-| `split U-7 U-19` | Clarify folded two different questions into one issue: make the second its own issue again. |
+| `ok` · `ok, but 2 b` · `1 a, 3: other: …` · `2 defer` · `fact 1: <correction>` | While clarify waits on you: `ok` on its read-back (or a redirect read-back), or one answer to its decision sheet. Any other words you type there are recorded **word for word** by Claude (`factory clarify reply`), and the interviewer maps them to the sheet; it never answers for you. |
 | `dismiss finding code-1 <why>` · `accept finding code-1 <why>` | Settle a serious review finding no verifier could: not a problem, or a known risk that ships. The completion report lists it. |
 | `confirm environment <hash>` · `confirm environment none` | Use the proposed build environment (its setup runs in every worktree), or none. See [The build environment](#the-build-environment-what-each-worktree-runs-in). |
 
-From your own terminal you can run the human-only commands directly: `factory approve`, `factory resume`, `factory reseal`, `factory clarify split`, `factory-inspect mark …`. Agents are blocked from running them. Each one shows a short random code on your terminal (written to the terminal device only: never to stdout, stderr, a file or the log) and asks you to type it back, and each refuses a shell that belongs to an agent: Claude Code's Bash tool sets `CLAUDECODE=1`, `AI_AGENT=claude-code_<version>_agent` and `CLAUDE_CODE_CHILD_SESSION=1` in every command's environment (so a `!` command typed into Claude Code is refused too: reply in chat instead), and VS Code's, Copilot's, Codex's and Gemini's agent shells set markers of their own. The limit, plainly: an agent that drives an interactive terminal (reads its screen and types into it) in a harness that sets none of these markers could read the code; the guard, which refuses these commands from any agent's tool call, is the first line.
+From your own terminal you can run the human-only commands directly: `factory approve`, `factory resume`, `factory reseal`, `factory proceed`, `factory-inspect mark …`. Agents are blocked from running them. Each one shows a short random code on your terminal (written to the terminal device only: never to stdout, stderr, a file or the log) and asks you to type it back, and each refuses a shell that belongs to an agent: Claude Code's Bash tool sets `CLAUDECODE=1`, `AI_AGENT=claude-code_<version>_agent` and `CLAUDE_CODE_CHILD_SESSION=1` in every command's environment (so a `!` command typed into Claude Code is refused too: reply in chat instead), and VS Code's, Copilot's, Codex's and Gemini's agent shells set markers of their own. The limit, plainly: an agent that drives an interactive terminal (reads its screen and types into it) in a harness that sets none of these markers could read the code; the guard, which refuses these commands from any agent's tool call, is the first line.
 
 ### Gates you may see
 
@@ -156,9 +156,16 @@ From your own terminal you can run the human-only commands directly: `factory ap
 | **H4** merge | Every change: you merge |
 | **HF** spike findings · **EH1–EH3** epic contract, architecture, slices · **A** amendment · **P** parked | As they come up |
 
-### Questions you may get (clarify)
+### Clarify: settling the contract
 
-The contract starts with an **Intent** section — problem, who, outcome, why now, success signal — and an intent analyst reads it first, alone. Until the intent is settled you get **only intent questions**; then scope, constraint and acceptance questions follow, in that order. **At most 5 questions in round 1 and 3 in later rounds**, as one numbered list. Each has an id (`Q-3`), why it matters, the default the factory will use if you skip it, and options where possible. Nothing is asked twice: every question is an **issue** in one ledger the CLI keeps (`factory clarify status` shows it, with what each round opened and settled), and a settled issue asked again in other words is only noted. Answer in chat by number (`1 yes, 2 …`, `skip 2`, `defaults`); a skipped question takes its default next round. Implementation details (exact command syntax, field names, line ranges) are not asked: they are **deferred to design** and listed in the contract. During clarify only its contract editor changes the contract, and the CLI writes your answers into `## Clarifications (settled)`. If the intent is still unclear after two rounds the job **parks rather than guessing**; clarify also parks when two rounds in a row settle nothing (or at 10 rounds); reply `resume` for more. God Eye must restate and confirm the intent before H1.
+Clarify is a few short stages, each a rule in the CLI, and usually costs you **two short replies**:
+
+1. **Read-back.** The interviewer reads your words back: the intent (problem, who, outcome, success signal), the scope, the facts you stated (quoted), the **versions research will use** (from a repo file, or from your own words) and what research will find out (each tagged repo, docs or decision). Reply `ok`, or say what to change.
+2. **One research pass**, time-boxed by risk: a repo researcher and a docs researcher (WebSearch/WebFetch) answer the plan **for the versions you confirmed**. Documentation for another version, or a moving page (`stable`, `latest`), is never evidence; a quote not found at its cited line is dropped. The brief writer turns the findings into decisions.
+3. **One decision sheet**: at most five decisions, each with options, the evidence and a recommendation, then the facts it will assume (with sources) and any research gaps. One reply answers it all: `ok`, `ok, but 2 b`, `fact 1: <correction>`, or plain words.
+4. **Contract and readiness.** The contract writer writes `contract.md` once; the CLI adds `## Decisions`, `## Facts relied on`, `## Design may choose` and `## Research gaps`. The CLI's own checks, then God Eye's fixed seven-item checklist, check it; a blocker sends clarify back to its stage, never into a note.
+
+Every item clarify settles is in one sealed record (`jobs/<J>/clarify.json`; `factory clarify status` prints it) with who decided it: **you** > **evidence** > **accepted** (you took the recommendation) > **assumption**. You can reopen anything at any time; an agent overturns your words only with stronger evidence, and then the sheet asks you first. You may edit `contract.md` by hand at any time: the readiness check runs on your text, and the next writer keeps your edits. To change direction, deny at H1 or say so at any stage (`factory clarify redirect "…"`): the interviewer reads it back as tracked items, and H1 reports each one done or not done. Clarify parks at fixed caps (2 research passes, 5 decisions per sheet, 2 writer attempts, 3 readiness cycles) or when an agent returns nothing; `resume` tries again, and at a research, contract or readiness cap `proceed` goes on with the gaps shown. H1 shows the contract checked against what you said, the decisions and who made them, what design may choose, the research gaps, what was dropped (who, why) and God Eye's objections.
 
 ## How a job runs
 
@@ -301,7 +308,7 @@ Rule table and CLI: [`plugins/factory-inspector/README.md`](plugins/factory-insp
 | Plugin | Event | Script | What it does |
 |---|---|---|---|
 | factory | SessionStart | `session-start.js` | Tells Claude about the current job and what's waiting |
-| factory | UserPromptSubmit | `prompt.js` | Applies your replies through the CLI (numbered answers to clarify's questions too); flags look-alikes as not applied |
+| factory | UserPromptSubmit | `prompt.js` | Applies your replies through the CLI, and records an unmistakable clarify reply (`ok`, a structured sheet answer) itself; notes a hash (never the text) of each message you type, so words Claude relays to clarify exactly as you typed them count as yours; flags look-alikes as not applied |
 | factory | PreToolUse (Write, Edit, Bash, Read, Grep, Glob …) | `guard.js` | Blocks writes to protected paths, recipes and policy, and reads of secrets (`.env`, keys, the seal key; `.env.example` and other templates are fine); keeps builders inside their task's allowed paths; refuses hand edits of a job's contract while it is in clarify (its contract editor is the one writer) and `factory answer` / `factory clarify note` from a subagent; reads shell commands like a shell, so a human-only `factory` verb is caught where it runs, never in prose, patterns or commit messages; each deny quotes the command |
 | factory | PostToolUse (tools that change things), SubagentStart | `activity.js` | Appends a sealed line per event to `.factory/log/events.jsonl` |
 | factory | SubagentStop | `subagent-stop.js` | Records that an agent finished |
@@ -354,13 +361,13 @@ Then `/factory:start <request>` initialises the repo again. Keep `~/.config/soft
 plugins/factory/
   .claude-plugin/plugin.json        plugin manifest (version)
   skills/                           start · intake · clarify · gate · ship · distill · amend · park · why · console · review
-  agents/                           intent-analyst, judge, contract-editor, god-eye, researcher, option-generator, threat-modeler,
+  agents/                           interviewer, brief-writer, contract-writer, god-eye, researcher, option-generator, threat-modeler,
                                     architect, planner, slicer, builder, tester, integrator, code/test/security/ux-reviewer,
                                     finding-verifier, epic-reviewer, lesson-writer
   hooks/                            hooks.json + the scripts in the table above
   cli/                              the factory CLI: main.js, core/ (router, record, floors, ship, console, doc …), lib/
-  workflows/                        ground · fanout-judge · decompose · realize · reconcile
-  config/workflows/                 fan-out configs: clarify · decide · challenge
+  workflows/                        clarify · ground · fanout-judge · decompose · realize · reconcile
+  config/workflows/                 configs: clarify (crew and caps) · decide · challenge
   recipes/                          the recipes and _selection.json
   policy/                           default-policy.json · floors.json
   schemas/                          envelope, contract, plan, ledger and agent-output schemas
