@@ -95,12 +95,20 @@ test('a builder blocked for paths: `task built --paths` grants files inside the 
     { id: 'T2', objective: 'other', allowed_paths: ['src/other.js'], depends_on: ['T1'], criteria_ids: ['AC-1'], verify_commands: ['true'] },
   ] }));
   const allowedBefore = core('contract').parse(core('contract').read(root, J)).allowedPaths;
+  // only a task with an attempt open (review MAJ-4): T1's builder ran task start
+  const s0 = core('job').load(root, J);
+  s0.tasks = { ...(s0.tasks || {}), T1: { ...((s0.tasks || {}).T1 || {}), attempts: 1 } };
+  core('job').save(root, s0);
   // what the builder runs as its last step (the guard lets only factory:builder run it)
   const r = F.cli(root, ['task', 'built', 'T1', '--status', 'blocked', '--reason', 'needs_paths', '--paths', 'tests/add.test.js']);
   assert.deepEqual(r.granted, ['tests/add.test.js'], JSON.stringify(r));
   assert.deepEqual(core('job').load(root, J).tasks.T1.granted_paths, ['tests/add.test.js']);
   // refused: another task's file, a directory, outside the contract — all or nothing, nothing written
   for (const [p, why] of [['src/other.js', /T2's path/], ['src', /a directory/], ['README.md', /outside the contract/]]) {
+    // a new attempt each time (one grant per attempt)
+    const s1 = core('job').load(root, J);
+    s1.tasks.T1.attempts += 1;
+    core('job').save(root, s1);
     const x = F.cli(root, ['task', 'built', 'T1', '--status', 'blocked', '--reason', 'needs_paths', '--paths', p]);
     assert.deepEqual(x.granted, [], p);
     assert.match(x.refused[0].why, why);

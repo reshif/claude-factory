@@ -17,6 +17,42 @@ function jobInScope(root, cwd) {
   }
 }
 
+// The task a builder agent started (factory task start Tn), noted by agent id; "task built Tm"
+// from the same agent for another task is refused. Best effort: the CLI also refuses a task with
+// no open attempt.
+function builderBinding(root, agentId, command) {
+  const fs = require('fs');
+  const file = path.join(root, '.factory', 'log', 'builder-tasks.jsonl');
+  const started = /\btask\s+start\s+(T\d+)\b/.exec(command);
+  const built = /\btask\s+built\s+(T\d+)\b/.exec(command);
+  if (!started && !built) return null;
+  let bound = null;
+  try {
+    for (const l of fs.readFileSync(file, 'utf8').split('\n')) {
+      try {
+        const e = JSON.parse(l);
+        if (e && e.agent_id === agentId) bound = e.task;
+      } catch {
+        /* a torn line */
+      }
+    }
+  } catch {
+    bound = null;
+  }
+  if (started && !bound) {
+    try {
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.appendFileSync(file, `${JSON.stringify({ at: new Date().toISOString(), agent_id: agentId, task: started[1] })}\n`);
+    } catch {
+      /* noting never breaks the guard */
+    }
+    bound = started[1];
+  }
+  if (started && bound && started[1] !== bound) return `This builder works on ${bound}: it does not start ${started[1]} (one builder per task).`;
+  if (built && bound && built[1] !== bound) return `This builder works on ${bound}: "task built ${built[1]}" records another task's reply, which only that task's builder may do.`;
+  return null;
+}
+
 safe((input) => {
   const tool = input.tool_name;
   const ti = input.tool_input || {};
@@ -39,15 +75,25 @@ safe((input) => {
     // with --agent (code.claude.com/docs/en/hooks, common input fields), which is not an agent here
     why = checkBash(root, ti.command, policy, { job: jobInScope(root, cwd), agent: Boolean(input.agent_id), agentType: input.agent_id ? input.agent_type || null : null });
     // posting to this session's own inbox socket: it arrives as a prompt, as if the user typed it
+    // a builder records only its own task's reply (review MAJ-4): the task it started is bound to
+    // its agent id, and "task built" for another task is refused
+    if (!why && input.agent_id && input.agent_type === 'factory:builder') why = builderBinding(root, input.agent_id, String(ti.command || ''));
     if (!why && require('../cli/core/reply-origin').SOCKET.test(String(ti.command || ''))) why = 'Posting to this Claude Code session\'s inbox socket is not allowed in a factory repository: the text would arrive as a prompt the factory cannot tell from the user\'s own reply. Tell the user instead.';
   } else if (root && require('../cli/core/reply-origin').PROMPT_TOOLS.test(String(tool || ''))) {
     // Scheduling or sending text that comes back as a prompt (a cron firing, a message): never a
     // factory reply, which only the user types (review B1). What is let through is noted, so the
     // prompt hook refuses it if it still reads as a reply when it arrives.
     const O = require('../cli/core/reply-origin');
-    const leaves = O.texts(ti);
-    if (leaves.some((t) => O.looksLikeReply(t))) why = `${tool} would deliver a factory reply (approve, deny, resume, ok, accept brief …) as a prompt: replies are the user's own words, typed by them. Show the user the stop and let them reply.`;
-    else for (const t of leaves) O.record(root, t, { tool, agent: input.agent_id || null });
+    // The same reader the prompt hook dispatches on (human.readReply); and while a job waits on
+    // the user, any short text, fail closed. What passes is noted: every firing of a recurring
+    // schedule is refused as the user's reply when it arrives.
+    const leaves = O.promptTexts(ti);
+    const refusal = leaves.map((t) => O.refuseScheduled(root, t)).find(Boolean);
+    if (refusal) why = `${tool} would deliver text as a prompt that ${refusal.replace(/^it /, '')}: replies are the user's own words, typed by them. Show the user the stop and let them reply (a longer instruction that is clearly not a reply, or a slash command, may be scheduled).`;
+    else {
+      const recurring = O.recurringOf(tool, ti);
+      for (const t of leaves) O.record(root, t, { tool, agent: input.agent_id || null, recurring });
+    }
   }
   if (why) {
     // Say what was seen, so a block can be traced to the exact command.

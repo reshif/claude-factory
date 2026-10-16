@@ -224,6 +224,9 @@ function run(argv) {
       return brief;
     }
     case 'record': {
+      // the main session's, between workflows: recording a decompose or ground result runs the
+      // plan probe and the dependency fetch, the CLI's own steps no agent may start (review MAJ-1)
+      C('agents-open').refuseWhileAgentsWork(R(), 'record');
       const file = opt.file;
       if (!file) fail('record --file <envelope.json | ->', 'bad_input');
       const envelope = file === '-' ? JSON.parse(readStdin()) : JSON.parse(readText(path.resolve(file), 'null'));
@@ -242,9 +245,16 @@ function run(argv) {
         // the CLI's own step (factory record decompose runs it; the main session may too): lint,
         // and per policy a dry-run of every verify command in a scratch worktree inside the
         // proposed build environment. Never a factory agent's (the guard refuses it too).
+        // the detached run's own process (started by the managed run below)
+        if (opt.child && process.env.FACTORY_PROBE_CHILD === opt.child) return C('probe').runChild(root, { jobId: state.id, probeId: opt.child, budget: Number(opt.budget) || null });
         C('agents-open').refuseWhileAgentsWork(root, 'plan probe');
-        const r = C('probe').run(root, { jobId: state.id });
-        if (!r.ok) process.exitCode = 1;
+        // detached, bounded by this call's time, picked up again by the next call (review MAJ-2)
+        const r = C('probe').runManaged(root, { jobId: state.id });
+        if (!r.pending && !r.parked && !r.skipped) C('record').probeRecorded(root, state.id, r);
+        // still running: noted, so the router sees the step moved on (not the repeat guard's no progress)
+        if (r.pending) C('ledger').append(root, state.id, { kind: 'step', step: 'plan_probe', ok: false, detail: { pending: true, started: Boolean(r.started), probe_id: r.probe_id || null } });
+        // a probe that found problems is a result, not a failure of the drive's step
+        if (!r.ok && !r.pending && !process.env.FACTORY_DRIVE) process.exitCode = 1;
         return r;
       }
       return fail('plan validate | from-contract | probe', 'bad_input');
@@ -269,6 +279,12 @@ function run(argv) {
         if (!['done', 'blocked'].includes(status)) fail('task built <T1> --status done|blocked [--reason needs_paths|dependency_conflict|environment_broken] [--paths a,b] [--summary "…"]', 'bad_input');
         if (opt.reason && !['needs_paths', 'dependency_conflict', 'environment_broken'].includes(opt.reason)) fail('--reason is needs_paths, dependency_conflict or environment_broken', 'bad_input');
         const jid = C('job').resolve(R(), J).id;
+        // only for a task with an attempt open (review MAJ-4): no builder pre-claims another task
+        const open = (C('job').load(R(), jid).tasks || {})[id] || {};
+        const paths0 = String(opt.paths || '').split(',').map((x) => x.trim()).filter(Boolean);
+        // (a builder whose task start refused, environment_broken or dependency_conflict, has no
+        // attempt yet and may still say so)
+        if (!(open.attempts > 0) && (paths0.length || status === 'done')) fail(`${id} has no attempt open (task start was not run for it): "task built" records the reply of the builder working on that task only.`, 'no_open_attempt');
         const paths = String(opt.paths || '').split(',').map((x) => x.trim()).filter(Boolean);
         const rec = t.afterBuilder(R(), jid, id, { status, summary: opt.summary || '', ...(status === 'blocked' && opt.reason ? { blocked_reason: opt.reason } : {}), ...(paths.length ? { needs_paths: paths } : {}) }, { label: `build ${id}` });
         return { job: jid, task: id, recorded: (C('job').load(R(), jid).tasks[id] || {}).builder || null, ...(rec && rec.granted ? { granted: rec.granted, refused: rec.grant_refused || [] } : {}) };

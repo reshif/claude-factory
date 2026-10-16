@@ -76,7 +76,8 @@ test('e2e: a five-task, three-wave feature@medium job with a crashing builder, a
   fs.writeFileSync(path.join(F.jobDir(root, J), 'plan.json'), JSON.stringify(PLAN));
   const v = F.cli(root, ['plan', 'validate']);
   assert.equal(v.valid, true, JSON.stringify(v));
-  assert.equal(F.record(root, F.envelope(b, 'ok', { planner: { valid: true, errors: [], path: 'plan.json' }, critique: null, phase: b.phase })).status, 'retry', 'the probe ran; the plan critique is next');
+  assert.equal(F.record(root, F.envelope(b, 'ok', { planner: { valid: true, errors: [], path: 'plan.json' }, critique: null, phase: b.phase })).status, 'retry', 'the plan is valid: the CLI probes it next');
+  assert.equal(F.nextPast(root).workflow, 'decompose', 'the probe ran; the plan critique is next');
   b = F.cli(root, ['wfargs', 'decompose']);
   assert.equal(b.phase, 'critique');
   F.record(root, F.envelope(b, 'ok', { planner: { valid: true, errors: [], path: 'plan.json' }, critique: { verdict: 'approve', items: [] }, phase: 'critique' }));

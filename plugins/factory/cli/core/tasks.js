@@ -283,7 +283,10 @@ function afterBuilder(root, jobId, taskId, result, { startedAt, label, outcome: 
   // contract. The reply carries what was granted, so realize runs the task again without an attempt.
   let g = null;
   if (r && r.status === 'blocked' && r.blocked_reason === 'needs_paths' && (r.needs_paths || []).length) {
-    const { refused, want } = grantCheck(root, state, taskId, r.needs_paths);
+    // one grant per attempt (review MAJ-4): a builder cannot collect more by calling again
+    const again = (t.grants || []).some((x) => x.attempt === attempt);
+    const chk = again ? { refused: r.needs_paths.map((p) => ({ path: p, why: `this attempt (${attempt}) already had its grant: one grant per attempt` })), want: [] } : grantCheck(root, state, taskId, r.needs_paths);
+    const { refused, want } = chk;
     g = refused.length ? { granted: [], refused } : { granted: want, refused: [] };
     if (!refused.length && want.length) {
       t.granted_paths = [...new Set([...(t.granted_paths || []), ...want])];
@@ -482,9 +485,10 @@ function verify(root, jobId, taskId) {
 
 // A task's allowed paths as they are now: the plan's, plus the paths realize granted it inside
 // the contract's allowed paths (grant below). The guard and the drift check use the same union.
+// A granted path is one exact file ("=path"): never a subtree (review MAJ-4).
 function taskPaths(state, task) {
   const t = ((state && state.tasks) || {})[task.id] || {};
-  return [...(task.allowed_paths || []), ...(t.granted_paths || [])];
+  return [...(task.allowed_paths || []), ...(t.granted_paths || []).map((p) => require('../lib/glob').exact(p))];
 }
 
 // `factory task grant <T> --paths a,b` (factory run's own step in realize, 0.10.0): a builder
@@ -493,6 +497,27 @@ function taskPaths(state, task) {
 // the contract, never another task's file. All or nothing; at most a few per task. Anything else
 // stays a needs_paths park (an amendment the human approves).
 const MAX_GRANTS = 6;
+// What a path is on the job branch, the base commit or disk: 'tree', 'blob' or null (not there).
+function pathKind(root, state, p) {
+  for (const ref of [state.branch, state.base_commit].filter(Boolean)) {
+    const r = git.run(root, ['cat-file', '-t', `${ref}:${p}`], { allowFail: true });
+    if (r.code === 0) return String(r.stdout).trim();
+  }
+  try {
+    return fs.statSync(path.join(root, p)).isDirectory() ? 'tree' : 'blob';
+  } catch {
+    return null;
+  }
+}
+// A file a builder may create: an existing file, or a name with a file's shape (an extension, or
+// one of the usual extensionless files). A new name without one could be a directory (review MAJ-4).
+const FILE_NAMES = /^(Makefile|GNUmakefile|Dockerfile|Containerfile|Procfile|Gemfile|Rakefile|Jenkinsfile|Vagrantfile|Brewfile|LICENSE|NOTICE|README|CHANGELOG|CODEOWNERS|AUTHORS|\.[\w.-]+)$/;
+function fileLike(root, state, p) {
+  const k = pathKind(root, state, p);
+  if (k) return k === 'blob';
+  const base = p.split('/').pop();
+  return /\.[A-Za-z0-9]{1,10}$/.test(base) || FILE_NAMES.test(base);
+}
 // A directory on the base commit, the job branch or disk (a grant names files only).
 function isDirectory(root, state, p) {
   for (const ref of [state.branch, state.base_commit].filter(Boolean)) {
@@ -523,6 +548,8 @@ function grantCheck(root, state, taskId, paths) {
           ? 'not a path inside the repository'
           : p.endsWith('/') || isDirectory(root, state, p)
             ? 'a directory: only single files are granted (a directory covers files other tasks may own)'
+          : !fileLike(root, state, p)
+            ? 'not a file: a new path without an extension could be a directory; name the file itself (e.g. src/util/index.js)'
           : p.startsWith('.factory/') || p.startsWith('.git/')
             ? 'factory or git state'
             : matchesAny(p, pol.protected_paths || [])
@@ -533,7 +560,7 @@ function grantCheck(root, state, taskId, paths) {
                   ? `outside the contract's allowed paths (${allowed.join(', ') || 'none'}): only an amendment the human approves widens them`
                   : (() => {
                       // another task's file, or a path under this one (a file of the same name as a directory it owns)
-                      const other = plan.tasks.find((x) => x.id !== taskId && (matchesAny(p, taskPaths(state, x)) || taskPaths(state, x).some((y) => String(y).replace(/^\.\/+/, '').startsWith(`${p}/`))));
+                      const other = plan.tasks.find((x) => x.id !== taskId && (matchesAny(p, taskPaths(state, x)) || taskPaths(state, x).some((y) => String(y).replace(/^=/, '').replace(/^\.\/+/, '').startsWith(`${p}/`))));
                       return other ? `${other.id}'s path: give it to one task by amending the plan` : null;
                     })();
     if (why) refused.push({ path: p || raw, why });

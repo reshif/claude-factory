@@ -74,7 +74,8 @@ function taskScope(root, worktreeName) {
   // plus the paths realize granted a task inside the contract (cli/core/tasks.js grant), kept in
   // the job's sealed state
   const st = readJson(path.join(root, '.factory', 'jobs', m[1], 'state.json'), null) || {};
-  const granted = (id) => (((st.tasks || {})[id] || {}).granted_paths || []).filter((x) => typeof x === 'string');
+  // exact files ("=path"): a granted name never covers a subtree (review MAJ-4)
+  const granted = (id) => (((st.tasks || {})[id] || {}).granted_paths || []).filter((x) => typeof x === 'string').map((x) => `=${x.replace(/^=/, '')}`);
   if (m[2]) {
     const t = plan.tasks.find((x) => x.id === m[2]);
     return { paths: t ? [...(t.allowed_paths || []), ...granted(t.id)] : [], job: m[1], task: m[2] };
@@ -194,8 +195,9 @@ function isHumanOnly(a, b) {
 // The main session's own verbs: factory drive steps the job's router, factory inbox lists what
 // waits on the user. A factory agent runs neither (the CLI refuses them too while a factory agent
 // is at work: cli/core/agents-open.js).
-const MAIN_ONLY = new Set(['drive', 'inbox']);
-const mainOnlyMessage = (a) => `"factory ${a}" is the main session's (it steps the job, lists what waits on the user or records what the user said), never a factory agent's. Return your result in your final message.`;
+// record too: recording a workflow's result runs the plan probe and the dependency fetch (review MAJ-1)
+const MAIN_ONLY = new Set(['drive', 'inbox', 'record']);
+const mainOnlyMessage = (a) => `"factory ${a}" is the main session's (it steps the job, records a workflow's result, lists what waits on the user or records what the user said), never a factory agent's. Return your result in your final message.`;
 
 // The CLI's own steps around the critics with evidence (0.10.0): the dependency download, the
 // plan probe (it runs commands) and a task grant (it gives a task more paths). The main session
@@ -661,6 +663,13 @@ function checkCommand(cmd, pipeline, ctx, depth, collect) {
             const v = fed.find((x) => MAIN_ONLY.has(x)) || (fed.includes('clarify') && ['reply', 'redirect', 'note'].find((x) => fed.includes(x)) ? 'clarify' : null);
             if (v) return mainOnlyMessage(v);
           }
+        }
+        // the CLI's own steps (deps fetch, plan probe, task grant), their verb or its second word
+        // fed on stdin or after ::: (review MAJ-1): `echo probe | xargs factory plan`
+        if (ctx.agent) {
+          const words = [a, b, ...fed].filter((x) => typeof x === 'string');
+          const r = Object.entries(AGENT_REFUSED).find(([x, ys]) => words.includes(x) && ys.some((y) => words.includes(y)));
+          if (r) return agentRefusedMessage(r[0], r[1].find((y) => words.includes(y)));
         }
       }
       if (a && isHumanOnly(a, b)) return humanMessage(a, b);

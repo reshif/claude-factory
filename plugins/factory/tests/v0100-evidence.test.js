@@ -549,7 +549,8 @@ function toDecompose(root, J) {
 }
 
 test('decompose: probe problems go back to the planner with the raw output until they stop shrinking; the plan critique runs with the probe as evidence', async (t) => {
-  // claude-factory: the CLI runs the probe in factory record; decompose runs as a plan phase and a
+  // claude-factory: the probe is the CLI's own step (factory plan probe, which the drive runs after
+  // a valid plan; review MAJ-2: never inside factory record); decompose runs as a plan phase and a
   // critique phase (a workflow cannot run a command)
   const root = F.makeRepo(t);
   const J = F.cli(root, ['job', 'new', '--title', 'x', '--type', 'feature', '--risk', 'medium']).job;
@@ -567,16 +568,20 @@ test('decompose: probe problems go back to the planner with the raw output until
       write(cmdFor());
       return { valid: true, errors: [], path: planFile, summary: 's' };
     });
-    return { brief, rec: F.record(root, out.result) };
+    const rec = F.record(root, out.result);
+    // the router names the probe next: what the drive runs
+    const pr = rec.probe_pending ? (assert.match(next(root).command, /factory plan probe/), F.probe(root)) : null;
+    return { brief, rec, probe: pr };
   };
   let r = await step(() => 'vlan-check --strict && node tests/add.test.js');
   assert.equal(r.brief.phase, 'plan');
   assert.equal(r.rec.status, 'retry', JSON.stringify(r.rec));
-  assert.match(r.rec.errors.join('\n'), /vlan-check.*not found in the build environment/);
+  assert.equal(r.rec.probe_pending, true);
+  assert.match(r.probe.problems.join('\n'), /vlan-check.*not found in the build environment/);
   r = await step(() => 'node tests/add.test.js');
   assert.match(texts[1].text, /plan probe found these problems[\s\S]*vlan-check/, 'the planner gets the probe\'s raw output');
   assert.equal(r.rec.status, 'retry');
-  assert.equal(r.rec.critique_pending, true);
+  assert.equal(r.probe.ok, true);
   r = await step(() => 'node tests/add.test.js');
   assert.equal(r.brief.phase, 'critique');
   assert.match(texts[2].text, /INPUTS \(the plan probe's record[\s\S]*fails_as_expected/, 'the plan critique reads the probe\'s record as evidence');
@@ -593,7 +598,8 @@ test('decompose: probe problems go back to the planner with the raw output until
   const plan2 = path.join(F.jobDir(root2, J2), 'plan.json');
   const models = [];
   let rec;
-  for (let i = 0; i < 6; i++) {
+  for (let i = 0; i < 8; i++) {
+    if (/plan probe/.test(next(root2).command || '')) F.probe(root2);
     const brief = F.cli(root2, ['wfargs', 'decompose']);
     const out = await H.run(W, brief, (prompt, o) => {
       if (o.agentType === 'factory:god-eye') return { verdict: 'approve', items: [] };
@@ -633,6 +639,7 @@ test('combined gate: medium H3 binds design + plan + environment; approving it s
   fs.writeFileSync(path.join(F.jobDir(root, J), 'plan.json'), JSON.stringify({ tasks: [{ id: 'T1', objective: 'fix', allowed_paths: ['src/add.js'], criteria_ids: ['AC-1'], verify_commands: ['node tests/add.test.js'] }] }));
   // the planner's environment (it only exports a variable: nothing to install)
   fs.writeFileSync(core('environment').JOB_PROPOSED(root, J), JSON.stringify({ version: 1, name: 'node-plain', setup: ['true'], env: { NODE_ENV: 'test' } }));
+  F.probe(root); // the CLI's step (review MAJ-2), here before the record
   assert.equal(F.record(root, F.envelope(b, 'ok', { planner: { valid: true, errors: [], path: 'plan.json' }, critique: { verdict: 'approve', items: [] } })).status, 'ok');
   let n = next(root);
   assert.equal(n.step, 'H3');
@@ -705,7 +712,7 @@ test('realize: needs_paths inside the contract\'s allowed paths are granted (nev
   assert.match(G.grant(root, J, 'T1', ['src']).refused[0].why, /a directory/);
   assert.match(G.grant(root, J, 'T1', ['src/']).refused[0].why, /a directory/);
   assert.match(G.grant(root, J, 'T1', ['src/new/']).refused[0].why, /a directory/);
-  assert.match(G.grant(root, J, 'T1', ['.factory/jobs/x']).refused[0].why, /outside the contract|factory or git state/);
+  assert.match(G.grant(root, J, 'T1', ['.factory/jobs/x']).refused[0].why, /outside the contract|factory or git state|not a file/);
   const b = F.cli(root, ['wfargs', 'realize']);
   let calls = 0;
   const r = await H.run(path.join(F.PLUGIN, 'workflows', 'realize.js'), b, (prompt, o) => {

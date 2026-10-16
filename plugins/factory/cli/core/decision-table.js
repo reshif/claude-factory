@@ -41,6 +41,7 @@ const PARK_NEXT = {
   design: 'The design critique did not approve and no human gate reviews it: reply "resume" for another round, or say what must change.',
   integration: 'Answer the question above in your own words (it resumes the job with them), or amend the plan.',
   epic_gate: 'Decide: a new slice (amend the epic) or a fix job for a merged slice.',
+  plan_probe: 'The plan probe was interrupted twice: answer the question (a: lint only, b: run factory plan probe in your own terminal, then resume, c: no probe for this job).',
   manual: 'Parked by hand: reply "resume" when ready, or "cancel job".',
   other: 'Read factory why --format md, then reply "resume", "cancel job" or "abandon job".',
 };
@@ -233,6 +234,11 @@ function stepAction(ctx, s) {
     }
     if (s.step === 'decide') a.threat_model = s.threat_model === 'policy' ? state.risk === 'high' : Boolean(s.threat_model);
     if (s.step === 'decompose' && s.plan_critique) a.plan_critique = true;
+    // the plan probe is the CLI's own step, never inside a record (review MAJ-2): the drive runs
+    // it as a long step in a fresh call; it runs detached and the next call picks up its result
+    if (s.step === 'decompose' && a.workflow === 'decompose' && !state.epic && ctx.b && require('./wfargs').decomposePhase(ctx.root, state, ctx) === 'probe') {
+      return { ...base, step: 'plan_probe', action: 'cli', command: `factory plan probe --job ${state.id}`, reason: 'The plan is valid: the plan probe runs its verify commands in the build environment before God Eye critiques it.' };
+    }
     return a;
   }
   if (s.run.startsWith('cli:')) return { ...base, action: 'cli', command: `factory ${s.run.slice(4)} --job ${state.id}` };

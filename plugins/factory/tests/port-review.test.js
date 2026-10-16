@@ -71,16 +71,16 @@ test('B1: the reply hook refuses a prompt Claude scheduled or sent (once), and a
   // the note was used once: the user typing it now is theirs
   assert.equal(F.say(root, 'approve').status, 'applied');
   assert.ok(stateOf(root, 'J-0001').approvals.H1);
-  // the shared parser: what the hook takes as a reply, the guard refuses to schedule
-  for (const t of ['approve', 'deny needs tests', 'resume', 'proceed', 'merged abc1234', 'confirm AC-1', 'accept lesson L1', 'accept brief P2', 'ok', 'ok, but 2 b', '1 a', 'fact 1: it is 3.11', 'dismiss finding code-1 not real']) assert.ok(O.looksLikeReply(t), t);
-  for (const t of ['check the nightly build', 'run factory drive', 'remind me tomorrow about the release']) assert.ok(!O.looksLikeReply(t), t);
+  // the shared reader (human.readReply, review B1): what the hook takes as a reply, the guard refuses to schedule
+  for (const t of ['approve', 'deny needs tests', 'resume', 'proceed', 'merged abc1234', 'confirm AC-1', 'accept lesson L1', 'accept brief P2', 'ok', 'ok, but 2 b', '1 a', 'fact 1: it is 3.11', 'dismiss finding code-1 not real']) assert.ok(core('human').readReply(t).reply, t);
+  for (const t of ['check the nightly build', 'run factory drive', 'remind me tomorrow about the release']) assert.ok(!core('human').readReply(t).reply, t);
 });
 
 test('B1: the inspector\'s own replies (marking findings, modes) are refused when Claude scheduled them, and the factory guard refuses scheduling them', () => {
   const root = F.makeRepo();
   newJob(root);
   const O = core('reply-origin');
-  assert.ok(O.looksLikeReply('ack finding F1') && O.looksLikeReply('inspect mode all off'));
+  assert.ok(core('human').readReply('ack finding F1').reply && core('human').readReply('inspect mode all off').reply);
   assert.ok(denied(guard(root, { tool_name: 'CronCreate', tool_input: { prompt: 'wontfix finding F2 noise' } })));
   O.record(root, 'ack finding F1', { tool: 'SendMessage' });
   const r = spawnSync('node', [path.join(F.PLUGIN, '..', 'factory-inspector', 'hooks', 'prompt.js')], { input: JSON.stringify({ cwd: root, prompt: 'ack finding F1', hook_event_name: 'UserPromptSubmit' }), encoding: 'utf8' });

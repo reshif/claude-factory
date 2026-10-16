@@ -576,7 +576,9 @@ function decomposePhase(root, state, ctx) {
   const pr = require('./probe').current(root, state);
   const loops = state.loops || {};
   const stopped = (l) => Boolean(l && l.level >= 3);
-  if (!pr || (!pr.ok && !stopped(loops.probe))) return 'plan';
+  // a valid plan with no probe record yet: the probe runs next, as its own CLI step (review MAJ-2)
+  if (!pr) return 'probe';
+  if (!pr.ok && !stopped(loops.probe)) return 'plan';
   const c = readJson(path.join(jp.critiquesDir, 'plan.json'), null);
   if (c && c.hash === ctx.b.plan) return 'plan';
   if (stopped(loops.plan_critique)) return 'plan';
@@ -844,4 +846,4 @@ function currentInputHash(root, state, envelope) {
   }
 }
 
-module.exports = { build, currentInputHash, loopModel, humanNotes, prompt, roleBody, roleTools, toolsText, cli, agentSpec, roleModel, builderSpec, modelsOff, ROLE_OUTPUTS };
+module.exports = { decomposePhase, build, currentInputHash, loopModel, humanNotes, prompt, roleBody, roleTools, toolsText, cli, agentSpec, roleModel, builderSpec, modelsOff, ROLE_OUTPUTS };

@@ -367,4 +367,19 @@ function jobDir(root, id) {
   return path.join(root, '.factory', 'jobs', id);
 }
 
-module.exports = { PLUGIN, BIN, sh, write, makeRepo, cli, reply, say, built, clarify, relayVerify, relayWave, contractText, envelope, record, jobDir, adrText, noAdrText, threatModelText, recommendationText, contractsDocText, DIAGRAM };
+// The plan probe is the CLI's own step after a valid plan (review MAJ-2: never inside factory
+// record): what factory drive runs when factory next names it. probe(root) runs it; next(root)
+// runs it whenever factory next asks for it and returns the next other action.
+function probe(root) {
+  return cli(root, ['plan', 'probe'], { allowFail: true });
+}
+function nextPast(root) {
+  let n = cli(root, ['next']);
+  for (let i = 0; i < 4 && n.action === 'cli' && /plan probe/.test(n.command || ''); i++) {
+    probe(root);
+    n = cli(root, ['next']);
+  }
+  return n;
+}
+
+module.exports = { probe, nextPast, PLUGIN, BIN, sh, write, makeRepo, cli, reply, say, built, clarify, relayVerify, relayWave, contractText, envelope, record, jobDir, adrText, noAdrText, threatModelText, recommendationText, contractsDocText, DIAGRAM };

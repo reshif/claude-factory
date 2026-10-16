@@ -7,7 +7,9 @@ const { sha256, canonical } = require('./io');
 const RISKS = ['low', 'medium', 'high'];
 const GATES = ['H1', 'H2', 'H3', 'HF', 'HS', 'EH1', 'EH2', 'EH3'];
 // Steps a router may legitimately choose that are not recipe steps.
-const SPECIAL_STEPS = new Set(['amend', 'A']);
+// plan_probe: the CLI's own step inside decompose (the plan probe, after a valid plan), never a
+// recipe step of its own
+const SPECIAL_STEPS = new Set(['amend', 'A', 'plan_probe']);
 // Steps whose completion the ledger records.
 const LEDGER_STEPS = new Set(['clarify', 'deps', 'ground', 'decide', 'decompose', 'reconcile', 'prove', 'challenge', 'ship', 'distill', 'close', 'epic_gate', 'post_merge_challenge']);
 // Decision rules that legitimately send the job backwards.

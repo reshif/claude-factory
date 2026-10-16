@@ -502,8 +502,10 @@ test('golden replay: full@high decide and decompose (options, threat model, arch
   // revise sends the plan back to the planner, and the next critique approves
   let p = await runWorkflow(root, F.cli(root, ['next']), decompose);
   assert.equal(p.record.status, 'retry', JSON.stringify(p.record));
-  assert.equal(p.record.critique_pending, true, 'the probe passed; the plan critique runs next');
-  for (let i = 0; i < 4 && p.record.status === 'retry'; i++) p = await runWorkflow(root, F.cli(root, ['next']), decompose);
+  // (review MAJ-2, intentional: the probe is the CLI's next step, not part of the record)
+  assert.equal(p.record.probe_pending, true, 'the plan is valid; the CLI probes it next');
+  assert.match(F.cli(root, ['next']).command, /factory plan probe/);
+  for (let i = 0; i < 4 && p.record.status === 'retry'; i++) p = await runWorkflow(root, F.nextPast(root), decompose);
   assert.equal(p.record.status, 'ok', JSON.stringify(p.record));
   assert.equal(critiques, 2, 'a golden "revise" plan critique sends the plan back once');
   const n3 = F.cli(root, ['next']);

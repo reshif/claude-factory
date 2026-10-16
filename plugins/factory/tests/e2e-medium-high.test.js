@@ -128,7 +128,11 @@ test('standard@medium: ADR and plan approved at ONE gate (H3, with the build env
   plan(root, J);
   let rd = F.record(root, F.envelope(brief, 'ok', { planner: { valid: true, errors: [], path: 'plan.json' }, critique: null, phase: 'plan' }));
   assert.equal(rd.status, 'retry', JSON.stringify(rd));
-  assert.equal(rd.critique_pending, true, 'the probe passed; God Eye critiques the probed plan next');
+  // (review MAJ-2, intentional) the probe is the CLI's own next step, then God Eye
+  assert.equal(rd.probe_pending, true, 'the plan is valid; the CLI probes it next');
+  assert.match(next(root).command, /factory plan probe --job J-0001/);
+  assert.equal(F.probe(root).ok, true);
+  assert.equal(next(root).workflow, 'decompose', 'the probe passed; God Eye critiques the probed plan next');
   brief = F.cli(root, ['wfargs', 'decompose']);
   assert.equal(brief.phase, 'critique');
   assert.match(fs.readFileSync(brief.critique.prompt.split('\n')[1].trim(), 'utf8'), /INPUTS \(the plan probe's record/, 'the plan critique reads the probe record');
@@ -225,9 +229,13 @@ test('full@high: threat model required, H2 and H3 human, HS before ship, trial r
   assert.equal(next(root).step, 'H2');
   F.reply(root, 'approve');
   n = next(root);
-  brief = F.cli(root, ['wfargs', 'decompose']);
   plan(root, J);
-  F.record(root, F.envelope(brief, 'ok', { planner: { valid: true, errors: [], path: 'plan.json' }, critique: null }));
+  // the CLI's probe step (review MAJ-2), then the decompose workflow's critique phase
+  const pr0 = F.probe(root);
+  assert.ok(pr0.ok !== undefined && !pr0.error, JSON.stringify(pr0).slice(0, 400));
+  brief = F.cli(root, ['wfargs', 'decompose']);
+  const rdp = F.record(root, F.envelope(brief, 'ok', { planner: { valid: true, errors: [], path: 'plan.json' }, critique: { verdict: 'approve', items: [] }, phase: brief.phase }));
+  assert.equal(rdp.status, 'ok', JSON.stringify(rdp));
   assert.equal(next(root).step, 'H3');
   F.reply(root, 'approve');
   buildAll(root, J);
@@ -298,9 +306,13 @@ function toShip(root, risk, h) {
     F.reply(root, 'approve');
   }
   next(root);
-  brief = F.cli(root, ['wfargs', 'decompose']);
   plan(root, J);
-  F.record(root, F.envelope(brief, 'ok', { planner: { valid: true, errors: [], path: 'plan.json' }, critique: null }));
+  // the CLI's probe step (review MAJ-2), then the decompose workflow's critique phase
+  const pr0 = F.probe(root);
+  assert.ok(pr0.ok !== undefined && !pr0.error, JSON.stringify(pr0).slice(0, 400));
+  brief = F.cli(root, ['wfargs', 'decompose']);
+  const rdp = F.record(root, F.envelope(brief, 'ok', { planner: { valid: true, errors: [], path: 'plan.json' }, critique: { verdict: 'approve', items: [] }, phase: brief.phase }));
+  assert.equal(rdp.status, 'ok', JSON.stringify(rdp));
   assert.equal(next(root).step, 'H3');
   F.reply(root, 'approve');
   buildAll(root, J);

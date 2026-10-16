@@ -156,7 +156,8 @@ function drivingAnswer(st, jobId) {
 function runChild(ctx, args, { jobId = ctx.job } = {}) {
   const a = [path.join(PLUGIN_ROOT, 'bin', 'factory'), '--root', ctx.root, ...args];
   if (jobId && !args.includes('--job')) a.push('--job', jobId);
-  const env = { ...process.env, FACTORY_ROOT: ctx.root, FACTORY_DRIVE: String(process.pid) };
+  // the drive's deadline: a step that bounds itself (the plan probe) fits inside this call
+  const env = { ...process.env, FACTORY_ROOT: ctx.root, FACTORY_DRIVE: String(process.pid), FACTORY_DRIVE_DEADLINE: String((ctx.t0 || Date.now()) + ceilingMs() - 45000) };
   const r = spawnSync(process.execPath, a, { cwd: ctx.root, env, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: 64 * 1024 * 1024, windowsHide: true });
   let json = null;
   try {
@@ -524,8 +525,10 @@ function acquire(root, jobId) {
 }
 
 // What to do before a step (null: run it), from what the drive record remembers.
+// the plan probe runs the project's commands too (review MAJ-2)
+const isLong = (label, verb) => LONG.has(verb || String(label).split(' ')[0]) || /^plan probe\b/.test(String(label));
 function longStepDecision({ label, verb, killedIn, durations, elapsedSec, job, ceiling = ceilingMs() }) {
-  if (!LONG.has(verb)) return null;
+  if (!isLong(label, verb)) return null;
   const took = (durations || {})[label];
   const command = `factory ${label}${label.includes('--job') ? '' : ` --job ${job}`}`;
   if (killedIn && killedIn.step === label && killedIn.count >= 2) return { kind: 'step_too_long', extra: { step: label, command, why: `was stopped ${killedIn.count} times while running` } };
@@ -579,7 +582,7 @@ function drive(root, { jobId, record = null, lessons = null, maxSteps = MAX_STEP
     return d ? ctx.stop(d.kind, n, d.extra) : null;
   };
   ctx.timed = (label, fn) => {
-    const long = LONG.has(String(label).split(' ')[0]);
+    const long = isLong(label);
     ctx.beat(label, { step_long: long, step_started_at: nowIso() });
     const t = Date.now();
     const r = fn();

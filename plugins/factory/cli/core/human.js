@@ -271,16 +271,23 @@ function splitResume(state, step) {
 // Only an explicit grant counts: "+N%" or "budget N" (N agent runs in all, more than now). Words
 // that merely mention a number ("try 50% faster"? no "+") or "double" grant nothing; an option
 // letter of the budget question is mapped to its text ("+100% …") by replyToPark first.
+// The grant must be the whole reply ("+50%", "resume +50%", "budget +50%", "budget 40"), or the
+// budget question's own option text, which ends in its reply form ("… (resume +50%)"): "+20%"
+// inside other words ("make it +20% faster") grants nothing (review m6).
+const GRANT_PCT = /^(?:(?:resume|budget)\s+)?\+\s*(\d{1,3})\s*%$/;
+const GRANT_OPT = /\(resume\s+\+(\d{1,3})%\)$/;
+const GRANT_ABS = /^budget\s+(\d{1,5})$/;
 function budgetGrant(words, current = null) {
-  const t = String(words || '').toLowerCase().trim();
+  const t = String(words || '').toLowerCase().trim().replace(/[.!]+$/, '');
   if (!t) return null;
   let m;
-  if ((m = /(?:^|[\s(])\+\s*(\d{1,3})\s*%/.exec(t))) return Number(m[1]) > 0 ? 1 + Math.min(300, Number(m[1])) / 100 : null;
-  if ((m = /(?:^|\s)budget\s+(\d{1,5})\b/.exec(t)) && current) return Number(m[1]) > current ? Number(m[1]) / current : null;
+  if ((m = GRANT_PCT.exec(t) || GRANT_OPT.exec(t))) return Number(m[1]) > 0 ? 1 + Math.min(300, Number(m[1])) / 100 : null;
+  if ((m = GRANT_ABS.exec(t)) && current) return Number(m[1]) > current ? Number(m[1]) / current : null;
   return null;
 }
 
-function needsGrant(state, words) {
+function needsGrant(state, words, optionText = null) {
+  if (optionText && budgetGrant(optionText)) return false;
   return Boolean(state.park && (state.park.kind === 'budget' || state.park.from === 'budget') && !budgetGrant(words, state.policy && state.policy.limits && state.policy.limits.max_agent_runs_per_job));
 }
 
@@ -306,16 +313,33 @@ function resume(root, { jobId, step, words: given = null, channel }) {
 // b", "b: …", or starting with the option's words), "yes" to a stored answer the factory asked
 // about, or words about the question itself (they share its significant words). Returns the
 // words the agents get (an option's text, with anything added after it) or null.
+// The forms a park answer takes (shared with readReply, so the guard knows them too): an option
+// ("b", "2", "b)", "(b)", "option b", "b: …"), or yes to a stored answer.
+const PARK_OPTION = /^(?:option\s+([a-z]|\d{1,2})|\(([a-z]|\d{1,2})\)|([a-z]|\d{1,2})\))(?:\s*[:.,\u2014\u2013-]?\s*(.*))?$/is;
+const PARK_LETTER = /^([a-z]|\d{1,2})(?:\s*[:.,\u2014\u2013-]\s*(.*))?$/is;
+const PARK_CONFIRM = /^(y|yes|yep|yeah|yes please|ok|okay|sure|confirm|confirmed|use it|use that|do it|do that|go with it|go ahead)[.!]?$/i;
+// A stored answer is confirmed only while the park it was given to is still the one waiting, and
+// for a day at most (review m4): a later "yes" to something else never resumes with old words.
+const PENDING_MS = 24 * 3600e3;
+function pendingLive(park) {
+  const pa = park && park.pending_answer;
+  if (!pa) return false;
+  if ((pa.park_at || null) !== (park.at || null)) return false;
+  return Date.now() - Date.parse(pa.at || 0) < PENDING_MS;
+}
 const PARK_STOP = new Set('this that with from your have will them they what when where which would could should about into only also just then than were been their there here more some such very much does make like want need please okay sure think maybe test tests build builds job jobs factory file files code thing things good fine looks look check work works done'.split(' '));
+// Paths and file names are not words about the question (review m5): "show me the
+// diff for src/add.js" does not answer a question that names src/add.js.
 function sigWords(text) {
-  return new Set((String(text || '').toLowerCase().match(/[a-z0-9_][a-z0-9_.-]{3,}/g) || []).map((w) => w.replace(/[.-]+$/, '')).filter((w) => w.length >= 4 && !PARK_STOP.has(w)));
+  const raw = String(text || '').split(/\s+/).filter((w) => !/[/\\]|\w\.[A-Za-z0-9]{1,6}\b/.test(w));
+  return new Set((raw.join(' ').toLowerCase().match(/[a-z0-9_][a-z0-9_-]{3,}/g) || []).map((w) => w.replace(/-+$/, '')).filter((w) => w.length >= 4 && !PARK_STOP.has(w)));
 }
 function parkAnswer(state, text) {
   const park = state.park || {};
   const t = String(text || '').trim();
   const opts = (park.options || []).map((o, i) => ({ key: String(o.key || String.fromCharCode(97 + i)).toLowerCase(), text: String(o.text || '') }));
-  if (park.pending_answer && /^(y|yes|yep|yes please|ok|okay|sure|confirm|use it|do it)[.!]?$/i.test(t)) return { words: park.pending_answer.words, via: 'confirmed' };
-  const m = /^(?:option\s+([a-z]|\d{1,2})|\(([a-z]|\d{1,2})\)|([a-z]|\d{1,2})\))(?:\s*[:.,\u2014\u2013-]?\s*(.*))?$/is.exec(t) || /^([a-z]|\d{1,2})(?:\s*[:.,\u2014\u2013-]\s*(.*))?$/is.exec(t);
+  if (pendingLive(park) && PARK_CONFIRM.test(t)) return { words: park.pending_answer.words, via: 'confirmed' };
+  const m = PARK_OPTION.exec(t) || PARK_LETTER.exec(t);
   if (m && opts.length) {
     const key = String(m[1] || m[2] || m[3] || '').toLowerCase();
     const rest = String((m.length > 4 ? m[4] : m[2]) || '').trim();
@@ -345,10 +369,10 @@ function replyToPark(root, { jobId, text, channel }) {
   if (!raw) fail('Say your answer.', 'bad_input');
   const ans = parkAnswer(state, raw);
   const words = ans ? ans.words : raw;
-  if (needsGrant(state, words)) fail(GRANT_MSG(state), 'needs_grant');
+  if (needsGrant(state, words, ans && ans.option ? ans.optionText : null)) fail(GRANT_MSG(state), 'needs_grant');
   const question = (state.park && state.park.question) || String((state.park && state.park.reason) || 'why the job parked').split('\n')[0].slice(0, 300);
   if (!ans) {
-    state.park = { ...state.park, pending_answer: { words: raw.slice(0, 2000), at: nowIso() } };
+    state.park = { ...state.park, pending_answer: { words: raw.slice(0, 2000), at: nowIso(), park_at: (state.park && state.park.at) || null } };
     job.save(root, state);
     log(root, state, 'park_answer_pending', { channel, words: raw.slice(0, 500) });
     return { job: state.id, resumed: false, pending: true, question, message: `Nothing was resumed. Use this as your answer to "${question}"? Reply "yes" to resume ${state.id} with it (or answer the question).` };
@@ -390,9 +414,20 @@ function applyResume(root, state, { step = null, via = null, words = null, optio
   if (from === 'clarify' || require('./clarify').inClarify(state)) require('./clarify').onResume(root, state, words);
   if (from === 'decompose') oneMore('decompose_rounds', L.max_plan_validate_rounds);
   if (from === 'reverify') state.counters.reverify_bonus = (state.counters.reverify_bonus || 0) + 1;
+  // the plan probe was interrupted twice (review MAJ-2): the answer sets how this job is probed,
+  // and the interrupted runs are forgotten (a run the human started in their terminal counts)
+  if (park.kind === 'plan_probe') {
+    if (option && option.key === 'a') state.probe_override = 'lint';
+    else if (option && option.key === 'c') state.probe_override = false;
+    try {
+      require('fs').rmSync(require('./probe').STARTED(root, state.id), { force: true });
+    } catch {
+      /* nothing started */
+    }
+  }
   let grant = null;
   if (from === 'budget' || park.kind === 'budget') {
-    grant = budgetGrant(words, L.max_agent_runs_per_job);
+    grant = (option && budgetGrant(option.text)) || budgetGrant(words, L.max_agent_runs_per_job);
     if (grant) state.policy.limits.max_agent_runs_per_job = Math.ceil(state.policy.limits.max_agent_runs_per_job * grant);
   }
   if (words) state.human_notes = [...(state.human_notes || []), { at: nowIso(), text: String(words).slice(0, 2000), from: park.kind || from || null, ...(park.question ? { question: park.question } : {}), ...(option ? { option: option.key, option_text: String(option.text || '').slice(0, 600), ...(option.extra ? { added: String(option.extra).slice(0, 1400) } : {}) } : {}) }].slice(-10);
@@ -583,6 +618,42 @@ function parseBatch(text) {
   return { cmd: 'batch', parts: parsed.map((x, i) => ({ ...x, text: parts[i] })) };
 }
 
+// Every way a message can be taken as the user's reply, without the job's state: the one reader
+// the prompt hook dispatches on and the guard refuses to schedule or send (review B1). An exact
+// reply or a ";" batch (parsed), a near miss (a hint, never applied), and the forms the hook hands
+// to clarify (ok, "ok, but …", a sheet answer), to a park (an option letter or number, "option b",
+// "yes"/"do it"/"use it" to a stored answer, a budget grant) or to the inspector (marking
+// findings, modes). Any line or ";"-part counts: a batch with one exact part reads as a reply.
+const SHEET = /^\s*(\d{1,2}\s*[:.)]?\s*(?:[a-e]\b|defer\b|other\b|:)|fact\s+\d+\s*:)/i;
+const INSPECTOR = /^\s*((ack|fixed|wontfix|reopen)\s+finding\s+F\d+|inspect\s+mode\s+\S+\s+(on|off|sample))\b/i;
+// Never a reply: a slash command, a factory command, a question to the assistant, or text wrapped
+// as a notification or message (the prompt hook applies none of these).
+const NOT_A_REPLY = (t) => /^\//.test(t) || /\?\s*$/.test(t) || /^factory\s+\w/i.test(t) || /^\s*</.test(t);
+function readReply(text) {
+  const t = String(text || '').trim();
+  const out = { text: t, parsed: null, miss: null, forms: [], reply: false, words: t ? t.split(/\s+/).length : 0, clearlyNot: false };
+  if (!t) return { ...out, clearlyNot: true };
+  out.parsed = parseReply(t) || parseBatch(t);
+  out.miss = out.parsed ? null : nearMiss(t);
+  const forms = new Set();
+  if (out.parsed) forms.add(out.parsed.cmd === 'batch' ? 'batch' : 'exact');
+  if (out.miss) forms.add('near_miss');
+  const C = require('./clarify');
+  const parts = [...new Set([t, ...t.split(/\n|;/).map((x) => x.trim()).filter(Boolean)])];
+  for (const x of parts) {
+    const y = x.replace(TRAILING, '') || x;
+    if (parseReply(x)) forms.add('exact');
+    else if (nearMiss(x)) forms.add('near_miss');
+    if (C.ACCEPT.test(y) || C.ACCEPT_HEAD.test(x) || SHEET.test(x)) forms.add('clarify');
+    if (PARK_OPTION.test(y) || PARK_LETTER.test(y) || PARK_CONFIRM.test(y) || budgetGrant(y)) forms.add('park');
+    if (INSPECTOR.test(x)) forms.add('inspector');
+  }
+  out.forms = [...forms];
+  out.reply = forms.size > 0;
+  out.clearlyNot = !out.reply && NOT_A_REPLY(t);
+  return out;
+}
+
 // The exact forms, for "that was not applied" hints.
 const REPLY_FORMS = ['approve [J-0001] [H1]', 'approve ship', 'several replies in one message, separated by ";"', 'deny [J-0001] <reason>', 'resume [J-0001] [step | your answer]', 'proceed [J-0001]', 'cancel job [J-0001] [reason]', 'abandon job [J-0001] [reason]', 'waive [J-0001] <floor> <reason>', 'merged [J-0001] [sha]', 'confirm AC-1 [J-0001]', 'accept lesson L4', 'reject lesson L4 [reason]', 'accept brief P1', 'reject brief P1 [reason]', 'accept finding code-1 <reason>', 'dismiss finding code-1 <reason>', 'confirm environment [hash|none]'];
 const VERBS = ['approve', 'approved', 'deny', 'denied', 'resume', 'proceed', 'cancel', 'abandon', 'waive', 'merged', 'merge', 'confirm', 'accept', 'reject', 'dismiss', 'lgtm'];
@@ -663,4 +734,4 @@ function applyReply(root, parsed, channel = 'chat') {
   }
 }
 
-module.exports = { applyResume, replyToPark, parkAnswer, approveShip, parseBatch, budgetGrant, splitResume, snapshot, GATE_IDS, requireHumanChannel, confirmTyped, confirmationCode, CODE_ALPHABET, agentContext, testToken, AGENT_ENV, approve, deny, resume, stop, waive, merged, confirmAc, settleFinding, setEnvironment, parseReply, nearMiss, REPLY_FORMS, applyReply, sha256 };
+module.exports = { readReply, pendingLive, applyResume, replyToPark, parkAnswer, approveShip, parseBatch, budgetGrant, splitResume, snapshot, GATE_IDS, requireHumanChannel, confirmTyped, confirmationCode, CODE_ALPHABET, agentContext, testToken, AGENT_ENV, approve, deny, resume, stop, waive, merged, confirmAc, settleFinding, setEnvironment, parseReply, nearMiss, REPLY_FORMS, applyReply, sha256 };

@@ -240,7 +240,11 @@ function withBaseEnv(base, fn) {
 
 function sh(cmd, cwd, timeoutSec, extraEnv = {}) {
   const started = Date.now();
-  const r = spawnSync('bash', ['-lc', cmd], { cwd, encoding: 'utf8', timeout: timeoutSec * 1000, maxBuffer: 64 * 1024 * 1024, ...(BASE_ENV ? { stdio: ['ignore', 'pipe', 'pipe'] } : {}), env: { ...(BASE_ENV || process.env), CI: process.env.CI || '1', FACTORY_ENV_SETUP: '1', ...extraEnv } });
+  // under a base environment (the plan probe's allowlist) never a login shell: bash -l re-reads
+  // the user's profile even with HOME unset (it finds it through passwd), which can export the
+  // very tokens the allowlist removed (review MAJ-3)
+  const argv = BASE_ENV ? ['--noprofile', '--norc', '-c', cmd] : ['-lc', cmd];
+  const r = spawnSync('bash', argv, { cwd, encoding: 'utf8', timeout: timeoutSec * 1000, maxBuffer: 64 * 1024 * 1024, ...(BASE_ENV ? { stdio: ['ignore', 'pipe', 'pipe'] } : {}), env: { ...(BASE_ENV || process.env), CI: process.env.CI || '1', FACTORY_ENV_SETUP: '1', ...extraEnv } });
   const out = `${r.stdout || ''}${r.stderr ? `\n${r.stderr}` : ''}`;
   return { code: r.status === null ? -1 : r.status, timed_out: Boolean(r.error && r.error.code === 'ETIMEDOUT'), ms: Date.now() - started, output: out.length > 2000 ? `…${out.slice(-2000)}` : out };
 }

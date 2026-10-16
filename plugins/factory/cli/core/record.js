@@ -255,13 +255,19 @@ function recDecompose(root, state, env) {
   const loopPol = (ceiling) => Loop.policyFor(pol, { ceiling, stall_rounds: 1, diagnose: false, ...(require('./wfargs').loopModel(root, state) ? {} : { escalate_model: null }) });
   const phase = d.phase || null;
   if (probeOn && phase !== 'critique') {
-    probeRec = P.current(root, state) || P.run(root, { jobId: state.id });
-    const lp = Loop.shouldContinue(fresh.loops.probe, probeRec.ok ? [] : probeRec.problems.map((x) => ({ key: String(x).replace(/Output \(tail\):.*$/, '').slice(0, 200) })), loopPol(3));
-    fresh.loops.probe = { ...lp.state, segments: (fresh.loops.probe || {}).segments || 0 };
-    job.save(root, fresh);
-    if (!probeRec.ok && lp.action !== 'stop') {
-      ledger.append(root, state.id, { kind: 'step', step: 'decompose', ok: false, bound: { plan: b.plan, contract: b.contract, design: b.design }, detail: { errors: probeRec.problems.slice(0, 20), probe_key: P.problemKey(probeRec), probe: false, loop: lp.rule } });
-      return { status: 'retry', errors: probeRec.problems, message: `The plan probe found ${probeRec.problems.length} problem(s) with the verify commands or the build environment; factory next runs decompose again (the planner gets the probe's output${lp.model ? `, on ${lp.model}` : ''}).` };
+    // The probe is not run here (review MAJ-2): it is its own CLI step (factory plan probe, which
+    // the drive runs as a long step in a fresh call), detached and bounded by that call's time.
+    probeRec = P.current(root, state);
+    if (!probeRec) {
+      ledger.append(root, state.id, { kind: 'step', step: 'decompose', ok: false, bound: { plan: b.plan, contract: b.contract, design: b.design }, detail: { probe_pending: true } });
+      return { status: 'retry', probe_pending: true, message: `Plan valid: ${v.tasks || v.slices} tasks. factory next runs the plan probe (factory plan probe, a CLI step) on it.` };
+    }
+    // the planner was asked to fix the probe's problems and the plan probes the same: a round
+    // without progress (the loop counts it, so it escalates and stops instead of asking forever)
+    const lp = (!probeRec.ok && probeRecorded(root, state.id, probeRec, { force: true })) || fresh.loops.probe || {};
+    if (lp && lp.last_probe_at) fresh.loops.probe = lp; // what probeRecorded saved: never written back stale
+    if (!probeRec.ok && !(lp.level >= 3)) {
+      return { status: 'retry', errors: probeRec.problems, message: `The plan probe found ${probeRec.problems.length} problem(s) with the verify commands or the build environment; factory next runs decompose again (the planner gets the probe's output).` };
     }
   }
   // the critique (as its own phase with the probe on, else from the same run)
@@ -300,6 +306,29 @@ function recDecompose(root, state, env) {
     job.save(root, done);
   }
   return { status: 'ok', ...(probeRec && !probeRec.ok ? { probe_problems: probeRec.problems } : {}), message: `Plan valid: ${v.tasks || v.slices} ${state.epic ? 'slices' : 'tasks'}.${probeRec ? probeRec.ok ? probeRec.mode === 'lint' ? ' The plan probe linted every verify command (lint only: the proposed environment installs from the network and is not confirmed, so nothing ran).' : ' The plan probe ran every verify command in the build environment.' : ` The plan probe still reports ${probeRec.problems.length} problem(s): shown at the gate.` : ''}` };
+}
+
+// A probe result for the current plan (factory plan probe): its loop moves on once per record.
+// Problems go back to the planner while they shrink (the shared loop engine; the planner on the
+// stronger model when they stall); what is left when the loop stops goes to the gate, never to a
+// park (review MAJ-2: the probe left factory record, the loop's bookkeeping came with it).
+function probeRecorded(root, jobId, rec, { force = false } = {}) {
+  if (!rec || rec.pending || rec.parked || rec.skipped || !rec.at) return null;
+  const P = require('./probe');
+  const Loop = require('./loop');
+  const state = job.resolve(root, jobId);
+  const fresh = job.load(root, state.id);
+  fresh.loops = fresh.loops || {};
+  const prev = fresh.loops.probe || null;
+  if (prev && prev.last_probe_at === rec.at && !force) return prev;
+  const pol = require('../lib/util').deepMerge(require('./policy').load(root), state.policy || {});
+  const loopPol = Loop.policyFor(pol, { ceiling: 3, stall_rounds: 1, diagnose: false, ...(require('./wfargs').loopModel(root, state) ? {} : { escalate_model: null }) });
+  const lp = Loop.shouldContinue(prev, rec.ok ? [] : (rec.problems || []).map((x) => ({ key: String(x).replace(/Output \(tail\):.*$/, '').slice(0, 200) })), loopPol);
+  fresh.loops.probe = { ...lp.state, segments: (prev || {}).segments || 0, last_probe_at: rec.at, last_action: lp.action, ...(lp.model ? { model: lp.model } : {}) };
+  job.save(root, fresh);
+  const b = invalidation.current(root, fresh);
+  ledger.append(root, state.id, { kind: 'step', step: 'plan_probe', ok: Boolean(rec.ok), bound: { plan: b.plan }, detail: { probe_key: P.problemKey(rec), problems: (rec.problems || []).length, loop: lp.rule, action: lp.action } });
+  return fresh.loops.probe;
 }
 
 function recRealize(root, state, env) {
@@ -582,4 +611,4 @@ function answer(root, { jobId, id, ref, question, answer: a, acceptDefault = fal
   return { job: state.id, ...(logged ? { id: logged.id } : {}), answers: list.length };
 }
 
-module.exports = { apply, answer, findingsMarkdown };
+module.exports = { probeRecorded, apply, answer, findingsMarkdown };

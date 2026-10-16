@@ -46,7 +46,10 @@ const LINT = [
 const KEEP = /^(PATH|LANG|LANGUAGE|LC_[A-Z_]+|TERM|TZ|SHELL|USER|LOGNAME|PWD|COLUMNS|LINES)$/;
 const PROXY = /^(https?_proxy|HTTPS?_PROXY|no_proxy|NO_PROXY|ALL_PROXY|all_proxy|SSL_CERT_FILE|SSL_CERT_DIR|NODE_EXTRA_CA_CERTS|REQUESTS_CA_BUNDLE|PIP_INDEX_URL|PIP_EXTRA_INDEX_URL|npm_config_registry)$/;
 const SECRET_NAME = /(TOKEN|SECRET|PASSWORD|PASSWD|_KEY$|^KEY$|APIKEY|API_KEY|CREDENTIAL|^AWS_|^GH_|^GITHUB_|^SSH_|^GPG_|^COPILOT_|^ANTHROPIC_|^CLAUDE_CODE_|^NPM_TOKEN|^AZURE_|^GOOGLE_|^GCP_|COOKIE|SESSION)/i;
-function probeEnv(root, probeId, extra = {}) {
+// `own`: the probe's own directories (its scratch home, temp and caches), never filtered: a path
+// can contain a secret-looking variable's value (a temp dir named in CLAUDE_CODE_TMPDIR) and must
+// still be set.
+function probeEnv(root, probeId, extra = {}, own = {}) {
   let allowProxy = false;
   try {
     allowProxy = ((require('./policy').load(root) || {}).decompose || {}).probe_proxy === true;
@@ -59,7 +62,7 @@ function probeEnv(root, probeId, extra = {}) {
   // carrying one of the user's secrets (a declared `TOKEN: $GH_TOKEN`)
   const secrets = Object.entries(process.env).filter(([k, v]) => SECRET_NAME.test(k) && v && v.length >= 6).map(([, v]) => v);
   for (const [k, v] of Object.entries(extra)) if (!secrets.some((x) => String(v).includes(x))) out[k] = v;
-  return { ...out, CI: '1', FACTORY_PROBE: '1', FACTORY_PROBE_ID: probeId, FACTORY_RUNNER: '1', AI_AGENT: 'factory-probe', CLAUDECODE: '1', PYTHONDONTWRITEBYTECODE: '1' };
+  return { ...out, ...own, CI: '1', FACTORY_PROBE: '1', FACTORY_PROBE_ID: probeId, FACTORY_RUNNER: '1', AI_AGENT: 'factory-probe', CLAUDECODE: '1', PYTHONDONTWRITEBYTECODE: '1' };
 }
 
 // Secrets out of anything the probe records or shows (probe.json, the gate, God Eye's input):
@@ -74,9 +77,33 @@ function redact(text) {
     .replace(/\b([A-Za-z_]*(token|secret|password|passwd|api[_-]?key)[A-Za-z_]*)\s*[=:]\s*("[^"]*"|'[^']*'|\S+)/gi, '$1=[redacted]');
 }
 
-// Processes a dry-run left behind (a new session escapes the timeout's group kill): found by the
-// probe's tag in their environment (Linux /proc), killed, reported.
-function survivors(probeId) {
+// A process's session id, process group and start time (Linux /proc/<pid>/stat; fields after the
+// command name: state is field 3, pgrp 5, session 6, starttime 22).
+function procStat(pid) {
+  try {
+    const f = fs.readFileSync(`/proc/${pid}/stat`, 'utf8').split(') ').pop().split(' ');
+    return { pgrp: Number(f[2]), sid: Number(f[3]), start: f[19] };
+  } catch {
+    return null;
+  }
+}
+const procStart = (pid) => (procStat(pid) || {}).start || null;
+// Alive, and the same process (a pid reused by another process has another start time: review m7).
+function sameProcess(pid, start) {
+  if (!pid) return false;
+  try {
+    process.kill(Number(pid), 0);
+  } catch {
+    return false;
+  }
+  return !start || procStart(pid) === String(start);
+}
+
+// Processes a dry-run left behind, killed and reported. Found by the probe's tag in their
+// environment, and, for one that cleared its environment (review m1), by the dry-run's own session
+// (a process that only left its process group stays in it) or a working directory inside the
+// scratch worktree (one that also started a new session still runs there).
+function survivors(probeId, { sid = null, wt = null } = {}) {
   const out = [];
   let pids = [];
   try {
@@ -90,9 +117,20 @@ function survivors(probeId) {
     try {
       env = fs.readFileSync(`/proc/${pid}/environ`, 'utf8');
     } catch {
-      continue;
+      env = '';
     }
-    if (!env.includes(`FACTORY_PROBE_ID=${probeId}\0`) && !env.endsWith(`FACTORY_PROBE_ID=${probeId}`)) continue;
+    const tagged = env.includes(`FACTORY_PROBE_ID=${probeId}\0`) || env.endsWith(`FACTORY_PROBE_ID=${probeId}`);
+    let ours = tagged;
+    if (!ours && sid) ours = (procStat(pid) || {}).sid === Number(sid);
+    if (!ours && wt) {
+      try {
+        const cwd = fs.readlinkSync(`/proc/${pid}/cwd`);
+        ours = cwd === wt || cwd.startsWith(`${wt}${path.sep}`);
+      } catch {
+        ours = false;
+      }
+    }
+    if (!ours) continue;
     let cmd = '';
     try {
       cmd = fs.readFileSync(`/proc/${pid}/cmdline`, 'utf8').replace(/\0/g, ' ').trim();
@@ -122,17 +160,21 @@ function sweep(root, keep = null) {
   for (const n of names) {
     const wt = path.join(dir, n);
     if (keep && wt === keep) continue;
-    const pid = Number((/-(\d+)$/.exec(n) || [])[1]);
-    let alive = false;
-    try {
-      if (pid && pid !== process.pid) {
-        process.kill(pid, 0);
-        alive = true;
+    // the owner the probe wrote (pid and its start time): a reused pid is not the owner (review m7)
+    const owner = readJson(path.join(wt, '.factory-probe', 'owner.json'), null);
+    const pid = Number((owner && owner.pid) || (/-(\d+)$/.exec(n) || [])[1]);
+    if (pid === process.pid) continue;
+    let alive = owner ? sameProcess(pid, owner.start) : sameProcess(pid, null);
+    // no owner record (an older probe): alive only while it is young
+    if (alive && !owner) {
+      try {
+        alive = Date.now() - fs.statSync(wt).mtimeMs < 2 * 3600e3;
+      } catch {
+        alive = false;
       }
-    } catch {
-      alive = false;
     }
     if (alive) continue;
+    if (owner && owner.probe_id) survivors(owner.probe_id, { wt });
     git.run(root, ['worktree', 'remove', '--force', wt], { allowFail: true });
     try {
       fs.rmSync(wt, { recursive: true, force: true });
@@ -146,7 +188,9 @@ function sweep(root, keep = null) {
 }
 
 // Does this environment's setup fetch code from the network (and so run code nobody approved)?
-const NETWORK_SETUP = /pip3? install|poetry install|uv (sync|pip)|npm (ci|install|i)\b|pnpm (install|i)\b|yarn\b|go (mod download|get|install)|cargo (build|fetch|install)|bundle install|gem install|curl |wget |docker (pull|build|compose (pull|build|up))|invoke build|apt(-get)? install|brew install/;
+// (review m2: also the runners that fetch and run a package, clones, and piped or substituted
+// downloads)
+const NETWORK_SETUP = /pip3? install|pipx (run|install)|poetry install|uv (sync|pip|run|tool)|uvx\b|npm (ci|install|i|exec)\b|npx\b|pnpm (install|i|dlx|exec)\b|yarn\b|bunx?\b|go (mod download|get|install|run)|cargo (build|fetch|install)|bundle install|gem install|curl\b|wget\b|git (clone|fetch|pull|submodule)|deno (run|install)|docker (pull|build|run|compose (pull|build|up))|podman (pull|build|run)|invoke build|apt(-get)? install|brew install|<\(|https?:\/\//;
 
 function lintCommand(cmd) {
   const out = [];
@@ -228,7 +272,8 @@ function runBounded(cmd, cwd, capSec, env) {
   const argv = hasSetsid() ? ['setsid', '--wait', ...inner] : inner;
   const r = spawnSync(argv[0], argv.slice(1), hasTimeout() ? opts : { ...opts, timeout: capSec * 1000 });
   const output = `${r.stdout || ''}${r.stderr ? `\n${r.stderr}` : ''}`;
-  return { code: r.status === null ? -1 : r.status, timed_out: Boolean(r.error && r.error.code === 'ETIMEDOUT') || r.status === 124 || r.signal === 'SIGTERM' || r.signal === 'SIGKILL', ms: Date.now() - started, cap: capSec, output: output.length > 4000 ? `…${output.slice(-4000)}` : output };
+  // with setsid, the command's session is the child's pid: what stays in it is a survivor
+  return { code: r.status === null ? -1 : r.status, sid: hasSetsid() ? r.pid || null : null, timed_out: Boolean(r.error && r.error.code === 'ETIMEDOUT') || r.status === 124 || r.signal === 'SIGTERM' || r.signal === 'SIGKILL', ms: Date.now() - started, cap: capSec, output: output.length > 4000 ? `…${output.slice(-4000)}` : output };
 }
 
 // Is this a greenfield plan: the environment sets things up from manifests the base commit does
@@ -272,6 +317,8 @@ function mode(root, state, ctx = null) {
   }
   const snap = ((state && state.policy) || {}).decompose || {};
   const flag = live.plan_probe !== undefined ? live.plan_probe : snap.plan_probe;
+  // the human's answer to an interrupted probe (park plan_probe, option a): lint only
+  if (state && state.probe_override === 'lint') return 'lint';
   if (flag === 'lint' || flag === 'full') return flag;
   const g = require('./environment').gateProposal(root, state.id);
   return g.status === 'proposed' && NETWORK_SETUP.test(((g.env || {}).setup || []).join('\n')) ? 'lint' : 'full';
@@ -287,19 +334,23 @@ function enabled(root, state, ctx = null) {
   const snap = ((state && state.policy) || {}).decompose || {};
   const flag = live.plan_probe !== undefined ? live.plan_probe : snap.plan_probe;
   if (flag === false) return false;
+  // the human's answer to an interrupted probe (park plan_probe, option c): no probe for this job
+  if (state && state.probe_override === false) return false;
   const c = ctx || require('./steps').context(root, state, require('./job').load);
   const step = c.recipe.steps.find((x) => x.step === 'decompose');
   return Boolean(step && String(step.run).startsWith('workflow:') && step.plan_probe !== false && !state.epic);
 }
 
-function run(root, { jobId } = {}) {
+// opts.probeId and opts.budget: set by the managed run (runManaged) for its detached child, the
+// budget cut to what the caller's shell call has left.
+function run(root, { jobId, probeId: givenId = null, budget = null } = {}) {
   const job = require('./job');
   const envMod = require('./environment');
   const planMod = require('./plan');
   const state = job.resolve(root, jobId);
   if (!enabled(root, state)) return { job: state.id, ok: true, skipped: true, problems: [], commands: [], lint: [], message: 'The plan probe is off for this job (policy decompose.plan_probe, or its recipe).' };
   const runMode = mode(root, state);
-  const probeId = require('crypto').randomBytes(8).toString('hex');
+  const probeId = givenId || require('crypto').randomBytes(8).toString('hex');
   sweep(root);
   const jp = jobPaths(root, state.id);
   const plan = readJson(jp.plan, null);
@@ -307,6 +358,7 @@ function run(root, { jobId } = {}) {
   const planHash = hashFile(jp.plan);
   const gate = envMod.gateProposal(root, state.id);
   const S = settings(state);
+  if (Number(budget) > 0) S.budget = Math.max(10, Math.min(S.budget, Math.floor(Number(budget))));
   const started = Date.now();
   const lint = [];
   const problems = [];
@@ -347,12 +399,22 @@ function run(root, { jobId } = {}) {
       problems.push(`The probe could not create its scratch worktree: ${String(add.stderr || add.stdout || '').trim().slice(0, 300)}`);
     } else {
       let E = null;
+      // the dry-run writes only into its scratch worktree: home, temp and the usual caches point
+      // inside it (an OS sandbox it is not: a command could still name a path outside, which the
+      // check after the run reports). Setup and services get the same home (review MAJ-3).
+      const box = path.join(wt, '.factory-probe');
+      for (const d of ['home', 'tmp', 'cache']) fs.mkdirSync(path.join(box, d), { recursive: true });
+      // who owns this scratch worktree: the sweep keeps it only while this process lives (m7)
+      writeJson(path.join(box, 'owner.json'), { pid: process.pid, start: procStart(process.pid), probe_id: probeId, at: nowIso() });
+      const homeEnv = { HOME: path.join(box, 'home'), TMPDIR: path.join(box, 'tmp'), TMP: path.join(box, 'tmp'), TEMP: path.join(box, 'tmp'), XDG_CACHE_HOME: path.join(box, 'cache'), XDG_CONFIG_HOME: path.join(box, 'home', '.config'), npm_config_cache: path.join(box, 'cache', 'npm'), PIP_CACHE_DIR: path.join(box, 'cache', 'pip') };
       try {
         if (e) {
           const { evidence: _e, notes: _n, source: _s, ...runEnv } = e;
           // the probe's budget bounds setup too
-          // setup runs with the same allowlisted environment (no tokens), no terminal
-          E = envMod.withBaseEnv(probeEnv(root, probeId), () => envMod.ensure(root, null, { taskId: 'probe', wt, env: { ...runEnv, timeout_seconds: Math.min(runEnv.timeout_seconds || 1200, S.budget) } }));
+          // setup runs with the same allowlisted environment (no tokens), no terminal, no login
+          // shell (environment.sh runs bash --noprofile --norc under a base environment: a
+          // ~/.profile that exports a token never runs), and the scratch home
+          E = envMod.withBaseEnv(probeEnv(root, probeId, {}, homeEnv), () => envMod.ensure(root, null, { taskId: 'probe', wt, env: { ...runEnv, timeout_seconds: Math.min(runEnv.timeout_seconds || 1200, S.budget) } }));
           if (!E.ok) {
             setup = { status: 'broken', cmd: E.broken.cmd, code: E.broken.code, tail: redact(String(E.broken.tail || '').slice(-800)) };
             problems.push(`The build environment does not set up: ${redact(E.broken.reason.slice(0, 600))}. Fix environment.proposed.json (setup, env, services) so every worktree can build.`);
@@ -362,9 +424,7 @@ function run(root, { jobId } = {}) {
           // the dry-run writes only into its scratch worktree: home, temp and the usual caches
           // point inside it (an OS sandbox it is not: a command could still name a path outside,
           // which the check after the run reports)
-          const box = path.join(wt, '.factory-probe');
-          for (const d of ['home', 'tmp', 'cache']) fs.mkdirSync(path.join(box, d), { recursive: true });
-          const penv = probeEnv(root, probeId, { ...(E && E.env ? envMod.processEnv(E.env, E.vars) : {}), HOME: path.join(box, 'home'), TMPDIR: path.join(box, 'tmp'), TMP: path.join(box, 'tmp'), TEMP: path.join(box, 'tmp'), XDG_CACHE_HOME: path.join(box, 'cache'), npm_config_cache: path.join(box, 'cache', 'npm'), PIP_CACHE_DIR: path.join(box, 'cache', 'pip') });
+          const penv = probeEnv(root, probeId, E && E.env ? envMod.processEnv(E.env, E.vars) : {}, homeEnv);
           const before = rootStatus(root);
           for (const t of plan.tasks) {
             for (const c of t.verify_commands || []) {
@@ -380,7 +440,7 @@ function run(root, { jobId } = {}) {
               }
               const r = runBounded(E && E.env ? envMod.wrap(E.env, E.vars, cmd) : cmd, wt, S.perCommand, penv);
               const k = classify(r, plan);
-              const left = survivors(probeId);
+              const left = survivors(probeId, { sid: r.sid, wt });
               commands.push({ task: t.id, cmd, code: r.code, ms: r.ms, class: left.length ? 'escaped' : k.class, ok: k.ok && !left.length, why: left.length ? `left ${left.length} process(es) running after it ended (killed): ${left.map((x) => x.cmd).join('; ')}` : k.why, tail: redact(String(r.output || '').trim().split('\n').slice(-12).join('\n')).slice(-1200) });
               if (left.length) problems.push(`${t.id}: \`${cmd}\` left ${left.length} process(es) running after it ended (the probe killed them): ${left.map((x) => x.cmd).join('; ')}. A verify command must stop everything it starts.`);
               else if (!k.ok) problems.push(`${t.id}: \`${cmd}\` cannot run in the build environment: ${k.why}. Output (tail): ${redact(String(r.output || '').trim().split('\n').slice(-4).join(' | ')).slice(-400)}`);
@@ -396,9 +456,9 @@ function run(root, { jobId } = {}) {
           if (e) {
             const { evidence: _e, notes: _n, source: _s, ...runEnv } = e;
             envMod.teardown(root, null, { taskId: 'probe', wt, env: runEnv });
-            if (runEnv.services && runEnv.services.down) spawnSync('bash', ['-lc', envMod.expand(runEnv.services.down, envMod.vars(root, null, 'probe', wt))], { cwd: root, timeout: Math.min(600, S.budget) * 1000, stdio: ['ignore', 'pipe', 'pipe'], env: probeEnv(root, probeId) });
+            if (runEnv.services && runEnv.services.down) spawnSync('bash', ['--noprofile', '--norc', '-c', envMod.expand(runEnv.services.down, envMod.vars(root, null, 'probe', wt))], { cwd: root, timeout: Math.min(600, S.budget) * 1000, stdio: ['ignore', 'pipe', 'pipe'], env: probeEnv(root, probeId, {}, homeEnv) });
           }
-          for (const x of survivors(probeId)) problems.push(`A process of the probe's setup or services was still running at the end and was killed: ${x.cmd}`);
+          for (const x of survivors(probeId, { wt })) problems.push(`A process of the probe's setup or services was still running at the end and was killed: ${x.cmd}`);
         } catch {
           /* best effort */
         }
@@ -452,6 +512,174 @@ function dependsOn(tasks, id, on, seen = new Set()) {
   return Boolean(t && (t.depends_on || []).some((d) => d === on || dependsOn(tasks, d, on, seen)));
 }
 
+// ---------------------------------------------------------------- the managed run (review MAJ-2)
+//
+// The probe runs as its own detached process (its own session and process group), never inside
+// the caller's shell call: a Bash tool call that times out kills the drive, not the probe, and
+// the next `factory plan probe` (the drive's next step) picks up its result instead of starting
+// again. Its budget is cut to what the caller's call has left (the drive's deadline, below the
+// shell tool's ceiling). Its state is .factory/jobs/<job>/probe.started.json (sealed): the plan
+// and environment it probes, the child's pid and start time, its deadline, and how many runs for
+// this plan were interrupted (the child died without a result, or overran its deadline and was
+// killed as a group). After 2 interrupted runs the job parks with a specific question.
+
+const STARTED = (root, jobId) => path.join(jobPaths(root, jobId).dir, 'probe.started.json');
+const MAX_INTERRUPTED = 2;
+const ceilingMs = () => (Number(process.env.BASH_MAX_TIMEOUT_MS) > 0 ? Number(process.env.BASH_MAX_TIMEOUT_MS) : 600000);
+// When the caller's shell call ends: the drive passes its deadline; a direct call gets the
+// ceiling from now, less a margin.
+function callerDeadline() {
+  const d = Number(process.env.FACTORY_DRIVE_DEADLINE);
+  const own = Date.now() + ceilingMs() - 60000;
+  return d > 0 ? Math.min(d, own) : own;
+}
+function readStarted(root, jobId) {
+  const s = readJson(STARTED(root, jobId), null);
+  return s && valid(s) ? s : null;
+}
+function sleepMs(ms) {
+  try {
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, Math.max(1, ms));
+  } catch {
+    /* no wait available: poll */
+  }
+}
+// The child's group and every tagged or scratch-worktree process of its run, killed; its scratch
+// worktree removed.
+function killRun(root, st) {
+  if (st && st.pid && sameProcess(st.pid, st.pid_start)) {
+    try {
+      process.kill(-Number(st.pid), 'SIGKILL');
+    } catch {
+      try {
+        process.kill(Number(st.pid), 'SIGKILL');
+      } catch {
+        /* gone */
+      }
+    }
+  }
+  const left = st && st.probe_id ? survivors(st.probe_id) : [];
+  sweep(root);
+  return left;
+}
+
+// What the plan probe step does (factory plan probe; the drive runs it as a long CLI step):
+// returns the probe record, { pending: true } while the detached run goes on past the caller's
+// deadline, or { parked: true } after MAX_INTERRUPTED interrupted runs of this plan.
+function runManaged(root, { jobId, deadline = callerDeadline() } = {}) {
+  const job = require('./job');
+  const envMod = require('./environment');
+  const state = job.resolve(root, jobId);
+  if (!enabled(root, state)) return run(root, { jobId: state.id });
+  const done = current(root, state);
+  if (done) return { job: state.id, file: FILE(root, state.id), reused: true, ...done };
+  const jp = jobPaths(root, state.id);
+  if (!exists(jp.plan)) return run(root, { jobId: state.id });
+  // validation normalises the plan file (its waves): hash it as every later reader will see it
+  try {
+    require('./plan').validate(root, state);
+  } catch {
+    /* an invalid plan is probed as it is */
+  }
+  const planHash = hashFile(jp.plan);
+  const envHash = envMod.gateProposal(root, state.id).hash;
+  // lint only: nothing runs, nothing to detach
+  if (mode(root, state) === 'lint') return run(root, { jobId: state.id });
+  let st = readStarted(root, state.id);
+  const same = st && st.plan === planHash && st.environment === envHash;
+  let interrupted = same ? st.interrupted || 0 : 0;
+  if (same && !st.finished) {
+    const alive = sameProcess(st.pid, st.pid_start);
+    const overdue = Date.now() > Date.parse(st.deadline_at) + 120000;
+    if (alive && !overdue) return waitFor(root, state, st, deadline);
+    // died without a result, or ran far past its deadline: interrupted
+    const left = killRun(root, st);
+    interrupted += 1;
+    try {
+      require('./events').append(root, { event: 'plan_probe_interrupted', job: state.id, probe_id: st.probe_id, interrupted, overdue, killed: left.length });
+    } catch {
+      /* the log is a convenience */
+    }
+    writeJson(STARTED(root, state.id), seal({ ...st, finished: true, outcome: overdue ? 'overdue' : 'died', interrupted, ended_at: nowIso() }));
+  }
+  if (interrupted >= MAX_INTERRUPTED) return parkInterrupted(root, state, interrupted);
+  // the time this call has, less a command's cap and a margin, is the run's budget
+  const S = settings(state);
+  const left = Math.floor((deadline - Date.now()) / 1000) - S.perCommand - 20;
+  if (left < 20) return { job: state.id, pending: true, started: false, ok: false, problems: [], message: 'The plan probe needs a fresh call to start (too little of this call\'s time is left): run it again.' };
+  const probeId = require('crypto').randomBytes(8).toString('hex');
+  const budget = Math.min(S.budget, left);
+  const logFile = path.join(jp.dir, 'probe.log');
+  const out = fs.openSync(logFile, 'w');
+  const { spawn } = require('child_process');
+  const child = spawn(process.execPath, [path.join(__dirname, '..', '..', 'bin', 'factory'), '--root', root, 'plan', 'probe', '--job', state.id, '--child', probeId, '--budget', String(budget)], { cwd: root, detached: true, stdio: ['ignore', out, out], env: { ...process.env, FACTORY_PROBE_CHILD: probeId }, windowsHide: true });
+  fs.closeSync(out);
+  child.unref();
+  st = seal({ version: 1, job: state.id, plan: planHash, environment: envHash, probe_id: probeId, pid: child.pid, pid_start: procStart(child.pid), at: nowIso(), budget, deadline_at: new Date(Date.now() + (budget + S.perCommand + 60) * 1000).toISOString(), interrupted, finished: false });
+  writeJson(STARTED(root, state.id), st);
+  try {
+    require('./events').append(root, { event: 'plan_probe_started', job: state.id, probe_id: probeId, pid: child.pid, budget, interrupted });
+  } catch {
+    /* the log is a convenience */
+  }
+  return waitFor(root, state, st, deadline);
+}
+
+function waitFor(root, state, st, deadline) {
+  while (Date.now() < deadline - 3000) {
+    const r = current(root, state);
+    if (r) return { job: state.id, file: FILE(root, state.id), ...r };
+    if (!sameProcess(st.pid, st.pid_start)) {
+      // it just ended: its record may land a moment after
+      sleepMs(300);
+      const r2 = current(root, state);
+      if (r2) return { job: state.id, file: FILE(root, state.id), ...r2 };
+      return runManaged(root, { jobId: state.id, deadline });
+    }
+    sleepMs(250);
+  }
+  return { job: state.id, pending: true, started: true, probe_id: st.probe_id, ok: false, problems: [], message: `The plan probe is still running (its own process, pid ${st.pid}, until ${st.deadline_at} at most): run factory plan probe again (factory drive does) to pick up its result; it is not started again.` };
+}
+
+// Two interrupted runs of this plan: the job asks how to probe it (never a third silent restart).
+function parkInterrupted(root, state, n) {
+  const fresh = require('./job').load(root, state.id);
+  if (fresh.status === 'parked') return { job: state.id, parked: true, ok: false, problems: [], message: `${state.id} is parked: ${fresh.park && fresh.park.reason}` };
+  const reason = `The plan probe was interrupted ${n} times before it finished (it died, or ran out of time and was stopped).`;
+  require('./decision-table').park(root, fresh, reason, 'decompose', {
+    kind: 'plan_probe',
+    question: {
+      question: 'The plan probe could not finish within the drive\'s time, twice. How should the plan be probed?',
+      options: [
+        { key: 'a', text: 'Lint only for this job: check the verify commands without running them (the gate shows nothing ran)' },
+        { key: 'b', text: `I run it in my own terminal: factory plan probe --job ${state.id} (not human-only), then reply resume` },
+        { key: 'c', text: 'No probe for this job: the plan gate says it was not probed' },
+      ],
+      recommendation: 'b',
+    },
+  });
+  return { job: state.id, parked: true, ok: false, problems: [reason], message: `${reason} ${state.id} is parked with a question.` };
+}
+
+// The detached child's entry (factory plan probe --child <id>): runs the probe and marks the
+// started record finished; a probe that throws still leaves a (failed) sealed record.
+function runChild(root, { jobId, probeId, budget }) {
+  const job = require('./job');
+  const state = job.resolve(root, jobId);
+  let r;
+  try {
+    r = run(root, { jobId: state.id, probeId, budget });
+  } catch (e) {
+    const jp = jobPaths(root, state.id);
+    const doc = seal({ version: 1, job: state.id, at: nowIso(), plan: exists(jp.plan) ? hashFile(jp.plan) : null, environment: require('./environment').gateProposal(root, state.id).hash, ok: false, ms: 0, setup: { status: 'error' }, lint: [], commands: [], problems: [redact(`The plan probe failed: ${String(e.message || e).slice(0, 400)}`)] });
+    writeJson(FILE(root, state.id), doc);
+    r = doc;
+  }
+  const st = readStarted(root, state.id);
+  if (st && st.probe_id === probeId) writeJson(STARTED(root, state.id), seal({ ...st, finished: true, outcome: 'done', ended_at: nowIso() }));
+  return r;
+}
+
 // The probe record for the plan as it is now, or null (none, stale, or edited by hand).
 function current(root, state) {
   const p = readJson(FILE(root, state.id), null);
@@ -459,6 +687,9 @@ function current(root, state) {
   const jp = jobPaths(root, state.id);
   if (!exists(jp.plan) || p.plan !== hashFile(jp.plan)) return null;
   if (p.environment !== require('./environment').gateProposal(root, state.id).hash) return null;
+  // a record made in another mode (lint only, full) is not this one's
+  const m = mode(root, state);
+  if (m && p.mode && p.mode !== m) return null;
   return p;
 }
 
@@ -467,4 +698,4 @@ function problemKey(p) {
   return sha256(stableStringify([...((p && p.problems) || [])].map((x) => String(x).replace(/Output \(tail\):.*$/, '')).sort()));
 }
 
-module.exports = { mode, probeEnv, redact, survivors, sweep, NETWORK_SETUP, enabled, run, current, classify, lintCommand, greenfield, planOwns, problemKey, FILE, LINT };
+module.exports = { runManaged, runChild, readStarted, procStat, sameProcess, STARTED, MAX_INTERRUPTED, mode, probeEnv, redact, survivors, sweep, NETWORK_SETUP, enabled, run, current, classify, lintCommand, greenfield, planOwns, problemKey, FILE, LINT };
