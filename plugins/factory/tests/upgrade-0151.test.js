@@ -20,6 +20,9 @@ const V1_REV = 'b3a46c5';
 const has = (rev) => spawnSync('git', ['-C', REPO, 'cat-file', '-e', `${rev}:plugins/factory/bin/factory`]).status === 0;
 const plugins = {};
 function oldCli(rev) {
+  // FACTORY_OLD_<rev>: a checkout of that commit (a detached git worktree) to use instead of an archive
+  const own = process.env[`FACTORY_OLD_${rev}`];
+  if (!plugins[rev] && own) plugins[rev] = path.join(own, 'plugins', 'factory', 'bin', 'factory');
   if (!plugins[rev]) {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), `factory-${rev}-`));
     const r = spawnSync('bash', ['-c', `git -C "${REPO}" archive ${rev} plugins/factory | tar -x -C "${dir}"`], { encoding: 'utf8' });
