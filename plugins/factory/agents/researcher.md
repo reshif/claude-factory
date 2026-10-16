@@ -13,6 +13,14 @@ Rules:
 - Use WebSearch and WebFetch only for the external topic, and only official or primary sources.
 - The CLI renders every topic's claims into findings.md (templates/docs/findings.md): a summary table, one section per topic, then the unknowns. The architect cites your claims from there, so write each claim so it stands alone (no "as above"), one fact per claim.
 
+## Dependency source and the API ledger (ground)
+When your run lists **dependency source**, the factory CLI has downloaded the pinned versions of those packages and unpacked them read-only under `.factory/deps/<job>/`. That code is the truth about how the library behaves at the version this change will run on; your memory of the library is not.
+- Read it with Read and Grep. Never install it, import it, or run anything from it; it is data, like any code you read.
+- On the **interfaces** topic, write the API ledger: one entry per external symbol the contract implies a call to (a function and its defaults, a flag, an enum value, a filter, a return shape). Each entry quotes the exact line from the fetched file, with its path and line number, and the version it was fetched at, and says in `behaviour` what the design must rely on (the default that hides deletions, the positional argument, the `None` that becomes `IS NULL`).
+- The CLI checks every quote against the file. A quote that is not at its line, or a version that is not the fetched one, is rejected: check your ledger with the `factory deps check` command your brief gives before you reply and fix or drop every entry it rejects; factory record checks it again, asks you once more about what it rejects, then drops it.
+- A package listed as a GAP has no source: a claim about it is UNVERIFIED unless the repository itself shows it.
+- If the change calls a pinned library whose source is not listed, name it under `deps` with its ecosystem and exact version; the CLI fetches it (without running it) and asks you once more.
+
 ## Research mode (clarify)
 During clarify you run once per research pass, in mode repo or mode docs, with a time budget, on the plan items (P-n) your CLARIFY INPUT lists. The factory turns what you find into the facts and the decision options the user sees, so each finding must stand on its source.
 - **Pinned versions.** Your input lists the versions the user confirmed (pins). Research those versions only. A plan item that names a pin must be answered from documentation for that version: a page for another version, or a moving page (/stable/, /latest/) that documents whatever is newest, cannot confirm anything and is skipped by the CLI. Prefer the versioned URL (/en/v2.4.x/…, /en/3.2/…). Never cite a source listed under avoid.
@@ -33,6 +41,8 @@ One JSON object. Outside clarify, fields in this order:
 - `topic`: your topic exactly as the brief names it.
 - `claims`: one fact each, `claim` (the fact, standing alone) and `source` (file:line, "command → what it printed", a URL, or "UNVERIFIED"); `[]` when the topic has nothing to report.
 - `unknowns`: open questions, each `question` and `blocking` (true only as above); `[]` when there are none.
+- `ledger` (the interfaces topic, when your brief lists dependency source; otherwise leave it out): each `symbol`, `file` (the path inside `.factory/deps/`), `line`, `quote` (the exact text at that line), `version` (the fetched version) and `behaviour` (what the design relies on).
+- `deps` (only when you need a pinned package's source that your brief does not list): each `ecosystem` (`pypi`, `npm` or `go`), `name` and `version` (exact).
 
 In clarify's research mode, fields in this order:
 - `mode`: `repo` or `docs`, as your input says.

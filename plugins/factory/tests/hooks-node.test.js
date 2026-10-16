@@ -22,7 +22,7 @@ const each = (dir) => Object.entries(hooksOf(dir)).flatMap(([ev, list]) => list.
 const run = (cmd, env, input = '{}') => spawnSync('/bin/sh', ['-c', cmd], { input, encoding: 'utf8', env: { HOME: os.tmpdir(), ...env } });
 
 function fakeNode(script) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fake-node-'));
+  const dir = require('./helpers/tmp').mkdtemp('fake-node-');
   fs.writeFileSync(path.join(dir, 'node'), script, { mode: 0o755 });
   return dir;
 }

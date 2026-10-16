@@ -2,6 +2,7 @@
 // Task worktrees: each task builds in its own git worktree on its own branch.
 // `task verify` is the only way a task gets evidence: the CLI runs the commands.
 
+const fs = require('fs');
 const path = require('path');
 const { readJson, writeJson, exists, nowIso, fail } = require('../lib/util');
 const { jobPaths, taskWorktree } = require('../lib/paths');
@@ -231,8 +232,11 @@ function start(root, jobId, taskId) {
   // The build environment (.factory/environment.json), set up in this worktree (cached by its
   // lockfiles) with the job's services, before the attempt counts: a broken environment is not
   // the builder's failure, so it refuses with environment_broken and spends no attempt.
+  // Greenfield: the plan's bootstrap task writes the manifests the setup needs, so its worktree
+  // starts bare; task verify sets the environment up after its builder, from the files it wrote.
   const envMod = require('./environment');
-  const E = envMod.ensure(root, state, { taskId, wt });
+  const bootstrap = Boolean(planTask(root, state, taskId).task.bootstrap);
+  const E = bootstrap ? { ok: true, none: true, env: null } : envMod.ensure(root, state, { taskId, wt });
   if (!E.ok) fail(`${E.broken.reason}\nThe environment, not this task's code, is broken: stop and reply blocked with blocked_reason "environment_broken" and this message as the summary. No attempt was spent.`, 'environment_broken', E.broken);
   const environment = E.env && !E.none ? { name: E.env.name || null, cached: Boolean(E.cached), ran: (E.ran || []).map((r) => ({ cmd: r.cmd, code: r.code })), shell_prefix: `cd "${wt}" && ${envMod.wrap(E.env, E.vars, '')}`.replace(/\s+$/, ' ') } : null;
   const head = git.revParse(wt, 'HEAD');
@@ -274,8 +278,26 @@ function afterBuilder(root, jobId, taskId, result, { startedAt, label, outcome: 
   const attempt = t.attempts || 0;
   const builder = { attempt, outcome, at: nowIso(), label: label || null, ...(r && r.blocked_reason ? { blocked_reason: r.blocked_reason } : {}) };
   const entry = { builder: outcome, ...(run && run !== 'ok' ? { run } : {}), ...(r && r.summary ? { summary: String(r.summary).slice(0, 400) } : {}), ...(r && r.blocked_reason ? { blocked_reason: r.blocked_reason } : {}), ...(r && (r.needs_paths || []).length ? { needs_paths: r.needs_paths } : {}), builder_at: builder.at };
+  // a builder blocked for paths: the files inside the contract's allowed paths that no other task
+  // owns are granted here, by the CLI's own check (grantCheck; all or nothing), never widening the
+  // contract. The reply carries what was granted, so realize runs the task again without an attempt.
+  let g = null;
+  if (r && r.status === 'blocked' && r.blocked_reason === 'needs_paths' && (r.needs_paths || []).length) {
+    const { refused, want } = grantCheck(root, state, taskId, r.needs_paths);
+    g = refused.length ? { granted: [], refused } : { granted: want, refused: [] };
+    if (!refused.length && want.length) {
+      t.granted_paths = [...new Set([...(t.granted_paths || []), ...want])];
+      t.grants = [...(t.grants || []), { at: nowIso(), paths: want, attempt, by: 'task built (inside the contract\'s allowed paths)' }];
+      try {
+        require('./events').append(root, { event: 'paths_granted', job: state.id, task: taskId, paths: want });
+      } catch {
+        /* the grant is in the state */
+      }
+    }
+    entry.grant = g;
+  }
   state.tasks[taskId] = { ...t, builder, history: noteAttempt(t.history, attempt, entry) };
-  return r || null;
+  return r ? { ...r, ...(g ? { granted: g.granted, ...(g.refused.length ? { grant_refused: g.refused } : {}) } : {}) } : null;
   });
 }
 
@@ -352,7 +374,9 @@ function currentFindings(root, state, task) {
   const all = (rec && rec.detail && rec.detail.findings) || [];
   const serious = all.filter((f) => ['blocker', 'major'].includes(f.severity) && f.status === 'confirmed');
   const owners = (state.fix && state.fix.owners) || null;
-  if (owners) return serious.filter((f) => owners[f.id] === task.id || owners[f.id] === '*').map((f) => (owners[f.id] === '*' ? { ...f, shared: true } : f));
+  // the human's own finding (an HS denial's reason): every reopened task gets it
+  const human = ((state.fix && state.fix.human_findings) || []).map((f) => ({ ...f, shared: true }));
+  if (owners) return [...serious.filter((f) => owners[f.id] === task.id || owners[f.id] === '*').map((f) => (owners[f.id] === '*' ? { ...f, shared: true } : f)), ...human];
   const mine = serious.filter((f) => f.file && matchesAny(f.file, task.allowed_paths));
   return mine.length ? mine : serious;
 }
@@ -407,12 +431,15 @@ function verify(root, jobId, taskId) {
   if (missingDeps.length) fail(`${taskId}'s branch does not contain ${missingDeps.join(', ')} as built now; run task start ${taskId} again to bring ${missingDeps.length > 1 ? 'them' : 'it'} in, then build and verify.`, 'dependency_not_merged', { missing: missingDeps });
   const head = git.revParse(wt, 'HEAD');
   const changed = t.start_commit ? ownChangedFiles(wt, t.start_commit, head) : [];
-  const scopeViolations = changed.filter((f) => !matchesAny(f, task.allowed_paths) || matchesAny(f, state.policy.protected_paths));
+  const scopeViolations = changed.filter((f) => !matchesAny(f, taskPaths(state, task)) || matchesAny(f, state.policy.protected_paths));
   // The build environment (.factory/environment.json): set up in this worktree (cached by its
   // lockfiles), and every command runs inside it, against this worktree's code. A broken
   // environment is not the build's failure: it refuses with environment_broken.
+  // Greenfield: the plan's bootstrap task writes the manifests the setup needs, so its worktree
+  // starts bare; task verify sets the environment up after its builder, from the files it wrote.
   const envMod = require('./environment');
-  const E = envMod.ensure(root, state, { taskId, wt });
+  const bootstrap = Boolean(planTask(root, state, taskId).task.bootstrap);
+  const E = bootstrap ? { ok: true, none: true, env: null } : envMod.ensure(root, state, { taskId, wt });
   if (!E.ok) fail(`${E.broken.reason}\nThe environment, not this task's code, is broken: fix it (factory env check, factory env set) and resume.`, 'environment_broken', E.broken);
   const L = state.policy.limits;
   const commands = task.verify_commands.map((c) => ({ ...runCommand(envMod.wrap(E.env, E.vars, planMod.cmdOf(c)), wt, { timeoutSec: L.command_timeout_seconds, reruns: L.flaky_reruns }), cmd: planMod.cmdOf(c) }));
@@ -453,6 +480,86 @@ function verify(root, jobId, taskId) {
   };
 }
 
+// A task's allowed paths as they are now: the plan's, plus the paths realize granted it inside
+// the contract's allowed paths (grant below). The guard and the drift check use the same union.
+function taskPaths(state, task) {
+  const t = ((state && state.tasks) || {})[task.id] || {};
+  return [...(task.allowed_paths || []), ...(t.granted_paths || [])];
+}
+
+// `factory task grant <T> --paths a,b` (factory run's own step in realize, 0.10.0): a builder
+// blocked with needs_paths gets those paths when every one of them is a plain path inside the
+// contract's allowed paths, not protected, not a secret, and no other task's: never a widening of
+// the contract, never another task's file. All or nothing; at most a few per task. Anything else
+// stays a needs_paths park (an amendment the human approves).
+const MAX_GRANTS = 6;
+// A directory on the base commit, the job branch or disk (a grant names files only).
+function isDirectory(root, state, p) {
+  for (const ref of [state.branch, state.base_commit].filter(Boolean)) {
+    const r = git.run(root, ['cat-file', '-t', `${ref}:${p}`], { allowFail: true });
+    if (r.code === 0 && String(r.stdout).trim() === 'tree') return true;
+  }
+  try {
+    return fs.statSync(path.join(root, p)).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+// What a grant would give (want) and refuse, against the state as it is (no write).
+function grantCheck(root, state, taskId, paths) {
+  const { plan, task } = planTask(root, state, taskId);
+  const allowed = contractMod.parse(contractMod.read(root, state.id)).allowedPaths || [];
+  const pol = state.policy || {};
+  const refused = [];
+  const want = [];
+  for (const raw of (paths || []).map(String)) {
+    const p = raw.trim().replace(/\\/g, '/').replace(/^\.\/+/, '');
+    const why = !p
+      ? 'empty'
+      : /[*?[\]{}]/.test(p)
+        ? 'a glob: only plain paths are granted'
+        : p.startsWith('/') || p.split('/').includes('..')
+          ? 'not a path inside the repository'
+          : p.endsWith('/') || isDirectory(root, state, p)
+            ? 'a directory: only single files are granted (a directory covers files other tasks may own)'
+          : p.startsWith('.factory/') || p.startsWith('.git/')
+            ? 'factory or git state'
+            : matchesAny(p, pol.protected_paths || [])
+              ? 'a protected path (policy.protected_paths)'
+              : matchesAny(p, pol.secret_paths || []) && !matchesAny(p, pol.secret_exempt || [])
+                ? 'looks like a secret (policy.secret_paths)'
+                : !matchesAny(p, allowed)
+                  ? `outside the contract's allowed paths (${allowed.join(', ') || 'none'}): only an amendment the human approves widens them`
+                  : (() => {
+                      // another task's file, or a path under this one (a file of the same name as a directory it owns)
+                      const other = plan.tasks.find((x) => x.id !== taskId && (matchesAny(p, taskPaths(state, x)) || taskPaths(state, x).some((y) => String(y).replace(/^\.\/+/, '').startsWith(`${p}/`))));
+                      return other ? `${other.id}'s path: give it to one task by amending the plan` : null;
+                    })();
+    if (why) refused.push({ path: p || raw, why });
+    else if (!matchesAny(p, taskPaths(state, task))) want.push(p);
+  }
+  const t = state.tasks[taskId] || {};
+  if (!refused.length && (t.granted_paths || []).length + want.length > MAX_GRANTS) refused.push({ path: want.join(', '), why: `more than ${MAX_GRANTS} granted paths for one task: amend the plan instead` });
+  return { refused, want };
+}
+
+// `factory task grant <T> --paths a,b` (human or main session) and `task built --status blocked
+// --reason needs_paths --paths a,b` (the builder's last step, applied in afterBuilder): the same check.
+function grant(root, jobId, taskId, paths) {
+  const state = job.resolve(root, jobId);
+  const { refused, want } = grantCheck(root, state, taskId, paths);
+  if (refused.length) return { job: state.id, task: taskId, ok: false, granted: [], refused };
+  if (want.length) {
+    job.mutate(root, state.id, (fresh) => {
+      const ft = fresh.tasks[taskId] || {};
+      fresh.tasks[taskId] = { ...ft, granted_paths: [...new Set([...(ft.granted_paths || []), ...want])], grants: [...(ft.grants || []), { at: nowIso(), paths: want, by: 'realize (inside the contract\'s allowed paths)' }] };
+    });
+    require('./events').append(root, { event: 'paths_granted', job: state.id, task: taskId, paths: want });
+  }
+  return { job: state.id, task: taskId, ok: true, granted: want, refused: [], message: want.length ? `${taskId} may now change ${want.join(', ')} (inside the contract's allowed paths, owned by no other task); recorded in the job and shown in the completion report.` : `${taskId} already may change them.` };
+}
+
 function setState(root, jobId, taskId, value, reason) {
   if (!['blocked', 'exhausted'].includes(value)) fail('task state must be blocked or exhausted', 'bad_input');
   const id = job.resolve(root, jobId).id;
@@ -462,4 +569,4 @@ function setState(root, jobId, taskId, value, reason) {
   return { job: id, task: taskId, state: value };
 }
 
-module.exports = { startBase, start, show, verify, verifyRecorded, commitWip, previousAttempt, setState, ensureJobWorktree, planTask, prepareWorktree, ownChangedFiles, afterBuilder, legacyAttempt, lastFailures, noteAttempt, FAILED };
+module.exports = { taskPaths, grant, grantCheck, startBase, start, show, verify, verifyRecorded, commitWip, previousAttempt, setState, ensureJobWorktree, planTask, prepareWorktree, ownChangedFiles, afterBuilder, legacyAttempt, lastFailures, noteAttempt, FAILED };

@@ -1,5 +1,5 @@
 { "type": "object", "required": ["id"], "properties": {
   "id": { "enum": ["clarify", "decide", "challenge"] }, "version": { "type": "integer" }, "description": { "type": "string" },
   "fanout": { "type": "array" }, "judge": { "type": "object" },
-  "critique": { "type": "object" }, "lanes": { "type": "object" }, "verifier": { "type": "object" }, "limits": { "type": "object" },
+  "critique": { "type": "object" }, "critics": { "type": "array" }, "lanes": { "type": "object" }, "verifier": { "type": "object" }, "limits": { "type": "object" },
   "agents": { "type": "object" }, "caps": { "type": "object" }, "checklist": { "type": "array", "items": { "type": "string" } } } }

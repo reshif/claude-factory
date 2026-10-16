@@ -60,6 +60,9 @@ test('e2e: a five-task, three-wave feature@medium job with a crashing builder, a
   F.clarify(root);
   assert.equal(next(root).step, 'H1');
   F.reply(root, 'approve');
+  // 0.10.0: the pinned dependency source first (a CLI step factory drive runs)
+  assert.equal(next(root).step, 'deps');
+  F.cli(root, ['deps', 'fetch'], { allowFail: false });
   assert.equal(next(root).workflow, 'ground');
   let b = F.cli(root, ['wfargs', 'ground']);
   F.record(root, F.envelope(b, 'ok', { topics: [{ topic: 'codebase', claims: [{ claim: 'add subtracts', source: 'src/add.js:1' }], unknowns: [] }], degraded: [] }));
@@ -67,15 +70,18 @@ test('e2e: a five-task, three-wave feature@medium job with a crashing builder, a
   F.write(F.jobDir(root, J), 'adr-001-csv.md', F.adrText({ job: J, acs: ['AC-1', 'AC-2', 'AC-3', 'AC-4'], decision: 'We will build toCsv in src/csv.js and have alerts and the report call it.' }));
   b = F.cli(root, ['wfargs', 'fanout-judge', '--config', 'decide']);
   F.record(root, F.envelope(b, 'ok', { options: [], degraded: [], judge: { kind: 'adr', paths: [path.join(F.jobDir(root, J), 'adr-001-csv.md')], summary: 's' }, critiques: [{ verdict: 'approve', items: [] }] }));
-  assert.equal(next(root).step, 'H2');
-  F.reply(root, 'approve');
+  // 0.10.0: no separate H2 at medium risk; design + plan + environment at one H3
   assert.equal(next(root).workflow, 'decompose');
   b = F.cli(root, ['wfargs', 'decompose']);
   fs.writeFileSync(path.join(F.jobDir(root, J), 'plan.json'), JSON.stringify(PLAN));
   const v = F.cli(root, ['plan', 'validate']);
   assert.equal(v.valid, true, JSON.stringify(v));
-  F.record(root, F.envelope(b, 'ok', { planner: { valid: true, errors: [], path: 'plan.json' }, critique: null }));
+  assert.equal(F.record(root, F.envelope(b, 'ok', { planner: { valid: true, errors: [], path: 'plan.json' }, critique: null, phase: b.phase })).status, 'retry', 'the probe ran; the plan critique is next');
+  b = F.cli(root, ['wfargs', 'decompose']);
+  assert.equal(b.phase, 'critique');
+  F.record(root, F.envelope(b, 'ok', { planner: { valid: true, errors: [], path: 'plan.json' }, critique: { verdict: 'approve', items: [] }, phase: 'critique' }));
   assert.equal(next(root).step, 'H3');
+  assert.deepEqual(next(root).review.approves, ['design', 'plan', 'environment']);
   F.reply(root, 'approve');
 
   // ---- the agents, with their imperfections

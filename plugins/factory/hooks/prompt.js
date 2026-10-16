@@ -9,6 +9,10 @@
 // them verbatim with `factory clarify reply`. Every message you type is also noted as a hash (never
 // the text) in .factory/log/prompts.jsonl, so words the main session relays that are exactly yours
 // count as yours (heard directly), not as relayed.
+// While the current job is parked, a message of yours that answers the park's question (an option,
+// words about it, "yes" to a stored answer) resumes the job with your words (resume + content);
+// any other is stored and Claude asks you once "Use this as your answer to …? reply yes": a job
+// never resumes silently.
 
 const { safe, emit, findRoot } = require('./lib');
 
@@ -33,6 +37,45 @@ function clarifyReply(root, input) {
   return true;
 }
 
+// A slash command or a factory command typed by the user: never an answer to a park.
+function isFactoryPrompt(prompt) {
+  const p = String(prompt || '').trim();
+  return /^\/factory[:\s-]/i.test(p) || /(^|\s)factory:(start|gate|ship|review|park|amend|clarify|intake|why|distill|console)\b/i.test(p) || /^factory\s+\w/i.test(p);
+}
+
+// A reply to a park: a message of yours while the current job is parked that answers the park's
+// question (an option, a reply about it, "yes" to a stored answer) resumes the job with your words
+// (human.replyToPark); any other is stored and you are asked once whether it is your answer. Not a question to
+// the assistant (ends with "?"), not a factory command or slash command, not a multi-paragraph text.
+function parkReply(root, input) {
+  const t = String(input.prompt || '').trim();
+  if (!t || /\?\s*$/.test(t) || t.startsWith('/') || isFactoryPrompt(t) || t.includes('\n\n') || t.length > 2000) return false;
+  const events = require('../cli/core/events');
+  const ctx = events.context(root, null);
+  let state;
+  try {
+    state = require('../cli/core/job').resolve(root, ctx.job || undefined);
+  } catch {
+    return false;
+  }
+  if (!state || state.status !== 'parked') return false;
+  try {
+    const r = require('../cli/core/human').replyToPark(root, { jobId: state.id, text: t, channel: 'chat' });
+    if (r.pending) {
+      // not an answer to the park: stored, and the user is asked once (never a silent resume)
+      events.append(root, { event: 'reply_pending', reply: 'park', ...ctx });
+      say(`[factory] ${state.id} is parked and this message was NOT applied: it does not answer the park's question. Ask the user exactly, in one line: Use this as your answer to "${r.question}"? reply yes. Do not resume the job yourself, and never ask for a confirmation code.`);
+      return true;
+    }
+    events.append(root, { event: 'reply_applied', reply: 'park', ...ctx });
+    say(`[factory] Applied your reply to the park: ${r.message} Continue with \`factory drive\` (skill factory:start); do not apply it again.`);
+  } catch (e) {
+    events.append(root, { event: 'reply_refused', reply: 'park', code: e.code || null, reason: e.message.slice(0, 200), ...ctx });
+    say(`[factory] Your reply was NOT applied: ${e.message} Tell the user this in one line.`);
+  }
+  return true;
+}
+
 safe((input) => {
   const human = require('../cli/core/human');
   const root = findRoot(input.cwd || process.cwd());
@@ -52,10 +95,11 @@ safe((input) => {
   }
   // what you typed, as a hash: relayed words that are exactly yours are heard directly
   require('../cli/core/clarify').notePrompt(root, input.prompt);
-  const parsed = human.parseReply(input.prompt);
+  // one exact reply, or several in one message ("confirm AC-2; approve"): the ship review, the digest
+  const parsed = human.parseReply(input.prompt) || human.parseBatch(input.prompt);
   const miss = parsed ? null : human.nearMiss(input.prompt);
   if (!parsed && !miss) {
-    clarifyReply(root, input);
+    if (!clarifyReply(root, input)) parkReply(root, input);
     return;
   }
   const events = require('../cli/core/events');

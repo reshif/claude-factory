@@ -66,9 +66,14 @@ Workflows  wfargs <clarify|ground|fanout-judge|decompose|realize|reconcile> [--c
            record --file <envelope.json | ->
 Env        env show · env check [--proposed]   (the build environment each worktree runs in; read-only)
            env propose --file f   (the main session's proposal) · env prepare <T|job>   (set it up in one worktree; task start does it)
-Plan       plan validate · plan from-contract
-Tasks      task start <T> · task show <T> · task verify <T> · task built <T> --status done|blocked [--reason r]   (the builder's last step)
-           task state <T> blocked|exhausted [--reason]
+Deps       deps fetch [--add pypi:name==1.2.3,npm:name@1.2.3]   (the job's pinned packages, downloaded without running them,
+           unpacked read-only under .factory/deps/<job>/; a failed download is a gap, never a stop; a recipe step factory drive runs) · deps show
+           deps check --file ledger.json|-   (an API ledger's quotes against the fetched source; agents may run it)
+Plan       plan validate · plan from-contract · plan probe   (lint, and per policy decompose.plan_probe a dry-run of every verify
+           command in a scratch worktree inside the build environment the plan proposes; bounded, cleaned up; factory record decompose runs it)
+Tasks      task start <T> · task show <T> · task verify <T> · task built <T> --status done|blocked [--reason r] [--paths a,b]   (the builder's last step;
+           --paths with needs_paths: files inside the contract's allowed paths no other task owns are granted)
+           task grant <T> --paths a,b   (the same grant, from the main session) · task state <T> blocked|exhausted [--reason]
 Build      reconcile run|continue|abort · verify run · evidence add <AC> --type diff|doc [--path p] [--note n]
 Ship       report · ship [--local] · pr sync · ci verify [--manifest-dir d | --commit sha] · close
 Change     amend start --reason "…" [--by who] · amend submit · park --reason "…" · followup
@@ -80,10 +85,10 @@ Learning   distill context · distill done [--result <reply.json | - | json>] ·
 Console    console [--out file.html] [--job J] [--label "…"] [--data data.json]   (read-only page of every job)
            console --serve [--port 4477] [--job J]   (the same page, live: updates as Claude works)
 Human only (your terminal, or reply in chat):
-           approve [gate] · deny --reason "…" · resume [step] · proceed (after a clarify cap: go on, gaps shown) · cancel · abandon · waive <floor> --reason "…"
-           merged <commit> · confirm <AC> · lessons accept|reject <L|P> · lessons promote <L> --check "cmd" · reseal
+           approve [gate] · approve ship · deny --reason "…" · resume [step | your answer, e.g. +50%] · proceed (a legacy clarify park: go on, gaps shown) · cancel · abandon · waive <floor> --reason "…"
+           merged [commit] · confirm <AC> · lessons accept|reject <L|P> · lessons promote <L> --check "cmd" · reseal
            (a P<n> is a project brief change distill proposed; chat: accept brief P1 · reject brief P1 <why>)
-           env set [--file f | --none] [hash]   (confirm the build environment; chat: confirm environment <hash|none>)
+           env set [--file f | --none] [hash]   (confirm the build environment; chat: confirm environment <hash|none>; a combined H3 approval sets it too)
            finding accept|dismiss <id> --reason "…"   (a serious finding no verifier settled; chat: dismiss finding code-1 <reason>)
 Global     --root <repo> · --job <J-0001>`;
 
@@ -233,7 +238,16 @@ function run(argv) {
         return { job: state.id, ...r };
       }
       if (sub === 'from-contract') return C('plan').fromContract(root, state);
-      return fail('plan validate | from-contract', 'bad_input');
+      if (sub === 'probe') {
+        // the CLI's own step (factory record decompose runs it; the main session may too): lint,
+        // and per policy a dry-run of every verify command in a scratch worktree inside the
+        // proposed build environment. Never a factory agent's (the guard refuses it too).
+        C('agents-open').refuseWhileAgentsWork(root, 'plan probe');
+        const r = C('probe').run(root, { jobId: state.id });
+        if (!r.ok) process.exitCode = 1;
+        return r;
+      }
+      return fail('plan validate | from-contract | probe', 'bad_input');
     }
     case 'task': {
       const t = C('tasks');
@@ -249,15 +263,24 @@ function run(argv) {
       if (sub === 'state') return t.setState(R(), J, id, pos[3], opt.reason);
       if (sub === 'built') {
         // The builder's last step: what this attempt's builder replies (the guard lets only a
-        // factory:builder agent run it). task verify counts only an attempt recorded done.
+        // factory:builder agent run it). task verify counts only an attempt recorded done. With
+        // --reason needs_paths --paths a,b the CLI grants the files it may (tasks.grantCheck).
         const status = String(opt.status || '');
-        if (!['done', 'blocked'].includes(status)) fail('task built <T1> --status done|blocked [--reason needs_paths|dependency_conflict|environment_broken] [--summary "…"]', 'bad_input');
+        if (!['done', 'blocked'].includes(status)) fail('task built <T1> --status done|blocked [--reason needs_paths|dependency_conflict|environment_broken] [--paths a,b] [--summary "…"]', 'bad_input');
         if (opt.reason && !['needs_paths', 'dependency_conflict', 'environment_broken'].includes(opt.reason)) fail('--reason is needs_paths, dependency_conflict or environment_broken', 'bad_input');
         const jid = C('job').resolve(R(), J).id;
-        t.afterBuilder(R(), jid, id, { status, summary: opt.summary || '', ...(status === 'blocked' && opt.reason ? { blocked_reason: opt.reason } : {}) }, { label: `build ${id}` });
-        return { job: jid, task: id, recorded: (C('job').load(R(), jid).tasks[id] || {}).builder || null };
+        const paths = String(opt.paths || '').split(',').map((x) => x.trim()).filter(Boolean);
+        const rec = t.afterBuilder(R(), jid, id, { status, summary: opt.summary || '', ...(status === 'blocked' && opt.reason ? { blocked_reason: opt.reason } : {}), ...(paths.length ? { needs_paths: paths } : {}) }, { label: `build ${id}` });
+        return { job: jid, task: id, recorded: (C('job').load(R(), jid).tasks[id] || {}).builder || null, ...(rec && rec.granted ? { granted: rec.granted, refused: rec.grant_refused || [] } : {}) };
       }
-      return fail('task start | show | verify | built | state', 'bad_input');
+      if (sub === 'grant') {
+        // the same grant as task built --paths, from the main session (never an agent's: the guard)
+        C('agents-open').refuseWhileAgentsWork(R(), 'task grant');
+        const r = t.grant(R(), J, id, String(opt.paths || '').split(',').map((x) => x.trim()).filter(Boolean));
+        if (!r.ok) process.exitCode = 1;
+        return r;
+      }
+      return fail('task start | show | verify | built | grant | state', 'bad_input');
     }
     case 'reconcile': {
       const r = C('reconcile');
@@ -397,13 +420,16 @@ function run(argv) {
     }
     // ---- human-only, from your terminal
     case 'approve':
+      // approve ship: the push and pull request at the ship review (low/medium risk)
+      if (String(sub || '').toLowerCase() === 'ship') return C('human').approveShip(R(), { jobId: J, channel: tty });
       return C('human').approve(R(), { jobId: J, gate: sub, channel: tty });
     case 'deny':
       return C('human').deny(R(), { jobId: J, reason: opt.reason || pos.slice(1).join(' '), channel: tty });
     case 'proceed':
       return C('clarify').proceed(R(), { jobId: J, channel: tty });
     case 'resume':
-      return C('human').resume(R(), { jobId: J, step: sub, channel: tty });
+      // resume [step] [your words…]: words after the verb are your answer to the park's question
+      return C('human').resume(R(), { jobId: J, step: pos.slice(1).join(' ') || null, words: opt.words || null, channel: tty });
     case 'cancel':
       return C('human').stop(R(), { jobId: J, kind: 'cancelled', channel: tty, reason: opt.reason });
     case 'abandon':
@@ -438,6 +464,18 @@ function run(argv) {
         return { job: state.id, task: id, ok: r.ok, ...(r.ok ? { cached: r.cached, ran: r.ran, name: r.env ? r.env.name || null : null, env: E.processEnv(r.env, r.vars) } : { broken: r.broken, message: r.broken.reason }) };
       }
       return fail('env show | check [--proposed] | propose --file f | set [--file f | --none] [hash]', 'bad_input');
+    }
+    case 'deps': {
+      const D = C('deps');
+      if (sub === 'fetch') C('agents-open').refuseWhileAgentsWork(R(), 'deps fetch');
+      if (sub === 'fetch') return D.fetch(R(), { jobId: J, add: String(opt.add || '').split(',').map((x) => x.trim()).filter(Boolean) });
+      if (sub === 'show') return D.show(R(), { jobId: J });
+      if (sub === 'check') {
+        const r = D.checkFile(R(), { jobId: J, file: opt.file });
+        if (!r.ok) process.exitCode = 1;
+        return r;
+      }
+      return fail('deps fetch [--add specs] | show | check --file ledger.json', 'bad_input');
     }
     case 'finding':
       if (!['accept', 'dismiss'].includes(sub) || !pos[2]) fail('finding accept|dismiss <id> --reason "…"', 'bad_input');

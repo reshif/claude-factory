@@ -124,6 +124,7 @@ function invariants(schema, o, { role } = {}) {
       if (o.verdict === 'revise' && !o.items.some((i) => i.severity !== 'minor')) e.push('revise on minor items alone');
       break;
     case 'readiness':
+      for (const x of o.objections) if (x.fixable_by === 'user' && (!x.question || (x.options || []).length < 2)) e.push(`a user blocker on ${x.check} without its question and options`);
       if ((o.verdict === 'ready') !== !o.objections.some((x) => x.severity === 'blocker')) e.push('ready exactly when no objection is a blocker');
       for (const [k, v] of Object.entries(o.checklist)) if (v === false && !o.objections.some((x) => x.check === k)) e.push(`${k} is false with no objection`);
       for (const x of o.objections) if (x.severity === 'blocker' && !x.fix.trim()) e.push(`a ${x.check} blocker with no fix`);
@@ -176,6 +177,17 @@ function invariants(schema, o, { role } = {}) {
     case 'lesson':
       uniq(o.lessons.map((l) => l.id), 'lesson ids');
       if (o.nothing_to_learn !== (o.lessons.length === 0)) e.push('nothing_to_learn must be true exactly when no lessons are listed');
+      break;
+    case 'conformance':
+      if (o.verdict === 'approve' && o.items.some((i) => SERIOUS.includes(i.severity))) e.push('approve with a blocker or major item');
+      for (const i of o.items) if (SERIOUS.includes(i.severity) && !(i.evidence && i.evidence.ref && i.evidence.quote)) e.push(`${i.symbol}: a ${i.severity} item without evidence (ref and quote)`);
+      for (const i of o.items) if (i.evidence && i.evidence.kind === 'source' && !/^\.factory\/deps\/[^:]+:\d+$/.test(i.evidence.ref)) e.push(`${i.symbol}: source evidence not at a .factory/deps path:line`);
+      break;
+    case 'diagnosis':
+      if (!o.cause.trim()) e.push('a diagnosis with no cause');
+      if (o.needs_user && (!o.question.trim() || o.options.length < 2)) e.push('needs_user without a question and at least two options');
+      if (!o.needs_user && !o.approach.trim()) e.push('no approach and no question for the user');
+      if (o.recommendation && !o.options.some((x) => x.key === o.recommendation)) e.push('the recommendation names no option');
       break;
     default:
       e.push(`no invariants for schema ${schema}`);
@@ -373,10 +385,11 @@ test('golden replay: bug@low through the real workflows, with an unverifiable fi
   // clarify v3: the read-back's plan is researched; the sheet shows the brief writer's decision and
   // the repo fact; the user takes the recommendation; the writer and God Eye's readiness check pass
   const c = await clarifyToH1(root, J);
-  assert.deepEqual(c.screens.map((x) => x.stage), ['readback_wait', 'sheet_wait']);
-  assert.match(c.screens[1].screen, /Whether numeric strings are added or rejected/);
-  assert.match(c.screens[1].screen, /a\) Reject them with a TypeError \*\*\(recommended\)\*\*/);
-  assert.match(c.screens[1].screen, /add is implemented in src\/add\.js and subtracts \(src\/add\.js:1, E-1\)/, 'the repo finding, checked at its line, is a fact the sheet shows');
+  // 0.9.0 (intentional): the read-back is shown on the sheet, not waited on
+  assert.deepEqual(c.screens.map((x) => x.stage), ['sheet_wait']);
+  assert.match(c.screens[0].screen, /Whether numeric strings are added or rejected/);
+  assert.match(c.screens[0].screen, /a\) Reject them with a TypeError \*\*\(recommended\)\*\*/);
+  assert.match(c.screens[0].screen, /add is implemented in src\/add\.js and subtracts \(src\/add\.js:1, E-1\)/, 'the repo finding, checked at its line, is a fact the sheet shows');
   const rec = JSON.parse(fs.readFileSync(path.join(F.jobDir(root, J), 'clarify.json'), 'utf8'));
   const dec = rec.items.find((x) => x.kind === 'decision');
   assert.deepEqual([dec.value, dec.strength], ['Reject them with a TypeError', 'accepted']);
@@ -430,6 +443,9 @@ test('golden replay: full@high decide and decompose (options, threat model, arch
   assert.equal(c.next.step, 'H1', JSON.stringify(c.next).slice(0, 600));
   assert.equal(F.cli(root, ['next']).step, 'H1');
   F.reply(root, 'approve');
+  // 0.10.0: the pinned dependency source is fetched first (a CLI step; nothing is pinned here)
+  assert.equal(F.cli(root, ['next']).step, 'deps');
+  F.cli(root, ['deps', 'fetch'], { allowFail: false });
   assert.equal((await runWorkflow(root, { workflow: 'ground' }, (role, text) => golden('researcher', null, { topic: (/Topic: \*\*([\w ]+)\*\*/.exec(text) || [])[1] }))).record.status, 'ok');
 
   const n = F.cli(root, ['next']);
@@ -470,7 +486,8 @@ test('golden replay: full@high decide and decompose (options, threat model, arch
   const decompose = (role, text) => {
     if (role === 'planner') {
       assert.match(text, /Validate command: `[^`]*plan validate/);
-      fs.writeFileSync(path.join(dir, 'plan.json'), JSON.stringify(plan));
+      // after the critique's revise, the planner's answer to it (a rollback for each task)
+      fs.writeFileSync(path.join(dir, 'plan.json'), JSON.stringify(critiques ? { tasks: plan.tasks.map((t) => ({ ...t, rollback: 'git revert the task commit' })) } : plan));
       const v = F.cli(root, ['plan', 'validate']);
       return golden('planner', null, { valid: v.valid, errors: v.errors, path: path.join(dir, 'plan.json') });
     }
@@ -480,10 +497,19 @@ test('golden replay: full@high decide and decompose (options, threat model, arch
     }
     throw new Error(`unexpected ${role}`);
   };
-  const p = await runWorkflow(root, F.cli(root, ['next']), decompose, ['--plan-critique']);
+  // 0.10.0 (intentional): with the plan probe on, decompose runs in phases: the planner (factory
+  // record then runs the CLI's probe), then God Eye's plan critique with the probe's record; its
+  // revise sends the plan back to the planner, and the next critique approves
+  let p = await runWorkflow(root, F.cli(root, ['next']), decompose);
+  assert.equal(p.record.status, 'retry', JSON.stringify(p.record));
+  assert.equal(p.record.critique_pending, true, 'the probe passed; the plan critique runs next');
+  for (let i = 0; i < 4 && p.record.status === 'retry'; i++) p = await runWorkflow(root, F.cli(root, ['next']), decompose);
   assert.equal(p.record.status, 'ok', JSON.stringify(p.record));
   assert.equal(critiques, 2, 'a golden "revise" plan critique sends the plan back once');
-  assert.equal(F.cli(root, ['next']).step, 'H3');
+  const n3 = F.cli(root, ['next']);
+  assert.equal(n3.step, 'H3');
+  assert.deepEqual(n3.review.approves, ['plan', 'environment'], 'at high risk H3 binds the plan and the build environment');
+  assert.equal(n3.review.probe.ok, true);
 });
 
 test('lesson writer: distill context hands over the reply schema; distill done --result checks the golden reply', () => {

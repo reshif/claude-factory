@@ -439,6 +439,8 @@ test('older jobs (clarify v2 records): R6 reads the ceiling each round recorded,
 
 test('clarify v3 from the real CLI: a clean run has no clarify findings; replies while it waits are expected; a hand-edited clarify.json is forged (R1)', () => {
   const root = F.makeRepo();
+  // a read-back that waits for the user (factory 0.9.0 shows it without waiting by default)
+  fs.writeFileSync(path.join(root, '.factory', 'policy.json'), JSON.stringify({ clarify: { readback: 'wait' } }));
   const J = F.cli(root, ['job', 'new', '--title', 'Fix add', '--type', 'feature', '--risk', 'medium']).job;
   fs.writeFileSync(path.join(F.jobDir(root, J), 'contract.md'), F.contractText({ verify: '`node tests/add.test.js` (AC-1)' }));
   F.clarify(root, { until: 'readback_wait' });

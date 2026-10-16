@@ -45,6 +45,12 @@ function close(root, { jobId }) {
   const notDone = ctx.recipe.steps.filter((s) => s.step !== 'close' && !steps.isDone(ctx, s)).map((s) => s.step);
   if (notDone.length) fail(`Cannot close ${state.id}: steps not done: ${notDone.join(', ')}`, 'not_ready');
   if (state.branch) cleanup(root, state);
+  // the job's fetched dependency source is a cache: removed with the job's worktrees
+  try {
+    require('./deps').cleanup(root, state.id);
+  } catch {
+    /* a convenience */
+  }
   const down = require('./environment').servicesDown(root, state);
   if (down) require('./events').append(root, { event: 'environment_services_down', job: state.id, cmd: down.cmd, code: down.code });
   state.status = 'closed';

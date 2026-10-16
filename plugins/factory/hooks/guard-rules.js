@@ -34,7 +34,7 @@ const path = require('path');
 const { emit, realpath } = require('./lib');
 const { parse } = require('./shell');
 
-const JOB_DOCS = /^(contract\.md|threat-model\.md|no-adr\.md|recommendation\.md|adr-\d+[^/]*\.md|contracts\.md|contracts\.json|plan\.json|slices\.json)$/;
+const JOB_DOCS = /^(contract\.md|threat-model\.md|no-adr\.md|recommendation\.md|adr-\d+[^/]*\.md|contracts\.md|contracts\.json|plan\.json|slices\.json|environment\.proposed\.json)$/;
 
 function deny(reason) {
   emit({ hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: `[factory guard] ${reason}` } });
@@ -71,11 +71,15 @@ function taskScope(root, worktreeName) {
   const { readJson } = require('../cli/lib/util');
   const plan = readJson(path.join(root, '.factory', 'jobs', m[1], 'plan.json'), null);
   if (!plan || !plan.tasks) return { paths: [], job: m[1], task: m[2] || null };
+  // plus the paths realize granted a task inside the contract (cli/core/tasks.js grant), kept in
+  // the job's sealed state
+  const st = readJson(path.join(root, '.factory', 'jobs', m[1], 'state.json'), null) || {};
+  const granted = (id) => (((st.tasks || {})[id] || {}).granted_paths || []).filter((x) => typeof x === 'string');
   if (m[2]) {
     const t = plan.tasks.find((x) => x.id === m[2]);
-    return { paths: t ? t.allowed_paths : [], job: m[1], task: m[2] };
+    return { paths: t ? [...(t.allowed_paths || []), ...granted(t.id)] : [], job: m[1], task: m[2] };
   }
-  return { paths: plan.tasks.flatMap((t) => t.allowed_paths || []), job: m[1], task: null };
+  return { paths: plan.tasks.flatMap((t) => [...(t.allowed_paths || []), ...granted(t.id)]), job: m[1], task: null };
 }
 
 // Returns a deny reason or null.
@@ -192,6 +196,14 @@ function isHumanOnly(a, b) {
 // is at work: cli/core/agents-open.js).
 const MAIN_ONLY = new Set(['drive', 'inbox']);
 const mainOnlyMessage = (a) => `"factory ${a}" is the main session's (it steps the job, lists what waits on the user or records what the user said), never a factory agent's. Return your result in your final message.`;
+
+// The CLI's own steps around the critics with evidence (0.10.0): the dependency download, the
+// plan probe (it runs commands) and a task grant (it gives a task more paths). The main session
+// and factory drive run them between workflows (factory record runs the probe); a factory agent
+// never does (a builder asks for paths through its own `task built --paths`, checked the same way).
+const AGENT_REFUSED = { deps: ['fetch'], plan: ['probe'], task: ['grant'] };
+const agentRefused = (a, b) => Boolean(AGENT_REFUSED[a] && AGENT_REFUSED[a].includes(b));
+const agentRefusedMessage = (a, b) => `"factory ${a} ${b}" is the factory CLI's own step (run by the main session or factory drive between workflows), never a factory agent's.${a === 'task' ? ' A builder that needs files outside its paths replies blocked with needs_paths and passes them to `task built --paths`.' : ' Return what you need in your final message.'}`;
 
 // The user's relay, never a factory agent's: answers, clarify replies, redirects and notes come
 // from the main session (what the user said), so a subagent may not record them (opts.agent: the
@@ -661,6 +673,7 @@ function checkCommand(cmd, pipeline, ctx, depth, collect) {
       // factory drive and factory inbox are the main session's: drive steps the job's router, the
       // inbox lists what waits on the human. A factory agent runs neither.
       if (a && ctx.agent && MAIN_ONLY.has(a)) return mainOnlyMessage(a);
+      if (a && ctx.agent && agentRefused(a, b)) return agentRefusedMessage(a, b);
       if (a && ctx.agent && isUserRelay(a, b)) return `"factory ${a}${a === 'clarify' ? ` ${b}` : ''}" records what the user said; it is the main session's, never a factory agent's. Return what you found in your final message instead.`;
     } else if (!collect) {
       const why = unknownExpansionHuman(head, ctx);
@@ -732,10 +745,10 @@ function ownJobDir(jobId) {
 
 // The CLI's test-only human seam and the seal-secret override are for the test suite: a shell
 // command that sets them (bash, env, export) is never an agent's business.
-const TEST_SEAM = /\bFACTORY_(TEST_HUMAN\w*|SECRET_FILE)\b/;
+const TEST_SEAM = /\bFACTORY_(TEST_HUMAN\w*|SECRET_FILE|DEPS_FETCH_\w+)\b/;
 
 function checkBash(root, cmd, policy, opts = {}) {
-  if (TEST_SEAM.test(String(cmd || ''))) return 'FACTORY_TEST_HUMAN and FACTORY_SECRET_FILE are the test suite\'s seam into human-only actions, never set from here. Human-only actions are the user\'s: their chat reply, or their own terminal.';
+  if (TEST_SEAM.test(String(cmd || ''))) return 'FACTORY_TEST_HUMAN, FACTORY_SECRET_FILE and FACTORY_DEPS_FETCH_* are the test suite\'s seams (into human-only actions, and the dependency fetch), never set from here. Human-only actions are the user\'s: their chat reply, or their own terminal.';
   const ctx = { root, policy: policy || require('../cli/core/policy').defaults(), job: opts.job || null, agent: Boolean(opts.agent), agentType: opts.agentType || null, names: new Set(), vars: new Map(), found: [] };
   try {
     return walk(String(cmd || ''), ctx, 0);

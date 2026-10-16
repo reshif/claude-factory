@@ -37,16 +37,24 @@ var RUN_STEPS = (function () {
         { key: 'redirect', label: 'read your redirect back', match: /^clarify: read your redirect back/, roles: ['interviewer'], optional: true, only_when_run: true, text: function () { return 'clarify: read your redirect back'; } },
         { key: 'write', label: 'write the contract', match: /^clarify: write the contract/, roles: ['contract-writer'], optional: true, only_when_run: true, text: function () { return 'clarify: write the contract'; } },
         { key: 'check', label: 'readiness check', match: /^clarify: readiness check/, roles: ['god-eye'], optional: true, only_when_run: true, text: function () { return 'clarify: readiness check'; } },
+        // 0.9.0: the readiness loop's tie-break on a disputed objection, and its diagnosis
+        { key: 'dispute', label: 'check disputed objections', match: /^clarify: check disputed objections/, roles: ['finding-verifier'], optional: true, only_when_run: true, text: function () { return 'clarify: check disputed objections'; } },
+        { key: 'diagnose', label: 'diagnose the readiness loop', match: /^clarify: diagnose the readiness loop/, roles: ['god-eye'], optional: true, only_when_run: true, text: function () { return 'clarify: diagnose the readiness loop'; } },
       ],
     },
-    // fanout-judge.js, decide: options (and the threat model) → architect → God Eye rounds, the architect revising between them
+    // fanout-judge.js, decide: options (and the threat model) → architect → critic rounds (God Eye,
+    // and the API-conformance critic against the dependency source), a verifier per serious item,
+    // the architect revising after each round (0.10.0). A deny that names a defect starts at the
+    // revise (no options).
     'fanout-judge:decide': {
-      next: 'H2',
+      next: 'the design gate (H2, or the combined design + plan gate)',
       steps: [
         { key: 'fanout', label: 'options', match: /^decide: fan-out/, roles: ['option-generator', 'threat-modeler'], text: function (n) { return 'decide: fan-out (' + n + ')'; } },
-        { key: 'architect', label: 'architect decides', match: /^decide: architect$/, roles: ['architect'], text: function () { return 'decide: architect'; } },
-        { key: 'god-eye', label: 'God Eye (design)', match: /^decide: God Eye/, roles: ['god-eye'], text: function (n, k) { return 'decide: God Eye (design) round ' + k; } },
+        { key: 'architect', label: 'architect decides', match: /^decide: architect( \(revising for your deny\))?$/, roles: ['architect'], text: function () { return 'decide: architect'; } },
+        { key: 'god-eye', label: 'design critics', match: /^decide: (God Eye|critics)/, roles: ['god-eye', 'api-conformance'], text: function (n, k) { return 'decide: critics round ' + k + ' (god-eye)'; } },
+        { key: 'verify', label: 'verify serious items', match: /^decide: verify/, roles: ['finding-verifier'], optional: true, text: function (n) { return 'decide: verify ' + n + ' serious item(s)'; } },
         { key: 'revise', label: 'architect revises', match: /^decide: architect revises/, roles: ['architect'], optional: true, text: function (n, k) { return 'decide: architect revises (round ' + k + ')'; } },
+        { key: 'diagnosis', label: 'diagnosis (loop engine)', match: /^decide: diagnosis/, roles: ['god-eye'], optional: true, only_when_run: true, text: function (n, k) { return 'decide: diagnosis (round ' + k + ')'; } },
       ],
     },
     // fanout-judge.js, challenge: one reviewer per lane → a verifier per serious finding
@@ -57,10 +65,16 @@ var RUN_STEPS = (function () {
         { key: 'verify', label: 'verify findings', match: /^challenge: verify/, roles: ['finding-verifier'], text: function () { return 'challenge: verify findings'; } },
       ],
     },
+    // fanout-judge.js, diagnose (0.9.0): God Eye diagnoses a review-fix or verify-fix loop that stopped making progress
+    'fanout-judge:diagnose': {
+      next: 'a different approach, or one question for you',
+      steps: [{ key: 'diagnose', label: 'diagnose the loop', match: /^diagnose: God Eye/, roles: ['god-eye'], text: function () { return 'diagnose: God Eye'; } }],
+    },
     // ground.js: the probes in parallel
     ground: { next: 'decide', steps: [{ key: 'probes', label: 'research probes', match: /^ground:/, roles: ['researcher'], text: function (n) { return 'ground: ' + n + ' probe(s)'; } }] },
     // decompose.js: planner rounds until valid → God Eye (plan) rounds, the planner revising inside each; a step starts again
-    // (`rounds`) when one of those roles comes back to it: one planner, or one God Eye, per round
+    // (`rounds`) when one of those roles comes back to it: one planner, or one God Eye, per round. With the plan probe on
+    // (0.10.0) a run is one phase: the planner (factory record then runs the CLI's probe), or God Eye with the probe's record
     decompose: {
       next: 'plan validate, then H3',
       steps: [
@@ -111,19 +125,21 @@ var RUN_STEPS = (function () {
       // one stage per brief: its agents, by the stage's step; every other step does not run
       var all = [].concat.apply([], Array.isArray(b.groups) ? b.groups : []);
       var scouts = all.filter(function (a) { return a.mode === 'repo' || a.mode === 'docs'; });
-      var STEP = { readback: 'readback', interpret: 'interpret', redirect: 'redirect', assemble: 'write', check: 'check' };
-      p = { readback: 0, research: 0, brief: 0, interpret: 0, redirect: 0, write: 0, check: 0 };
+      var STEP = { readback: 'readback', interpret: 'interpret', redirect: 'redirect', assemble: 'write', check: 'check', dispute: 'dispute', diagnose: 'diagnose' };
+      p = { readback: 0, research: 0, brief: 0, interpret: 0, redirect: 0, write: 0, check: 0, dispute: 0, diagnose: 0 };
       if (b.stage === 'research') { p.research = scouts.length; p.brief = all.length - scouts.length; }
       else if (STEP[b.stage]) p[STEP[b.stage]] = all.length;
       return { steps: p, modes: scouts.map(function (a) { return a.mode; }) };
     } else if (b.workflow === 'fanout-judge' && b.config === 'decide') {
-      p = { fanout: fan.length, architect: b.judge ? 1 : 0, 'god-eye': b.critique ? null : 0, revise: b.critique && b.critique.revise ? null : 0 };
+      p = { fanout: fan.length, architect: b.judge ? 1 : 0, 'god-eye': b.critique ? null : 0, verify: b.verifier ? null : 0, revise: b.critique && b.critique.revise ? null : 0, diagnosis: b.diagnosis ? null : 0 };
+    } else if (b.workflow === 'fanout-judge' && b.config === 'diagnose') {
+      p = { diagnose: 1 };
     } else if (b.workflow === 'fanout-judge' && b.config === 'challenge') {
       p = { fanout: fan.length, verify: b.verifier ? null : 0 };
     } else if (b.workflow === 'ground') {
       p = { probes: Array.isArray(b.probes) ? b.probes.length : null };
     } else if (b.workflow === 'decompose') {
-      p = { planner: null, 'god-eye': b.critique ? null : 0 };
+      p = { planner: b.phase === 'critique' ? 0 : null, 'god-eye': b.critique && b.phase !== 'plan' ? null : 0 };
     } else if (b.workflow === 'realize') {
       var waves = (Array.isArray(b.waves) ? b.waves : []).map(function (w) { return (Array.isArray(w) ? w : []).map(String); });
       return { steps: { wave: null }, waves: waves };

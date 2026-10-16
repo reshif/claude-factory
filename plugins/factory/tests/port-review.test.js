@@ -206,7 +206,7 @@ test('minors: a --agent main session is no agent; the drive takes the guard\'s h
 });
 
 test('minors: transcript links are per agent only when the run had one agent of that role; /transcript serves only factory agents\' transcripts; the doctor warns about a full model id', async () => {
-  const cfg = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-cfg-'));
+  const cfg = require('./helpers/tmp').mkdtemp('claude-cfg-');
   const root = F.makeRepo();
   newJob(root);
   const mk = (n) => {
@@ -259,14 +259,14 @@ test('ci install vendors every directory the CLI reads at run time: the vendored
   const dest = path.join(root, '.github', 'factory-cli');
   for (const d of ['bin', 'cli', 'schemas', 'templates', 'config', 'agents', 'policy', 'recipes']) assert.ok(fs.existsSync(path.join(dest, d)), d);
   // run a copy far from the plugin, so nothing can resolve back into it
-  const far = fs.mkdtempSync(path.join(os.tmpdir(), 'vendored-'));
+  const far = require('./helpers/tmp').mkdtemp('vendored-');
   fs.cpSync(dest, path.join(far, 'factory-cli'), { recursive: true });
   const run = (args) => spawnSync('node', [path.join(far, 'factory-cli', 'bin', 'factory'), '--root', root, ...args], { cwd: root, encoding: 'utf8', env: { ...process.env, FACTORY_ROOT: '' } });
   const g = run(['wfargs', 'ground']); // loads schemas, agents and config
   assert.equal(g.status, 0, g.stdout + g.stderr);
   assert.ok(JSON.parse(g.stdout).probes.length);
   assert.ok(!g.stdout.includes(F.PLUGIN), 'the vendored CLI names only itself');
-  const manifests = fs.mkdtempSync(path.join(os.tmpdir(), 'manifests-'));
+  const manifests = require('./helpers/tmp').mkdtemp('manifests-');
   const v = run(['ci', 'verify', '--manifest-dir', manifests]);
   assert.ok(!/Cannot find module/.test(v.stdout + v.stderr), v.stdout + v.stderr);
   assert.equal(run(['doc', 'template', 'adr']).status, 0);

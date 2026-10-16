@@ -75,13 +75,67 @@ function recGround(root, state, env) {
   const topics = (env.data && env.data.topics) || [];
   const jp = jobPaths(root, state.id);
   const answers = readJson(jp.answers, []);
-  writeText(jp.findings, findingsMarkdown(state, topics, answers));
-  require('./project-brief').noteGround(root, state, topics); // each ground step refreshes the project brief's "What ground found"
+  // 0.10.0: the API ledger, quoted from the pinned dependency source (cli/core/deps.js). The
+  // researchers checked their quotes with `factory deps check`; they are checked again here,
+  // against the fetched files as they are now, because an envelope is never taken at its word.
+  // Verified entries get ids (L-n) the ADR's "External API usage" table cites; the rest are kept
+  // as rejected, never as facts.
+  const depsMod = require('./deps');
+  const reaskFile = path.join(jp.dir, 'ground.reask.json');
+  const bNow = invalidation.current(root, state);
+  const reask = readJson(reaskFile, null);
+  const reaskNow = reask && reask.contract === bNow.contract ? reask : null;
+  // the second (re-asked) run returns only the probes it re-asked: the other topics are the first run's
+  let allTopics = topics;
+  if (reaskNow && reaskNow.used !== true && Array.isArray(reaskNow.topics) && (env.data || {}).reask) {
+    const again = new Set(topics.map((t) => t.topic));
+    allTopics = [...reaskNow.topics.filter((t) => !again.has(t.topic)), ...topics];
+  }
+  // packages a probe asked for (`deps`): the CLI fetches them now (never run; a failure is a gap)
+  const specOf = (d) => (d && d.name && d.version && ['pypi', 'npm', 'go'].includes(d.ecosystem) ? (d.ecosystem === 'pypi' ? `pypi:${d.name}==${d.version}` : `${d.ecosystem}:${d.name}@${d.version}`) : null);
+  const asked = [...new Set(topics.flatMap((t) => (Array.isArray(t.deps) ? t.deps : []).map(specOf).filter(Boolean)))];
+  const before = new Set(depsMod.fetched(root, state.id).map((p) => `${p.ecosystem}:${String(p.name).toLowerCase()}@${p.version}`));
+  let arrived = [];
+  if (asked.length) {
+    try {
+      depsMod.fetch(root, { jobId: state.id, add: asked });
+    } catch {
+      /* a gap at worst; ground stands */
+    }
+    arrived = depsMod.fetched(root, state.id).filter((p) => !before.has(`${p.ecosystem}:${String(p.name).toLowerCase()}@${p.version}`)).map((p) => ({ package: `${p.ecosystem}:${p.name}@${p.version}`, path: p.path }));
+  }
+  const rawLedger = allTopics.flatMap((t) => (Array.isArray(t.ledger) ? t.ledger : []).map((e) => ({ ...e, probe: t.topic })));
+  const lc = depsMod.checkLedger(root, state, JSON.parse(JSON.stringify(rawLedger)));
+  // A probe whose entries the CLI rejected, or whose source just arrived, is asked ONCE more with
+  // the CLI's reasons (factory next runs ground again for those probes only; a workflow script
+  // cannot run the check itself). What still fails after that is dropped (kept as rejected).
+  if (!reaskNow && (lc.rejected.length || arrived.length)) {
+    const probes = [...new Set([...lc.rejected.map((x) => x.entry && x.entry.probe).filter(Boolean), ...(arrived.length ? topics.filter((t) => (t.deps || []).length).map((t) => t.topic) : [])])];
+    if (probes.length) {
+      writeJson(reaskFile, { contract: bNow.contract, at: nowIso(), probes, topics, reasons: lc.rejected.map((x) => ({ probe: x.entry && x.entry.probe, symbol: x.entry && x.entry.symbol, file: x.entry && x.entry.file, line: x.entry && x.entry.line, why: x.why })), arrived });
+      ledger.append(root, state.id, { kind: 'step', step: 'ground', ok: false, bound: { contract: bNow.contract }, detail: { ledger_reask: probes, rejected: lc.rejected.length, arrived: arrived.map((a) => a.package) } });
+      return { status: 'retry', reask: probes, message: `The API ledger needs another look: ${lc.rejected.length} entr${lc.rejected.length === 1 ? 'y' : 'ies'} rejected by the CLI${arrived.length ? `, and source arrived for ${arrived.map((a) => a.package).join(', ')}` : ''}. factory next runs ground once more for ${probes.join(', ')} only, with the CLI's reasons.` };
+    }
+  }
+  if (reaskNow && reaskNow.used !== true) writeJson(reaskFile, { ...reaskNow, used: true, topics: undefined });
+  const ledgerDoc = rawLedger.length || depsMod.fetched(root, state.id).length || depsMod.gaps(root, state.id).length ? depsMod.writeLedger(root, state, lc.verified, lc.rejected, { contract: bNow.contract }) : null;
+  const ledgerTopic = ledgerDoc && (ledgerDoc.entries.length || depsMod.gaps(root, state.id).length)
+    ? [{
+        topic: 'API ledger (dependency source)',
+        claims: [
+          ...ledgerDoc.entries.map((e) => ({ claim: `${e.id} ${e.symbol} (${e.package} ${e.version}): ${e.behaviour || `"${String(e.quote).replace(/\s+/g, ' ').slice(0, 160)}"`}`, source: `${e.file}:${e.line}` })),
+          ...depsMod.gaps(root, state.id).map((g) => ({ claim: `No source for ${g.ecosystem}:${g.name}${g.version ? ` ${g.version}` : ''} (${g.reason}); claims about it rest on the repository or are unverified.`, source: 'UNVERIFIED' })),
+        ],
+        unknowns: [],
+      }]
+    : [];
+  writeText(jp.findings, findingsMarkdown(state, [...allTopics, ...ledgerTopic], answers));
+  require('./project-brief').noteGround(root, state, allTopics); // each ground step refreshes the project brief's "What ground found"
   const answered = new Set(answers.map((a) => a.question));
-  const blocking = topics.flatMap((t) => t.unknowns.filter((u) => u.blocking && !answered.has(u.question)).map((u) => u.question));
+  const blocking = allTopics.flatMap((t) => t.unknowns.filter((u) => u.blocking && !answered.has(u.question)).map((u) => u.question));
   const b = invalidation.current(root, state);
-  const ok = blocking.length === 0 && topics.length > 0;
-  ledger.append(root, state.id, { kind: 'step', step: 'ground', ok, bound: { contract: b.contract }, detail: { ...(blocking.length ? { outcome: 'needs_user' } : {}), topics: topics.length, claims: topics.reduce((n, t) => n + t.claims.length, 0), unverified: topics.reduce((n, t) => n + t.claims.filter((c) => c.source === 'UNVERIFIED').length, 0), blocking, degraded: (env.data && env.data.degraded) || [] } });
+  const ok = blocking.length === 0 && allTopics.length > 0;
+  ledger.append(root, state.id, { kind: 'step', step: 'ground', ok, bound: { contract: b.contract }, detail: { ...(blocking.length ? { outcome: 'needs_user' } : {}), topics: allTopics.length, claims: allTopics.reduce((n, t) => n + t.claims.length, 0), unverified: allTopics.reduce((n, t) => n + t.claims.filter((c) => c.source === 'UNVERIFIED').length, 0), blocking, degraded: (env.data && env.data.degraded) || [], ...(ledgerDoc ? { api_ledger: { verified: ledgerDoc.entries.length, rejected: (ledgerDoc.rejected || []).length, gaps: depsMod.gaps(root, state.id).length } } : {}) } });
   if (blocking.length) return { status: 'needs_user', questions: blocking.map((q) => ({ question: q, why: 'Blocks the design' })), message: `Ask the user, then record each answer with factory answer --job ${state.id} --question "…" --answer "…", and run ground again.` };
   return { status: 'ok', message: `Findings written to ${jp.findings}.` };
 }
@@ -102,7 +156,29 @@ function recDecide(root, state, env) {
   state.counters.decide_rounds += 1;
   job.save(root, state);
   const max = state.policy.limits.max_design_critique_rounds;
-  writeJson(path.join(jp.critiquesDir, 'design.json'), seal({ hash: b.design, verdict: last ? last.verdict : 'none', items: last ? last.items : [], rounds: critiques.length, at: nowIso() }));
+  // 0.10.0: the critics' open serious items (verified, not refuted), how the loop stopped, and
+  // whether the architect revised after the last critique, for the gate to show
+  const openIds = new Set(Array.isArray(d.open) ? d.open.map((x) => (typeof x === 'string' ? x : x && x.id)) : last && Array.isArray(last.open) ? last.open : []);
+  // A serious item citing the dependency source (`evidence.kind: source`, `ref` path:line and its
+  // `quote`) is checked here against the fetched file, as a ledger entry is (a workflow cannot
+  // read it): a quote that is not at its line is rejected evidence, and the item does not count as
+  // an open serious objection at the gate (it is shown as rejected).
+  if (last && Array.isArray(last.items)) {
+    const sourced = last.items.filter((it) => it && it.id && openIds.has(it.id) && it.evidence && typeof it.evidence === 'object' && it.evidence.kind === 'source');
+    if (sourced.length) {
+      const asEntries = sourced.map((it) => { const m = /^(.*):(\d+)$/.exec(String(it.evidence.ref || '')); return { probe: it.id, symbol: it.symbol || it.id, file: m ? m[1] : String(it.evidence.ref || ''), line: m ? Number(m[2]) : 0, quote: it.evidence.quote || '' }; });
+      const chk = require('./deps').checkLedger(root, state, asEntries);
+      for (const r of chk.rejected) {
+        const it = last.items.find((x) => x.id === (r.entry && r.entry.probe));
+        if (!it) continue;
+        it.evidence_rejected = r.why;
+        it.severity = 'minor';
+        openIds.delete(it.id);
+      }
+    }
+  }
+  const openItems = last ? (last.items || []).filter((it) => it && it.id && openIds.has(it.id)) : [];
+  writeJson(path.join(jp.critiquesDir, 'design.json'), seal({ hash: b.design, verdict: last ? last.verdict : 'none', items: last ? last.items : [], rounds: critiques.length, ...(d.stop ? { stop: d.stop, revised_after_last: Boolean(d.revised_after_last), open: openItems, verifications: (last && last.verifications) || [] } : {}), ...(d.targeted ? { targeted: true } : {}), ...(d.question && d.question.question ? { question: { question: d.question.question, options: d.question.options || [], recommendation: d.question.recommendation || null, cause: d.question.cause || null, diagnosed: Boolean(d.question.diagnosed) } } : {}), ...(d.loop ? { loop: d.loop } : {}), at: nowIso() }));
   // The design record must follow templates/docs (front matter, sections in order, an AC
   // table, a Mermaid architecture diagram in an ADR, a data-flow diagram in a threat model).
   const docProblems = docMod.designProblems(root, state);
@@ -116,18 +192,36 @@ function recDecide(root, state, env) {
     if (streak >= DOC_RETRY_CAP) return { status: 'park', park_reason: `The design record still breaks the doc templates after ${streak} decide runs:\n${list}`, doc_problems: docProblems, message: 'Parked.' };
     return { status: 'retry', doc_problems: docProblems, message: `The design record does not follow the doc templates (${docProblems.length} problem(s)):\n${list}\nfactory next runs decide again; the architect gets these problems. Check a file with: factory doc check <file>` };
   }
-  const h2Step = ctx.recipe.steps.find((s) => ['H2', 'EH2', 'HF'].includes(s.step));
+  // The human gate that sees the design: H2 (EH2, HF), or a combined H3 that binds the design.
+  const h2Step = ctx.recipe.steps.find((s) => ['H2', 'EH2', 'HF'].includes(s.step)) || ctx.recipe.steps.find((s) => s.step === 'H3' && Array.isArray(s.combined) && s.combined.includes('design'));
   const humanWillSee = Boolean(h2Step && !(h2Step.when === 'adr' && !invalidation.hasAdr(root, state.id)));
   const approved = last && last.verdict === 'approve';
-  const ok = Boolean(approved || (critiques.length >= max && humanWillSee));
-  ledger.append(root, state.id, { kind: 'step', step: 'decide', ok, bound: { contract: b.contract, design: b.design }, detail: { kind: a.kind, paths, critique: last ? last.verdict : null, rounds: critiques.length, threat_model: needThreat } });
-  if (ok) return { status: 'ok', message: approved ? 'Design critique approved.' : `Design critique still says revise after ${critiques.length} rounds; you will see it at ${h2Step.step}.` };
+  // 0.10.0: a critique loop that stopped (ceiling, no progress) goes to the gate with its open
+  // objections; it never parks. A legacy envelope (no stop) keeps the old rule.
+  const stopped = ['ceiling', 'no_progress', 'critic_failed'].includes(d.stop);
+  const ok = Boolean(approved || stopped || (critiques.length >= max && humanWillSee) || !h2Step);
+  ledger.append(root, state.id, { kind: 'step', step: 'decide', ok, bound: { contract: b.contract, design: b.design }, detail: { kind: a.kind, paths, critique: last ? last.verdict : null, rounds: critiques.length, threat_model: needThreat, ...(d.stop ? { stop: d.stop, open: openItems.length } : {}), ...(d.targeted ? { targeted: true } : {}) } });
+  if (ok) {
+    if (approved) return { status: 'ok', message: `Design critique approved${critiques.length > 1 ? ` after ${critiques.length} rounds` : ''}.` };
+    const where = h2Step ? `you will see them at ${h2Step.step}` : 'no gate in this recipe reviews the design: they are listed in the completion report';
+    return { status: 'ok', open: openItems.map((it) => ({ id: it.id, critic: it.critic, severity: it.severity, issue: it.issue })), message: `Design critique still has ${openItems.length || 'open'} objection(s) after ${critiques.length} round(s)${stopped ? ` (${d.stop === 'no_progress' ? 'no progress' : d.stop === 'critic_failed' ? `a critic returned no result: ${((last && last.missing) || []).join(', ')}` : 'ceiling'}${d.stop === 'critic_failed' ? '' : '; the architect revised after the last critique'})` : ''}; ${where}.` };
+  }
   return { status: 'park', park_reason: `Design critique did not approve after ${critiques.length} round(s) and no human gate will review it.`, message: 'Parked.' };
 }
 
 function recDecompose(root, state, env) {
   const d = env.data || {};
   const v = planMod.validate(root, state);
+  // 0.10.0: the build environment the planner proposed with the plan must be a valid one
+  const envMod = require('./environment');
+  const proposed = state.epic ? null : readJson(envMod.JOB_PROPOSED(root, state.id), null);
+  if (v.valid && proposed) {
+    const pp = envMod.problems(envMod.essence(proposed));
+    if (pp.length) {
+      v.valid = false;
+      v.errors = pp.map((p) => `environment.proposed.json: ${p}`);
+    }
+  }
   const b = invalidation.current(root, state);
   if (!v.valid) {
     state.counters.decompose_rounds += 1;
@@ -135,13 +229,77 @@ function recDecompose(root, state, env) {
     ledger.append(root, state.id, { kind: 'step', step: 'decompose', ok: false, bound: { plan: b.plan, contract: b.contract }, detail: { errors: v.errors } });
     return { status: 'retry', errors: v.errors, message: 'The plan is still invalid; factory next runs decompose again (the planner gets the errors).' };
   }
-  ledger.append(root, state.id, { kind: 'step', step: 'decompose', ok: true, bound: { plan: b.plan, contract: b.contract }, detail: { tasks: v.tasks || v.slices, waves: v.waves || v.layers } });
+  // Packages the planner's plan or environment adds: fetched now (never run; a failure is a gap)
+  const planDeps = (((d.planner || {}).deps) || []).filter((x) => x && x.ecosystem && x.name && x.version);
+  if (planDeps.length && !state.epic) {
+    try {
+      require('./deps').fetch(root, { jobId: state.id, add: planDeps.map((x) => (x.ecosystem === 'pypi' ? `pypi:${x.name}==${x.version}` : `${x.ecosystem}:${x.name}@${x.version}`)) });
+    } catch {
+      /* a gap at worst; the plan stands */
+    }
+  }
+  // The plan probe (cli/core/probe.js), run here by the CLI (in claude-factory a workflow cannot
+  // run a command): lint and, per policy, a dry-run of every verify command in a scratch worktree
+  // inside the environment the plan's gate binds. Its problems go back to the planner while they
+  // shrink (the shared loop engine: the planner on the stronger model when they stall); what is
+  // left when the loop stops goes to the gate, never to a park. Then God Eye's plan critique runs
+  // as its own decompose phase with the probe's record as its evidence; its items go back to the
+  // planner the same way.
+  const P = require('./probe');
+  const Loop = require('./loop');
+  const probeOn = !state.epic && P.enabled(root, state);
+  let probeRec = null;
+  const fresh = job.load(root, state.id);
+  fresh.loops = fresh.loops || {};
+  const pol = require('../lib/util').deepMerge(require('./policy').load(root), state.policy || {});
+  const loopPol = (ceiling) => Loop.policyFor(pol, { ceiling, stall_rounds: 1, diagnose: false, ...(require('./wfargs').loopModel(root, state) ? {} : { escalate_model: null }) });
+  const phase = d.phase || null;
+  if (probeOn && phase !== 'critique') {
+    probeRec = P.current(root, state) || P.run(root, { jobId: state.id });
+    const lp = Loop.shouldContinue(fresh.loops.probe, probeRec.ok ? [] : probeRec.problems.map((x) => ({ key: String(x).replace(/Output \(tail\):.*$/, '').slice(0, 200) })), loopPol(3));
+    fresh.loops.probe = { ...lp.state, segments: (fresh.loops.probe || {}).segments || 0 };
+    job.save(root, fresh);
+    if (!probeRec.ok && lp.action !== 'stop') {
+      ledger.append(root, state.id, { kind: 'step', step: 'decompose', ok: false, bound: { plan: b.plan, contract: b.contract, design: b.design }, detail: { errors: probeRec.problems.slice(0, 20), probe_key: P.problemKey(probeRec), probe: false, loop: lp.rule } });
+      return { status: 'retry', errors: probeRec.problems, message: `The plan probe found ${probeRec.problems.length} problem(s) with the verify commands or the build environment; factory next runs decompose again (the planner gets the probe's output${lp.model ? `, on ${lp.model}` : ''}).` };
+    }
+  }
+  // the critique (as its own phase with the probe on, else from the same run)
+  let critiquePending = false;
   if (d.critique) {
     const c = d.critique;
-    writeJson(path.join(jobPaths(root, state.id).critiquesDir, 'plan.json'), seal({ hash: b.plan, verdict: c.verdict, items: c.items, at: nowIso() }));
+    writeJson(path.join(jobPaths(root, state.id).critiquesDir, 'plan.json'), seal({ hash: b.plan, verdict: c.verdict, items: c.items, at: nowIso(), ...(probeOn ? { probe: (P.current(root, state) || {}).ok === true } : {}) }));
     if (c.verdict === 'approve') ledger.append(root, state.id, { kind: 'step', step: 'plan_critique', ok: true, bound: { plan: b.plan }, detail: {} });
+    if (probeOn && c.verdict !== 'approve') {
+      const serious = (c.items || []).filter((it) => it && it.severity !== 'minor');
+      const lp = Loop.shouldContinue(fresh.loops.plan_critique, serious.map((it) => ({ key: String(it.issue || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim().slice(0, 80) })), loopPol(2));
+      fresh.loops.plan_critique = { ...lp.state, segments: (fresh.loops.plan_critique || {}).segments || 0 };
+      job.save(root, fresh);
+      if (serious.length && lp.action !== 'stop') {
+        ledger.append(root, state.id, { kind: 'step', step: 'decompose', ok: false, bound: { plan: b.plan, contract: b.contract, design: b.design }, detail: { critique_items: serious.length, loop: lp.rule } });
+        return { status: 'retry', critique: c.verdict, message: `God Eye's plan critique asked for revisions (${serious.length} serious item(s)); factory next runs decompose again (the planner gets them${lp.model ? `, on ${lp.model}` : ''}), then the probe and the critique.` };
+      }
+    }
+  } else if (probeOn && phase === 'plan') {
+    const pc = readJson(path.join(jobPaths(root, state.id).critiquesDir, 'plan.json'), null);
+    const cl = fresh.loops.plan_critique;
+    critiquePending = !(pc && pc.hash === b.plan) && !(cl && cl.level >= 3);
   }
-  return { status: 'ok', message: `Plan valid: ${v.tasks || v.slices} ${state.epic ? 'slices' : 'tasks'}.` };
+  if (critiquePending) {
+    ledger.append(root, state.id, { kind: 'step', step: 'decompose', ok: false, bound: { plan: b.plan, contract: b.contract, design: b.design }, detail: { critique_pending: true, probe: probeRec ? probeRec.ok : null } });
+    return { status: 'retry', critique_pending: true, message: `Plan valid: ${v.tasks || v.slices} tasks.${probeRec ? probeRec.ok ? ' The plan probe passed.' : ` The plan probe still reports ${probeRec.problems.length} problem(s) (its loop stopped): shown at the gate.` : ''} factory next runs God Eye's plan critique with the probe's record.` };
+  }
+  if (probeOn && !probeRec) probeRec = P.current(root, state);
+  const probeDetail = probeRec ? { probe: probeRec.ok, probe_key: P.problemKey(probeRec), probe_problems: probeRec.problems.length } : {};
+  ledger.append(root, state.id, { kind: 'step', step: 'decompose', ok: true, bound: { plan: b.plan, contract: b.contract, design: b.design }, detail: { tasks: v.tasks || v.slices, waves: v.waves || v.layers, ...probeDetail } });
+  // the plan's loops end with the plan: the next plan (a re-plan) starts them afresh
+  const done = job.load(root, state.id);
+  if (done.loops && (done.loops.probe || done.loops.plan_critique)) {
+    delete done.loops.probe;
+    delete done.loops.plan_critique;
+    job.save(root, done);
+  }
+  return { status: 'ok', ...(probeRec && !probeRec.ok ? { probe_problems: probeRec.problems } : {}), message: `Plan valid: ${v.tasks || v.slices} ${state.epic ? 'slices' : 'tasks'}.${probeRec ? probeRec.ok ? probeRec.mode === 'lint' ? ' The plan probe linted every verify command (lint only: the proposed environment installs from the network and is not confirmed, so nothing ran).' : ' The plan probe ran every verify command in the build environment.' : ` The plan probe still reports ${probeRec.problems.length} problem(s): shown at the gate.` : ''}` };
 }
 
 function recRealize(root, state, env) {
@@ -158,8 +316,14 @@ function recRealize(root, state, env) {
     }
     job.save(root, state);
     const reason = String(eb.reason || 'environment broken').slice(0, 1500);
-    require('./events').append(root, { event: 'environment_broken', job: state.id, task: eb.task || null, cmd: eb.cmd || null, code: eb.code === undefined ? null : eb.code, reason: reason.slice(0, 500) });
-    return { status: 'park', park_from: 'environment', park_reason: `${reason} — no builder attempt was spent. Fix the environment (factory env check shows it; factory env set changes it), then reply "resume".`, tasks: reported.map((r) => ({ id: r.id, outcome: r.outcome, attempts: r.attempts, summary: r.summary })), environment_broken: eb, message: 'Parked: the build environment is broken.' };
+    require('./events').append(root, { event: 'environment_broken', job: state.id, task: eb.task || null, cmd: eb.cmd || null, code: eb.code === undefined ? null : eb.code, reason: reason.slice(0, 500), ...(eb.source ? { source: eb.source } : {}) });
+    // 0.10.0: a builder that reports the environment broken (blocked_reason environment) goes to
+    // environment repair, not to a paths amendment: the environment is what changes, and only the
+    // human accepts a changed one
+    const repair = eb.source === 'builder'
+      ? `Environment repair: check it with factory env check (it runs the setup in a scratch worktree); write the fix as a proposal (factory env propose --file <copy of .factory/environment.json with the fix>), then reply "confirm environment <hash>" to accept it and "resume". The builder's own words are above.`
+      : null;
+    return { status: 'park', park_from: 'environment', park_reason: `${reason} — no builder attempt was spent. Fix the environment (factory env check shows it; factory env set changes it), then reply "resume".`, ...(repair ? { park_next: repair, park_loop: 'realize', park_question: { question: `${eb.task || 'A task'}'s builder says the build environment is broken. How should the environment change?`, options: [{ key: 'a', text: 'Fix the environment: write a proposal (factory env propose) and confirm it (confirm environment <hash>), then resume' }, { key: 'b', text: 'The environment is fine: resume and say what the builder should do instead' }, { key: 'c', text: 'Stop here (cancel job)' }], recommendation: 'a', cause: String(eb.reason || '').slice(0, 400) } } : {}), tasks: reported.map((r) => ({ id: r.id, outcome: r.outcome, attempts: r.attempts, summary: r.summary })), environment_broken: eb, message: 'Parked: the build environment is broken.' };
   }
   // The tester relays task verify (a workflow cannot run it): what it relayed is compared with
   // the evidence task verify recorded, which alone decides.
@@ -173,13 +337,22 @@ function recRealize(root, state, env) {
   for (const r of reported) {
     const done = steps.taskDone(ctx, r.id);
     const outcome = done ? 'done' : r.outcome === 'done' ? 'not_verified' : r.outcome;
-    state.tasks[r.id] = { ...(state.tasks[r.id] || {}), outcome, outcome_reason: r.summary || '', outcome_at: nowIso() };
-    table.push({ id: r.id, outcome, attempts: r.attempts, summary: r.summary });
+    state.tasks[r.id] = { ...(state.tasks[r.id] || {}), outcome, outcome_reason: r.summary || '', outcome_at: nowIso(), ...(r.escalated && !(state.tasks[r.id] || {}).escalated_at ? { escalated_at: nowIso() } : {}) };
+    table.push({ id: r.id, outcome, attempts: r.attempts, summary: r.summary, ...(r.escalated ? { escalated: true } : {}), ...(r.last_failures ? { last_failures: r.last_failures } : {}) });
   }
   job.save(root, state);
   const bad = table.filter((t) => t.outcome !== 'done');
   if (bad.length) {
-    return { status: 'park', park_reason: `Tasks not done: ${bad.map((t) => `${t.id} (${t.outcome})`).join(', ')}. Nothing partial ships.`, tasks: table, ...(relayMismatches.length ? { relay_mismatches: relayMismatches } : {}), message: 'Parked with a per-task table.' };
+    // 0.10.0: an exhausted task was escalated once (strongest model, diagnosis brief) before it
+    // parks; the park asks a specific question, with the failure it ended on
+    const ex = bad.filter((t) => t.outcome === 'exhausted');
+    const question = ex.length
+      ? ex.map((t) => {
+          const lastF = String((t.last_failures || [])[0] || t.summary || '').replace(/\s+/g, ' ').slice(0, 400);
+          return `${t.id} did not pass task verify in ${t.attempts} attempt(s) this run${t.escalated ? ', the last one escalated to the strongest model with a diagnosis brief' : ''}. It ended on: ${lastF}. Which is it? (a) the task or its verify command is wrong — amend the plan (recommended when the failure is the same each time); (b) the environment lacks something — fix it (factory env check) and reply "resume"; (c) the code needs another try with what you know — reply "resume" and say what to try.`;
+        }).join(' ')
+      : null;
+    return { status: 'park', park_reason: `Tasks not done: ${bad.map((t) => `${t.id} (${t.outcome})`).join(', ')}. Nothing partial ships.`, ...(question ? { park_next: question, park_loop: 'realize', park_question: { question: `Which is it for ${ex.map((t) => t.id).join(', ')}: the task, the environment, or the code?`, options: [{ key: 'a', text: 'The task or its verify command is wrong: amend the plan' }, { key: 'b', text: 'The environment lacks something: fix it (factory env check), then resume' }, { key: 'c', text: 'The code needs another try: resume with what to try' }], recommendation: 'a', cause: question.slice(0, 400), diagnosed: ex.some((t) => t.escalated) } } : {}), tasks: table, ...(relayMismatches.length ? { relay_mismatches: relayMismatches } : {}), message: 'Parked with a per-task table.' };
   }
   return { status: 'ok', tasks: table, ...(relayMismatches.length ? { relay_mismatches: relayMismatches } : {}), message: 'Every task in scope is built and verified.' };
 }
@@ -214,9 +387,36 @@ function recReconcile(root, state, env) {
       }
       return { status: 'park', park_kind: 'regression', park_reason: `Reconcile regression: ${last.detail.message || 'merged or fixed lines were dropped'}${again.length ? ` (${again.join(', ')} already rebuilt once on the merged code)` : ''}`, message: 'Parked: integrating would drop work already merged or fixed.' };
     }
-    return { status: 'park', park_reason: `Integration did not complete: ${(d.integrator && d.integrator.summary) || 'no result'}`, message: 'Parked.' };
+    // the integrator came back without a result: retried while it makes progress, on the stronger
+    // model after a round without, and the job parks only with a specific question (loop engine)
+    const fresh1 = job.load(root, state.id);
+    fresh1.loops = fresh1.loops || {};
+    const why = (d.integrator && d.integrator.summary) || 'no result';
+    const pol = require('../lib/util').deepMerge(require('./policy').load(root), state.policy || {});
+    const Loop = require('./loop');
+    const lp = Loop.shouldContinue(fresh1.loops.integrator, [{ key: `integration|${String(why).slice(0, 60)}` }], Loop.policyFor(pol, { ceiling: 3, stall_rounds: 1, diagnose: false }));
+    fresh1.loops.integrator = { ...lp.state, segments: (fresh1.loops.integrator || {}).segments || 0 };
+    job.save(root, fresh1);
+    if (lp.action !== 'stop') return { status: 'retry', recovery: { kind: 'integration', action: lp.action, ...(lp.model ? { model: lp.model } : {}) }, message: `Integration did not complete (${why}): factory next runs reconcile again${lp.model ? ` with the integrator on ${lp.model}` : ''}.` };
+    const q = Loop.question(fresh1.loops.integrator, { what: 'Integration', fallbackOptions: [{ text: 'Run it again with your direction: reply with what the integrator should do (which task wins in the conflicting file)', consequences: 'it resumes with your words' }, { text: 'Amend the plan: give the shared file to one task, or order the tasks', consequences: 'the conflict goes away' }], fallbackRecommendation: 'b' });
+    return { status: 'park', park_kind: 'integration', park_question: q, park_reason: `Integration did not complete after ${fresh1.loops.integrator.rounds} attempt(s), also on the stronger model: ${why}.\n${q.text}`, message: 'Parked.' };
   }
   return { status: 'ok', message: `Integrated at fingerprint ${ctx.b.fingerprint.slice(0, 12)}.` };
+}
+
+// The loop engine's diagnosis of a router loop (fanout-judge --config diagnose): recorded on the
+// loop's state; factory next then asks the human its question, or runs the next round its way.
+function recDiagnose(root, state, env) {
+  const d = env.data || {};
+  const name = d.loop || env.mode;
+  state.loops = state.loops || {};
+  if (!name || !state.loops[name]) return { status: 'stale', message: 'No loop waits for this diagnosis; nothing recorded. Run factory next.' };
+  const segments = state.loops[name].segments || 0;
+  state.loops[name] = { ...require('./loop').recordDiagnosis(state.loops[name], d.diagnosis ? { ...d.diagnosis, by: 'god-eye' } : { cause: 'the diagnosis agent returned nothing', needs_user: true, question: null }), segments };
+  job.save(root, state);
+  const dg = state.loops[name].diagnosis;
+  ledger.append(root, state.id, { kind: 'diagnosis', loop: name, needs_user: dg.needs_user, question: dg.question || null, options: dg.options.length, approach: Boolean(dg.approach), cause: String(dg.cause || '').slice(0, 300) });
+  return { status: 'ok', diagnosis: dg, message: dg.needs_user ? `Diagnosis: ${dg.cause} factory next asks you its question.` : `Diagnosis: ${dg.cause} The next round takes its approach.` };
 }
 
 function recChallenge(root, state, env) {
@@ -238,15 +438,33 @@ function recChallenge(root, state, env) {
     if (!res.ok) return { status: 'retry', ...res, message: 'Post-merge review incomplete (lanes missing or findings unverified); factory next runs it again.' };
     return { status: 'ok', ...res, message: 'Post-merge review passed.' };
   }
-  // A serious finding no verifier could settle is re-verified each round,
-  // never dropped; after max_reverify_rounds tries the job parks for the human.
-  if (!res.ok && !res.confirmed.length && (res.carried || []).length) {
+  // A serious finding no verifier could settle is re-verified (with twice the time, by a second
+  // verifier on the stronger model that reproduces it in the build environment) while the set of
+  // unsettled ones shrinks (the loop engine, cli/core/loop.js). What survives is never dropped and
+  // never parks mid-pipeline: it becomes one accept/dismiss in the ship review (factory next shows it).
+  const fresh0 = job.load(root, state.id);
+  fresh0.loops = fresh0.loops || {};
+  if (!res.ok && !res.confirmed.length && (res.unverified || []).length && !(res.missing || []).length) {
     const L = state.policy.limits || {};
-    const allowed = (L.max_reverify_rounds || 3) + ((state.counters || {}).reverify_bonus || 0);
-    const stuck = res.carried.filter((c) => c.times > allowed);
-    if (stuck.length) {
-      return { status: 'park', park_from: 'reverify', degraded: missingLanes, ...res, park_reason: `Serious review finding(s) still unverified after ${allowed} re-verification round(s): ${stuck.map((c) => c.id).join(', ')}. They block ship until a verifier settles them; "resume" re-verifies once more.`, message: 'Parked: a serious finding could not be verified.' };
+    const ceiling = (L.max_reverify_rounds || 3) + ((state.counters || {}).reverify_bonus || 0);
+    const pol = require('../lib/util').deepMerge(require('./policy').load(root), state.policy || {});
+    const P = require('./loop').policyFor(pol, { ceiling, stall_rounds: 1, diagnose: false });
+    // fingerprinted by what they are (lane, file, rule or summary), not by their ids: ids restart each round
+    const ch0 = ledger.lastStep(root, state.id, 'challenge');
+    const byId = Object.fromEntries((((ch0 && ch0.detail) || {}).findings || []).map((f) => [f.id, f]));
+    const d = require('./loop').shouldContinue(fresh0.loops.reverify, res.unverified.map((id) => (byId[id] ? decisionTable.findingKey(byId[id]) : { key: id.replace(/@r\d+$/, '') })), P);
+    fresh0.loops.reverify = { ...d.state, segments: (fresh0.loops.reverify || {}).segments || 0 };
+    if (d.action === 'stop') {
+      const ch = ledger.lastStep(root, state.id, 'challenge');
+      fresh0.unsettled = { at: nowIso(), fingerprint: ch && ch.bound ? ch.bound.fingerprint : null, findings: res.unverified.slice(), rule: d.rule };
+      job.save(root, fresh0);
+      require('./events').append(root, { event: 'unsettled_findings', job: state.id, findings: res.unverified, rule: d.rule });
+      return { status: 'ship_review', degraded: missingLanes, ...res, unsettled: res.unverified, message: `Serious finding(s) ${res.unverified.join(', ')} stay unverified after a second verifier on the stronger model (${d.rule}). They are not dropped: the ship review asks you once to accept or dismiss each (factory next shows it).` };
     }
+    job.save(root, fresh0);
+  } else if (fresh0.unsettled && res.ok) {
+    fresh0.unsettled = null;
+    job.save(root, fresh0);
   }
   return { status: res.ok ? 'ok' : res.confirmed.length ? 'fix' : 'retry', degraded: missingLanes, ...res, message: res.ok ? 'All required lanes pass.' : res.confirmed.length ? 'Confirmed serious findings: factory next schedules a fix round.' : `Lanes missing or findings unverified (${[...res.missing, ...res.unverified].join(', ')}); factory next runs the review again${(res.carried || []).length ? ', re-verifying the unverified ones' : ''}.` };
 }
@@ -297,6 +515,7 @@ function apply(root, { jobId, file, envelope }) {
     case 'fanout-judge':
       if (env.config === 'decide') res = recDecide(root, fresh, env);
       else if (env.config === 'challenge') res = recChallenge(root, fresh, env);
+      else if (env.config === 'diagnose') res = recDiagnose(root, fresh, env);
       else fail(`Unknown config ${env.config}`, 'bad_envelope');
       break;
     case 'ground':
@@ -323,7 +542,7 @@ function apply(root, { jobId, file, envelope }) {
       return e ? e.needs_paths || e.builder.needs_paths : (((now.tasks || {})[id] || {}).builder || {}).needs_paths || [];
     };
     const tasks = (res.tasks || ((env.workflow === 'realize' && env.data && env.data.tasks) || [])).map((t) => ({ id: t.id, outcome: t.outcome, summary: t.summary || '', needs_paths: lastNeeds(t.id) }));
-    const p = decisionTable.park(root, now, res.park_reason, res.park_from || env.workflow, { tasks, kind: res.park_kind });
+    const p = decisionTable.park(root, now, res.park_reason, res.park_from || env.workflow, { tasks, kind: res.park_kind, ...(res.park_next ? { next: res.park_next } : {}), ...(res.park_question ? { question: res.park_question, loop: res.park_loop || 'integrator' } : {}) });
     res.park = { kind: p.kind, next: p.next };
   }
   return { job: state.id, workflow: env.workflow, config: env.config || null, ...res };

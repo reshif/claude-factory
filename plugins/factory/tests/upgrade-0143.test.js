@@ -19,7 +19,7 @@ const REPO = path.resolve(F.PLUGIN, '..', '..');
 const hasOld = spawnSync('git', ['-C', REPO, 'cat-file', '-e', `${OLD_REV}:plugins/factory/bin/factory`]).status === 0;
 
 function oldPlugin() {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'factory-0143-'));
+  const dir = require('./helpers/tmp').mkdtemp('factory-0143-');
   const r = spawnSync('bash', ['-c', `git -C "${REPO}" archive ${OLD_REV} plugins/factory | tar -x -C "${dir}"`], { encoding: 'utf8' });
   if (r.status !== 0) throw new Error(r.stderr);
   return path.join(dir, 'plugins', 'factory', 'bin', 'factory');

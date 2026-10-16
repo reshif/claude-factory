@@ -267,7 +267,8 @@ function stopDetail(kind, n, extra = {}) {
     case 'gate':
       return {
         gate: g ? { id: g.id, hash: g.hash, docs: g.docs || [] } : null,
-        summary: `${J} waits at gate ${g ? g.id : n.step}${g && g.hash ? ` (hash ${String(g.hash).slice(0, 12)})` : ''}${n.resumes_park ? '; approving it also resumes the parked job' : ''}.`,
+        summary: `${J} waits at gate ${g ? g.id : n.step}${g && g.hash ? ` (hash ${String(g.hash).slice(0, 12)})` : ''}${n.review && (n.review.approves || []).length ? `: one approval for ${n.review.approves.join(' + ')}${n.review.environment && n.review.environment.status === 'proposed' ? ' (it also sets the build environment for this repository: other jobs build in it too)' : ''}` : ''}${n.review && n.review.objections ? `; ${n.review.objections}` : ''}${n.resumes_park ? '; approving it also resumes the parked job' : ''}.`,
+        ...(n.review ? { review: n.review } : {}),
         reply: 'approve | deny <what must change>',
         command: g && g.id === 'A' ? `factory approve --job ${J}` : `factory approve ${g ? g.id : ''} --job ${J}`.replace('  ', ' '),
       };
@@ -281,11 +282,25 @@ function stopDetail(kind, n, extra = {}) {
       return { questions: extra.questions || [], summary: `${J}: ${(extra.questions || []).length} question(s) block the design.`, reply: 'answer each question' };
     case 'parked': {
       const p = n.park || {};
-      return { park: { kind: p.kind || null, next: p.next || null }, summary: `${J} parked${p.kind ? ` (${p.kind})` : ''}: ${String(n.reason || '').split('\n')[0].slice(0, 300)}${p.next ? ` Next: ${p.next}` : ''}`, reply: 'resume | cancel job | abandon job | what to change', command: `factory resume --job ${J}` };
+      // a park asks a specific question (a loop's diagnosis, the budget question): the reply is
+      // the user's answer in their own words, an option's letter, or one of the exact replies
+      const q = p.question ? { question: p.question, options: p.options || [], recommendation: p.recommendation || null } : null;
+      return { park: { kind: p.kind || null, next: p.next || null, ...(q ? q : {}) }, summary: `${J} parked${p.kind ? ` (${p.kind})` : ''}: ${q ? `${q.question}${q.options.length ? ` ${q.options.map((o) => `${o.key}) ${o.text}${o.key === q.recommendation ? ' (recommended)' : ''}`).join(' · ')}` : ''}` : `${String(n.reason || '').split('\n')[0].slice(0, 300)}${p.next ? ` Next: ${p.next}` : ''}`}`, reply: q ? 'your answer in your own words, or an option (e.g. "a") | cancel job' : 'resume | cancel job | abandon job | what to change', command: `factory resume${q && q.recommendation ? ` "${q.recommendation}"` : ''} --job ${J}` };
     }
     case 'wait': {
-      const merged = /merged/.test(n.reason || '');
-      return { summary: `${J}: ${n.reason || 'waiting on you'}`, reply: merged ? 'merged <commit>' : (n.acs || []).length ? (n.acs || []).map((a) => `confirm ${a}`).join(' | ') : 'continue', ...(merged ? { command: `factory merged <commit> --job ${J}` } : (n.acs || []).length ? { command: `factory confirm ${n.acs[0]} --job ${J}` } : {}) };
+      // the ship review: everything before ship that needs the human, answered in one reply
+      if (n.ship_review) {
+        const r = n.ship_review;
+        const parts = [...(r.acs || []).map((a) => `confirm ${a}`), ...(r.findings || []).map((f) => `accept|dismiss finding ${f.id} <why>`), ...(r.push ? ['approve ship'] : [])];
+        return { ship_review: r, screen: n.reason || null, summary: `${J}: the ship review waits on you (${[r.acs.length ? `${r.acs.length} check(s) of yours` : '', r.findings.length ? `${r.findings.length} unsettled finding(s)` : '', r.push ? 'the push' : ''].filter(Boolean).join(', ')}); one reply settles it.`, reply: parts.join('; '), command: (r.acs || []).length ? `factory confirm ${r.acs[0]} --job ${J}` : r.push ? `factory approve ship --job ${J}` : `factory finding dismiss ${(r.findings[0] || {}).id} --job ${J} --reason "<why>"` };
+      }
+      // a build that waits for its environment (0.10.0): only the human confirms it
+      if (n.rule === 'env.unconfirmed') {
+        const e = n.environment || {};
+        return { environment: e, summary: `${J}: ${String(n.reason || '').split('\n')[0]}`, reply: e.short ? `confirm environment ${e.short} | confirm environment none` : 'confirm environment <hash> | confirm environment none', command: `factory env set${e.short ? ` ${e.short}` : ''} --job ${J}` };
+      }
+      const merged = /merged|[Mm]erge the job branch|Merge it on GitHub|contains J-/.test(n.reason || '');
+      return { summary: `${J}: ${String(n.reason || 'waiting on you').split('\n')[0]}`, reply: merged ? 'merge it, then: merged (or merged <commit>)' : (n.acs || []).length ? (n.acs || []).map((a) => `confirm ${a}`).join(' | ') : 'continue', ...(merged ? { command: `factory next --job ${J}`, alt_command: `factory merged <commit> --job ${J}` } : (n.acs || []).length ? { command: `factory confirm ${n.acs[0]} --job ${J}` } : {}) };
     }
     case 'ship':
       return { summary: `${J} is ready to ship (every pre-ship floor is met). policy.drive.stop_before_ship holds the push, the pull request or the local merge for your go: say so, and Claude follows the ship skill (factory ship), then factory drive.`, reply: 'ship it | what to change first' };
@@ -299,12 +314,19 @@ function stopDetail(kind, n, extra = {}) {
       return { command: extra.command, summary: `${J}: "factory ${extra.step}" ${extra.why}: it runs longer than the shell tool lets a drive run. Run it in your own terminal (\`${extra.command}\`; it is not human-only, it is just long), then tell Claude to run factory drive again.`, reply: 'done (after running it in your terminal)' };
     case 'yield':
       return { summary: `${J}: the drive used ${extra.seconds}s of its time budget${extra.before ? ` and ${extra.before} may run long, so it starts in a fresh drive` : ''}; run factory drive again: it continues from where the job is.` };
-    case 'done':
+    case 'done': {
+      // the end-of-job digest: lessons and project-brief proposals together, one reply for all
+      // (each still yours: nothing applies without it; factory inbox lists them too)
+      const ls = (extra.lessons || []).map((l) => (typeof l === 'string' ? l : l && l.id)).filter(Boolean);
+      const bs = extra.briefs || [];
+      const digest = [...ls.map((l) => `accept lesson ${l}`), ...bs.map((b) => `accept brief ${b.id}`)];
       return {
-        summary: `${J} is done: ${n.reason || 'closed'}${extra.lessons && extra.lessons.length ? ` Lessons proposed: ${extra.lessons.join(', ')} (reply "accept lesson Ln" or "reject lesson Ln <why>").` : ''}${extra.briefs && extra.briefs.length ? ` Project brief changes proposed: ${extra.briefs.map((b) => b.id).join(', ')} (reply "accept brief Pn" or "reject brief Pn <why>"; they reach every later agent).` : ''}`,
+        summary: `${J} is done: ${n.reason || 'closed'}${ls.length ? ` Lessons proposed: ${ls.join(', ')}.` : ''}${bs.length ? ` Project brief changes proposed: ${bs.map((b) => b.id).join(', ')} (they reach every later agent).` : ''}${digest.length ? ` One reply settles them all, e.g. "${digest.join('; ')}" ("reject lesson Ln <why>" / "reject brief Pn <why>" for one you do not want); factory inbox lists them.` : ''}`,
         ...(extra.lessons && extra.lessons.length ? { lessons: extra.lessons } : {}),
         ...(extra.briefs && extra.briefs.length ? { briefs: extra.briefs } : {}),
+        ...(digest.length ? { digest: { reply: digest.join('; ') } } : {}),
       };
+    }
     default:
       return { summary: `${J || 'drive'}: ${extra.message || n.reason || kind}` };
   }
