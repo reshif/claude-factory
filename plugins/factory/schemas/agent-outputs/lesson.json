@@ -1,6 +1,13 @@
-{ "type": "object", "required": ["lessons", "nothing_to_learn"], "properties": {
+{ "$comment": "lesson-writer (the distill step): the lessons it recorded with factory lessons add, by the ids the command printed, and the edits it proposes to the project brief (.factory/project.md), which the CLI stores as a proposal for the user (accept brief Pn), never applies itself.",
+  "type": "object", "required": ["lessons", "nothing_to_learn"], "properties": {
   "lessons": { "type": "array", "items": { "type": "object", "required": ["id", "text"], "properties": {
     "id": { "type": "string", "pattern": "^L\\d+$" }, "text": { "type": "string" },
     "scope": { "type": "array", "items": { "type": "string" } }, "why": { "type": "string" } } } },
   "nothing_to_learn": { "type": "boolean" },
+  "project_brief": { "type": "object", "required": ["edits"], "properties": {
+    "edits": { "type": "array", "items": { "type": "object", "required": ["section"], "properties": {
+      "section": { "type": "string" },
+      "add": { "type": "array", "items": { "type": "string" } },
+      "remove": { "type": "array", "items": { "type": "string" } } } } },
+    "why": { "type": "string" } } },
   "note": { "type": "string" } } }

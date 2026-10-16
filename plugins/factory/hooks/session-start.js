@@ -15,7 +15,7 @@ safe((input) => {
   emit({
     hookSpecificOutput: {
       hookEventName: 'SessionStart',
-      additionalContext: `[factory] Current job ${s.id}: ${s.title} · ${s.recipe.id} · risk ${s.risk} · ${s.status}${gate}. To continue, use the factory:start skill (it runs \`factory next\`). Factory CLI: node "${require('path').join(require('../cli/lib/paths').PLUGIN_ROOT, 'bin', 'factory')}".`,
+      additionalContext: `[factory] Current job ${s.id}: ${s.title} · ${s.recipe.id} · risk ${s.risk} · ${s.status}${gate}. To continue, use the factory:start skill (it runs \`factory drive\`). Factory CLI: node "${require('path').join(require('../cli/lib/paths').PLUGIN_ROOT, 'bin', 'factory')}".`,
     },
   });
 });

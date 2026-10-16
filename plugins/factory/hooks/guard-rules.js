@@ -167,7 +167,8 @@ function checkReadTool(root, tool, ti, absFile, cwd, policy) {
 
 const HUMAN_ONLY = new Set(['approve', 'deny', 'resume', 'proceed', 'cancel', 'abandon', 'waive', 'merged', 'confirm', 'reseal', 'finding']);
 // Mirrors cli/main.js parseArgs: --k=v, --k v (unless the flag is boolean or v starts with --), and --.
-const CLI_BOOL = new Set(['h1', 'epic', 'local', 'check', 'json', 'plan-fields', 'help', 'threat-model', 'plan-critique', 'no-threat-model', 'accept-degraded', 'serve', 'default']);
+// the CLI's own boolean-flag list (cli/lib/args.js): the guard reads a command exactly as the CLI parses it
+const CLI_BOOL = require('../cli/lib/args').BOOL;
 const TTY_FAKERS = /^(script|unbuffer|expect|socat|faketty|ptyexec|zpty|empty)$/;
 const SHELLS = /^(bash|sh|zsh|dash|ksh|mksh|fish|csh|tcsh|ash|busybox)$/;
 const PWSH = /^(pwsh|powershell|powershell\.exe|pwsh\.exe)$/i;
@@ -175,7 +176,7 @@ const INTERPRETER = /^(node|nodejs|python[0-9.]*|ruby|perl|php|deno|bun|osascrip
 // Factory state and CLI internals. STRICT: code that loads the CLI's internals or the seal
 // secret could forge state, whatever it does. STATE: the job files; reading them is fine.
 const INTERNALS_STRICT = /cli\/core\/|cli\/lib\/(seal|util)|software-factory\/secret|\.config\/software-factory/;
-const STATE = /\.factory\/(jobs|log|lessons|project\.json|policy\.json|environment\.json|current)/;
+const STATE = /\.factory\/(jobs|log|lessons|project\.json|project\.md|project-brief\.proposals\.json|drive\.json|policy\.json|environment\.json|current)/;
 const INTERNALS = new RegExp(`${INTERNALS_STRICT.source}|${STATE.source}`);
 const WRITE_OPS = /writeFile|appendFile|createWriteStream|\bunlink|\brename|\brmSync|\brmdir|\bcopyFile|truncate|\.write\(|open\([^)]*['"][wax+]|json\.dump\(|os\.remove|os\.replace|shutil\.|Path\([^)]*\)\.write_|File\.write|>>?\s*['"]?\.factory/;
 const SECRET_FILE = /software-factory[\\/]secret|\.config[\\/]software-factory/;
@@ -642,6 +643,9 @@ function checkCommand(cmd, pipeline, ctx, depth, collect) {
       // `task built` is a builder's own last step (its reply for this attempt): nobody else may
       // vouch that a builder finished, not the main session and not another agent.
       if (a === 'task' && b === 'built' && ctx.agentType !== 'factory:builder') return '"factory task built" records a task builder\'s own reply; only that builder (factory:builder) runs it. Builds happen through the realize workflow.';
+      // factory drive and factory inbox are the main session's: drive steps the job's router, the
+      // inbox lists what waits on the human. A factory agent runs neither.
+      if (a && ctx.agent && ['drive', 'inbox'].includes(a)) return `"factory ${a}" is the main session's (it steps the job or lists what waits on the user), never a factory agent's. Return your result in your final message.`;
       if (a && ctx.agent && isUserRelay(a, b)) return `"factory ${a}${a === 'clarify' ? ` ${b}` : ''}" records what the user said; it is the main session's, never a factory agent's. Return what you found in your final message instead.`;
     } else if (!collect) {
       const why = unknownExpansionHuman(head, ctx);
@@ -750,4 +754,4 @@ function normalise(cmd) {
   return parse(cmd).map((c) => c.words.map((w) => w.text).join(' ')).join('; ');
 }
 
-module.exports = { checkWrite, checkRead, checkReadTool, READ_TOOLS, checkBash, checkContent, normalise, deny, loadPolicy, isSecret, HUMAN_ONLY };
+module.exports = { CLI_BOOL, checkWrite, checkRead, checkReadTool, READ_TOOLS, checkBash, checkContent, normalise, deny, loadPolicy, isSecret, HUMAN_ONLY };

@@ -559,7 +559,9 @@ test('briefs name a real factory agent for every item, and carry only the run co
   assert.equal(c.stage, 'readback');
   const specs = c.groups.flat();
   for (const sp of specs) assert.match(sp.agent_type, /^factory:interviewer$/);
-  assert.equal(specs[0].model, undefined, 'no model unless policy names one');
+  // P4.2 (intentional change: was undefined, no model unless policy names one): the shipped
+  // policy names a tier per role, and the interviewer's is haiku
+  assert.equal(specs[0].model, 'haiku', 'the interviewer runs on the tier default-policy.json ships for it');
   const file = fs.readFileSync(specs[0].prompt.split('\n')[1].trim(), 'utf8');
   assert.ok(!file.includes('You are the interviewer of a software factory'), 'the role text is the agent\'s system prompt');
   assert.match(file, /CLARIFY INPUT \(JSON\):/);

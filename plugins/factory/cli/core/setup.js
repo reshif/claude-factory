@@ -106,6 +106,21 @@ function doctor(cwd) {
     }
   }
   for (const c of hookNodeChecks()) add(c.name, c.ok, c.detail, 'warning');
+  // The model each role runs on (policy.agents.models: Claude Code aliases or ids, passed per
+  // agent call), or the switch that puts every role on the main conversation's model
+  try {
+    const pol = root ? require('./policy').load(root) : require('./policy').defaults();
+    const a = pol.agents || {};
+    if (require('./wfargs').modelsOff(pol)) add('agent models', true, 'policy.agents.models_enabled is false: every role runs on the main conversation\'s model', 'warning');
+    else {
+      const byModel = {};
+      for (const [r, m] of Object.entries(a.models && typeof a.models === 'object' ? a.models : {})) (byModel[m && m !== 'default' ? m : 'main conversation model'] = byModel[m && m !== 'default' ? m : 'main conversation model'] || []).push(r);
+      const esc = (a.builder_escalation || []).length ? `; builders step up to ${a.builder_escalation.join(' → ')} from attempt ${a.builder_escalation_from_attempt || 3}` : '';
+      add('agent models', true, `${Object.entries(byModel).map(([m, rs]) => `${m}: ${rs.join(', ')}`).join(' · ') || 'every role on the main conversation\'s model'}${esc}. If your account or provider can't use one, set agents.models_enabled: false in .factory/policy.json`, 'warning');
+    }
+  } catch {
+    /* no policy */
+  }
   const rc = recipes.checkAll();
   for (const [id, errs] of Object.entries(rc)) add(`recipe ${id}`, errs.length === 0, errs.length ? errs.join('; ') : 'valid');
   const ready = checks.every((c) => c.ok || c.level !== 'error');

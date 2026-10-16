@@ -76,6 +76,7 @@ function recGround(root, state, env) {
   const jp = jobPaths(root, state.id);
   const answers = readJson(jp.answers, []);
   writeText(jp.findings, findingsMarkdown(state, topics, answers));
+  require('./project-brief').noteGround(root, state, topics); // each ground step refreshes the project brief's "What ground found"
   const answered = new Set(answers.map((a) => a.question));
   const blocking = topics.flatMap((t) => t.unknowns.filter((u) => u.blocking && !answered.has(u.question)).map((u) => u.question));
   const b = invalidation.current(root, state);
@@ -192,7 +193,26 @@ function recReconcile(root, state, env) {
   if (!steps.isDone(ctx, { step: 'reconcile' })) {
     const last = ledger.lastStep(root, state.id, 'reconcile');
     if (last && !last.ok && last.detail && last.detail.regression) {
-      return { status: 'park', park_reason: `Reconcile regression: ${last.detail.message || 'merged or fixed lines were dropped'}`, message: 'Parked: integrating would drop work already merged or fixed.' };
+      // P3.3: the task whose merge dropped the lines is rebuilt on the merged code, once,
+      // automatically (task start brings the integrated job branch into it); only a second
+      // regression on it parks.
+      const dropped = last.detail.regression.dropped || [];
+      const planIds = new Set(steps.planTasks(ctx).map((t) => t.id));
+      const hit = [...new Set(dropped.map((x) => x.task).filter((t) => t && planIds.has(t)))];
+      const fresh = job.load(root, state.id);
+      const again = hit.filter((id) => (((fresh.tasks || {})[id] || {}).auto_rebuild || {}).regression);
+      if (hit.length && !again.length) {
+        const at = nowIso();
+        for (const id of hit) {
+          const lines = dropped.filter((x) => x.task === id).slice(0, 10).map((x) => ({ cmd: `merge ${id} into the job branch`, code: 1, output: `Merging ${id} would drop ${x.file}: "${String(x.line).slice(0, 160)}" (${x.by}). Rebuild on the integrated branch and keep that line (change it only if the contract asks for it).` }));
+          const t = fresh.tasks[id] || {};
+          fresh.tasks[id] = { ...t, needs_work: 'integration', integration_failure: { at, wave: null, failures: lines }, auto_rebuild: { ...(t.auto_rebuild || {}), regression: at } };
+        }
+        job.save(root, fresh);
+        require('./events').append(root, { event: 'recovery', job: state.id, kind: 'regression', action: 'rebuild', tasks: hit, reason: String(last.detail.message || '').slice(0, 300) });
+        return { status: 'retry', recovery: { kind: 'regression', action: 'rebuild', tasks: hit }, message: `Reconcile regression: ${hit.join(', ')} ${hit.length > 1 ? 'are' : 'is'} rebuilt on the merged code automatically (once, before parking); factory next runs realize.` };
+      }
+      return { status: 'park', park_kind: 'regression', park_reason: `Reconcile regression: ${last.detail.message || 'merged or fixed lines were dropped'}${again.length ? ` (${again.join(', ')} already rebuilt once on the merged code)` : ''}`, message: 'Parked: integrating would drop work already merged or fixed.' };
     }
     return { status: 'park', park_reason: `Integration did not complete: ${(d.integrator && d.integrator.summary) || 'no result'}`, message: 'Parked.' };
   }
@@ -294,7 +314,18 @@ function apply(root, { jobId, file, envelope }) {
     default:
       fail(`Unknown workflow ${env.workflow}`, 'bad_envelope');
   }
-  if (res.status === 'park') decisionTable.park(root, job.load(root, state.id), res.park_reason, res.park_from || env.workflow);
+  if (res.status === 'park') {
+    // a typed park: its kind and the next step, from the reason and the tasks' own results
+    const now = job.load(root, state.id);
+    const lastNeeds = (id) => {
+      const h = ((now.tasks || {})[id] || {}).history || [];
+      const e = [...h].reverse().find((x) => (x.needs_paths || []).length || ((x.builder || {}).needs_paths || []).length);
+      return e ? e.needs_paths || e.builder.needs_paths : (((now.tasks || {})[id] || {}).builder || {}).needs_paths || [];
+    };
+    const tasks = (res.tasks || ((env.workflow === 'realize' && env.data && env.data.tasks) || [])).map((t) => ({ id: t.id, outcome: t.outcome, summary: t.summary || '', needs_paths: lastNeeds(t.id) }));
+    const p = decisionTable.park(root, now, res.park_reason, res.park_from || env.workflow, { tasks, kind: res.park_kind });
+    res.park = { kind: p.kind, next: p.next };
+  }
   return { job: state.id, workflow: env.workflow, config: env.config || null, ...res };
 }
 

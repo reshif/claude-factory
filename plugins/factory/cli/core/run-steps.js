@@ -70,7 +70,10 @@ var RUN_STEPS = (function () {
     },
     // realize.js: wave by wave, builders then testers per task (a wave whose tasks were all skipped has no phase);
     // the wave of an agent is the one holding the task it names (`factory task start|verify|show <id>`)
-    realize: { next: 'reconcile', steps: [{ key: 'wave', label: 'wave', match: /^realize: wave/, roles: ['builder', 'tester'], series: /wave (\d+)\/(\d+)/, text: function (n, k, run, w) { var ws = (run.plan && run.plan.waves) || []; return 'realize: wave ' + (w + 1) + '/' + Math.max(ws.length, w + 1) + ' (' + (ws[w] || []).join(', ') + ')'; } }] },
+    // (by dependency, not wave by wave: the script prints a phase per task build, integration
+    // and rebuild; the console still groups the agents by plan wave, the dependency depth, from the
+    // tasks they name. Logs from before print "realize: wave n/N (…)", which this matches too.)
+    realize: { next: 'reconcile', steps: [{ key: 'wave', label: 'wave', match: /^realize: /, roles: ['builder', 'tester', 'integrator'], series: /wave (\d+)\/(\d+)/, text: function (n, k, run, w) { var ws = (run.plan && run.plan.waves) || []; return 'realize: build ' + (ws[w] || []).join(', ') + ' (wave ' + (w + 1) + '/' + Math.max(ws.length, w + 1) + ')'; } }] },
     // reconcile.js: the integrator
     reconcile: { next: 'prove', steps: [{ key: 'integrate', label: 'integrate task branches', match: /^reconcile:/, roles: ['integrator'], text: function () { return 'reconcile: integrate task branches'; } }] },
     // the distill skill: the lesson-writer, between `factory distill context` and `factory distill done`
@@ -95,6 +98,7 @@ var RUN_STEPS = (function () {
     return String(text || '').replace(/^[a-z-]+: /, '')
       .replace(/(\d+) ([A-Za-z-]+)\(s\)/g, function (_, n, w) { return n + ' ' + w + (n === '1' ? '' : 's'); })
       .replace(/\(s\)/g, 's')
+      .replace(/^build (.+) \(wave (\d+)\/(\d+)\)$/, 'wave $2 of $3: $1')
       .replace(/^wave (\d+)\/(\d+) \((.+)\)$/, 'wave $1 of $2: $3')
       .replace(/^wave (\d+)\/(\d+) \(\)$/, 'wave $1 of $2');
   }

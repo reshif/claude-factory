@@ -49,8 +49,9 @@ function ensureJobWorktree(root, state) {
 function prepareWorktree(root, state, taskId) {
   const branch = steps.taskBranch(state, taskId);
   const wt = taskWorktree(root, state.id, taskId);
-  if (!git.branchExists(root, branch)) git.run(root, ['branch', branch, state.branch], { allowFail: true });
-  if (!git.branchExists(root, branch)) git.run(root, ['branch', branch, state.branch]); // another process may have just made it
+  const base = startBase(root, state, taskId); // the job branch as last integrated green
+  if (!git.branchExists(root, branch)) git.run(root, ['branch', branch, base], { allowFail: true });
+  if (!git.branchExists(root, branch)) git.run(root, ['branch', branch, base]); // another process may have just made it
   addWorktree(root, wt, branch);
   return wt;
 }
@@ -88,6 +89,14 @@ function restartReason(t) {
     const key = `outcome:${t.outcome}@${t.outcome_at || ''}`;
     return t.restarted_for === key ? null : { reason: t.outcome, key };
   }
+  // The last start could not merge the job branch or a dependency into the task's branch
+  // (dependency_conflict): rebuild it on the integrated job branch instead of retrying the
+  // same merge (P3.3; realize gives it this one rebuild before the task counts as blocked).
+  const se = t.start_error;
+  if (se && se.code === 'dependency_conflict') {
+    const key = `conflict:${se.at || ''}`;
+    if (t.restarted_for !== key) return { reason: 'dependency_conflict', key };
+  }
   const ev = t.evidence ? readJson(t.evidence.file, null) : null;
   if (ev && (ev.scope_violations || []).length) {
     const key = `scope:${ev.id}`;
@@ -98,11 +107,24 @@ function restartReason(t) {
 
 // Restart the task branch at the job branch. The old head is kept on a backup ref and any
 // uncommitted leftovers in a stash, so nothing a failed attempt did is lost to the user.
-function resetToJobBranch(root, state, wt, taskId, attempt) {
+// The commit a task starts from: the job branch as last integrated and checked green (P3.4:
+// with tasks scheduled by dependency, an integration may be merging, or a failed one waiting for
+// its repair, while another task starts). A task reopened to repair an integration starts from
+// the job branch itself: it must see the merge it is fixing. Without a green record (per-wave
+// integration off, or nothing integrated yet) it is the job branch.
+function startBase(root, state, taskId) {
+  const t = (state.tasks || {})[taskId] || {};
+  const g = state.integration_green;
+  if (t.needs_work === 'integration' || t.integration_failure) return state.branch;
+  if (g && git.isAncestor(root, g, state.branch)) return g;
+  return state.branch;
+}
+
+function resetToJobBranch(root, state, wt, taskId, attempt, base = state.branch) {
   if (git.status(wt)) git.run(wt, ['stash', 'push', '-u', '-m', `factory: leftovers of ${taskId} before its restart`], { allowFail: true });
   const backup = `refs/factory/restarts/${steps.taskBranch(state, taskId)}/${attempt}-${Date.now()}`;
   git.run(wt, ['update-ref', backup, 'HEAD']);
-  git.run(wt, ['reset', '-q', '--hard', state.branch]);
+  git.run(wt, ['reset', '-q', '--hard', base]);
   return backup;
 }
 
@@ -190,7 +212,8 @@ function start(root, jobId, taskId) {
   // What the last attempt left uncommitted (its builder stopped, crashed or ran out of time)
   // is kept as a `wip:` commit the next attempt continues from; a restart stashes it instead.
   const wip = restart ? null : commitWip(wt, taskId, prev.attempts || 0);
-  const backup = restart ? resetToJobBranch(root, state, wt, taskId, prev.attempts || 0) : null;
+  const base = startBase(root, state, taskId);
+  const backup = restart ? resetToJobBranch(root, state, wt, taskId, prev.attempts || 0, base) : null;
   const bring = (ref, what) => {
     if (git.isAncestor(root, ref, branch)) return;
     const r = git.run(wt, ['merge', '--no-ff', '--no-edit', '-m', `factory: bring ${what} into ${taskId}`, ref], { allowFail: true });
@@ -201,7 +224,7 @@ function start(root, jobId, taskId) {
   };
   // A rebuild (fix round, amendment) starts from what is integrated now, never from the
   // task's stale branch: other tasks' merged work must not be reverted by this one.
-  bring(state.branch, `the job branch (${state.branch})`);
+  bring(base, base === state.branch ? `the job branch (${state.branch})` : `the job branch as last integrated (${state.branch} at ${String(base).slice(0, 10)})`);
   for (const d of deps) bring(steps.taskBranch(state, d), d);
   const inFix = Boolean(state.fix && (state.fix.tasks || []).includes(taskId));
   fixMarker(wt, inFix ? state.fix.kind : null);
@@ -439,4 +462,4 @@ function setState(root, jobId, taskId, value, reason) {
   return { job: id, task: taskId, state: value };
 }
 
-module.exports = { start, show, verify, verifyRecorded, commitWip, previousAttempt, setState, ensureJobWorktree, planTask, prepareWorktree, ownChangedFiles, afterBuilder, legacyAttempt, lastFailures, noteAttempt, FAILED };
+module.exports = { startBase, start, show, verify, verifyRecorded, commitWip, previousAttempt, setState, ensureJobWorktree, planTask, prepareWorktree, ownChangedFiles, afterBuilder, legacyAttempt, lastFailures, noteAttempt, FAILED };

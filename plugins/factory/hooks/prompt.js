@@ -29,7 +29,7 @@ function clarifyReply(root, input) {
   }
   if (!r) return false;
   events.append(root, { event: 'reply_applied', reply: 'clarify', stage: r.stage || null, ...ctx });
-  say(`[factory] Recorded your reply for clarify: ${r.message} Continue with \`factory next\` (skill factory:start); do not record it again.`);
+  say(`[factory] Recorded your reply for clarify: ${r.message} Continue with \`factory drive\` (skill factory:start); do not record it again.`);
   return true;
 }
 
@@ -53,7 +53,7 @@ safe((input) => {
   } else {
     try {
       const r = human.applyReply(root, parsed, 'chat');
-      msg = `[factory] Applied your reply: ${r.message || JSON.stringify(r)} Continue with \`factory next\` (skill factory:start).`;
+      msg = `[factory] Applied your reply: ${r.message || JSON.stringify(r)} Continue with \`factory drive\` (skill factory:start).`;
     } catch (e) {
       msg = `[factory] Your reply "${String(input.prompt).trim()}" was NOT applied: ${e.message}`;
       events.append(root, { event: 'reply_refused', reply: parsed.cmd, gate: parsed.gate || null, code: e.code || null, reason: e.message.slice(0, 200), ...events.context(root, parsed.jobId) });

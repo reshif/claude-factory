@@ -127,7 +127,7 @@ if (require.main === module) safe((input) => {
   if (!blocked.length) return;
   emit({
     decision: 'block',
-    reason: `[factory] Not done: floors not met for ${blocked.join('; ')}. Run \`factory next\` and keep going, or tell the user exactly what is still pending instead of calling it done.`,
+    reason: `[factory] Not done: floors not met for ${blocked.join('; ')}. Run \`factory drive\` (or \`factory next\`) and keep going, or tell the user exactly what is still pending instead of calling it done.`,
   });
 });
 
