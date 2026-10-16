@@ -11,12 +11,12 @@ Floors are the steps no recipe may omit, per risk level ([`policy/floors.json`](
 | `isolation` | ✅ | ✅ | ✅ | every task's latest evidence passed in its own worktree, on the tree its branch has now |
 | `prove` | ✅ | ✅ | ✅ | a passing `factory verify run` bound to the current fingerprint |
 | `challenge:code` | ✅ | ✅ | ✅ | the code lane passed on the current fingerprint |
-| `no_unverified_serious` | ✅ | ✅ | ✅ | the job's latest review left no blocker/major finding unverified. A finding whose verifier returned nothing (twice) or said `unverifiable` is carried into every later round, whether or not a reviewer raises it again, and re-verified every round until a verifier confirms or refutes it; after `max_reverify_rounds` (3) the job parks. `ship`, `merged` (H4) and `close` refuse while one is open, and the completion report lists them |
+| `no_unverified_serious` | ✅ | ✅ | ✅ | the job's latest review left no blocker/major finding unverified. A finding whose verifier returned nothing (twice) or said `unverifiable` is carried into every later round, whether or not a reviewer raises it again, and re-verified (a second verifier on the stronger model reproduces it in the build environment) while the unsettled set shrinks, up to `max_reverify_rounds` (3); what survives goes to the ship review, where you accept or dismiss each, never to a park. `ship`, `merged` (H4) and `close` refuse while one is open, and the completion report lists them |
 | `ci_reverify` | ✅ | ✅ | ✅ | the `factory-gate` check succeeded on the merge result (GitHub), or `factory ci verify` passed on the local merge, or you waived it |
-| `human_merge` | ✅ | ✅ | ✅ | the merge commit is recorded (GitHub via `pr sync`, or your `merged <commit>` reply) |
+| `human_merge` | ✅ | ✅ | ✅ | the merge commit is recorded (GitHub via `pr sync`, or your `merged` / `merged <commit>` reply) |
 | `ground` | | ✅ | ✅ | findings recorded for the current contract |
 | `design_record` | | ✅ | ✅ | an ADR / no-adr / contracts record, decided for the current contract |
-| `design_critique` | | ✅ | ✅ | God Eye approved this design hash, or rounds ran out and you approved it at H2 |
+| `design_critique` | | ✅ | ✅ | The design critics (God Eye, and the API-conformance critic when the job has dependency source) approved this design hash, or their loop stopped (no progress, or the ceiling) and you approved the design at H2 or at the combined design + plan gate (H3 at medium risk) |
 | `plan_validated` | | ✅ | ✅ | `plan validate` passed for the current plan hash |
 | `challenge:tests` · `challenge:security` | | ✅ | ✅ | those lanes passed on the current fingerprint |
 | `finding_verifiers` | | ✅ | ✅ | every blocker/major finding was confirmed or refuted (none unverified) |

@@ -45,6 +45,10 @@ const degraded = brief.probes.filter((_, i) => !out[i]).map((p) => p.id)
 const topics = out.filter(Boolean)
 const blocking = topics.flatMap((t) => t.unknowns.filter((u) => u.blocking).map((u) => u.question))
 const claims = topics.reduce((n, t) => n + t.claims.length, 0)
+// API ledger entries (0.10.0): the researchers checked their quotes with `factory deps check`;
+// factory record checks them again and, once, re-asks the probes it rejected (brief.reask: this
+// run holds only those probes, and record keeps the other topics from the first run).
+const ledgerEntries = topics.reduce((n, t) => n + (Array.isArray(t.ledger) ? t.ledger.length : 0), 0)
 
 return {
   workflow: 'ground',
@@ -59,6 +63,6 @@ return {
   artifacts: [],
   questions: blocking.map((q) => ({ question: q, why: 'Blocks the design' })),
   park_reason: null,
-  summary: `${topics.length} topic(s), ${claims} claim(s), ${blocking.length} blocking unknown(s)${degraded.length ? `; no result for ${degraded.join(', ')}` : ''}.`,
-  data: { topics, degraded },
+  summary: `${brief.reask ? 'API ledger re-ask: ' : ''}${topics.length} topic(s), ${claims} claim(s), ${blocking.length} blocking unknown(s)${ledgerEntries ? `, ${ledgerEntries} API ledger entr${ledgerEntries === 1 ? 'y' : 'ies'}` : ''}${degraded.length ? `; no result for ${degraded.join(', ')}` : ''}.`,
+  data: { topics, degraded, ...(brief.reask ? { reask: true } : {}) },
 }

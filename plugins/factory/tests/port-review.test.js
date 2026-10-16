@@ -71,16 +71,16 @@ test('B1: the reply hook refuses a prompt Claude scheduled or sent (once), and a
   // the note was used once: the user typing it now is theirs
   assert.equal(F.say(root, 'approve').status, 'applied');
   assert.ok(stateOf(root, 'J-0001').approvals.H1);
-  // the shared parser: what the hook takes as a reply, the guard refuses to schedule
-  for (const t of ['approve', 'deny needs tests', 'resume', 'proceed', 'merged abc1234', 'confirm AC-1', 'accept lesson L1', 'accept brief P2', 'ok', 'ok, but 2 b', '1 a', 'fact 1: it is 3.11', 'dismiss finding code-1 not real']) assert.ok(O.looksLikeReply(t), t);
-  for (const t of ['check the nightly build', 'run factory drive', 'remind me tomorrow about the release']) assert.ok(!O.looksLikeReply(t), t);
+  // the shared reader (human.readReply, review B1): what the hook takes as a reply, the guard refuses to schedule
+  for (const t of ['approve', 'deny needs tests', 'resume', 'proceed', 'merged abc1234', 'confirm AC-1', 'accept lesson L1', 'accept brief P2', 'ok', 'ok, but 2 b', '1 a', 'fact 1: it is 3.11', 'dismiss finding code-1 not real']) assert.ok(core('human').readReply(t).reply, t);
+  for (const t of ['check the nightly build', 'run factory drive', 'remind me tomorrow about the release']) assert.ok(!core('human').readReply(t).reply, t);
 });
 
 test('B1: the inspector\'s own replies (marking findings, modes) are refused when Claude scheduled them, and the factory guard refuses scheduling them', () => {
   const root = F.makeRepo();
   newJob(root);
   const O = core('reply-origin');
-  assert.ok(O.looksLikeReply('ack finding F1') && O.looksLikeReply('inspect mode all off'));
+  assert.ok(core('human').readReply('ack finding F1').reply && core('human').readReply('inspect mode all off').reply);
   assert.ok(denied(guard(root, { tool_name: 'CronCreate', tool_input: { prompt: 'wontfix finding F2 noise' } })));
   O.record(root, 'ack finding F1', { tool: 'SendMessage' });
   const r = spawnSync('node', [path.join(F.PLUGIN, '..', 'factory-inspector', 'hooks', 'prompt.js')], { input: JSON.stringify({ cwd: root, prompt: 'ack finding F1', hook_event_name: 'UserPromptSubmit' }), encoding: 'utf8' });
@@ -206,7 +206,7 @@ test('minors: a --agent main session is no agent; the drive takes the guard\'s h
 });
 
 test('minors: transcript links are per agent only when the run had one agent of that role; /transcript serves only factory agents\' transcripts; the doctor warns about a full model id', async () => {
-  const cfg = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-cfg-'));
+  const cfg = require('./helpers/tmp').mkdtemp('claude-cfg-');
   const root = F.makeRepo();
   newJob(root);
   const mk = (n) => {
@@ -259,14 +259,14 @@ test('ci install vendors every directory the CLI reads at run time: the vendored
   const dest = path.join(root, '.github', 'factory-cli');
   for (const d of ['bin', 'cli', 'schemas', 'templates', 'config', 'agents', 'policy', 'recipes']) assert.ok(fs.existsSync(path.join(dest, d)), d);
   // run a copy far from the plugin, so nothing can resolve back into it
-  const far = fs.mkdtempSync(path.join(os.tmpdir(), 'vendored-'));
+  const far = require('./helpers/tmp').mkdtemp('vendored-');
   fs.cpSync(dest, path.join(far, 'factory-cli'), { recursive: true });
   const run = (args) => spawnSync('node', [path.join(far, 'factory-cli', 'bin', 'factory'), '--root', root, ...args], { cwd: root, encoding: 'utf8', env: { ...process.env, FACTORY_ROOT: '' } });
   const g = run(['wfargs', 'ground']); // loads schemas, agents and config
   assert.equal(g.status, 0, g.stdout + g.stderr);
   assert.ok(JSON.parse(g.stdout).probes.length);
   assert.ok(!g.stdout.includes(F.PLUGIN), 'the vendored CLI names only itself');
-  const manifests = fs.mkdtempSync(path.join(os.tmpdir(), 'manifests-'));
+  const manifests = require('./helpers/tmp').mkdtemp('manifests-');
   const v = run(['ci', 'verify', '--manifest-dir', manifests]);
   assert.ok(!/Cannot find module/.test(v.stdout + v.stderr), v.stdout + v.stderr);
   assert.equal(run(['doc', 'template', 'adr']).status, 0);

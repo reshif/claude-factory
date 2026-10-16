@@ -9,8 +9,38 @@ const ledger = require('./ledger');
 const invalidation = require('./invalidation');
 const recipes = require('./recipes');
 
+// The recipe a job runs is the one it locked at creation (recipe.lock.json, sealed): a job in
+// flight keeps its steps and gates when the plugin's recipes change (an upgrade). A job whose lock
+// predates recipe locking (no recipe in it) runs the current file, as before. A lock that holds a
+// recipe but is invalid (a broken seal, another recipe id or version, a recipe that fails its
+// checks) is refused with a clear message, never a silent switch to the current recipe (m13).
+function lockProblem(root, state) {
+  const lock = readJson(jobPaths(root, state.id).recipeLock, null);
+  if (!lock || !lock.recipe) return { lock: null, problem: null };
+  if (!require('../lib/seal').valid(lock)) return { lock, problem: 'its seal does not match (the file was edited)', resealable: true };
+  if (lock.id !== state.recipe.id || lock.version !== state.recipe.version || lock.recipe.id !== state.recipe.id) return { lock, problem: `it is for ${lock.id || lock.recipe.id} v${lock.version}, but the job runs ${state.recipe.id} v${state.recipe.version}` };
+  const errs = recipes.check(lock.recipe);
+  if (errs.length) return { lock, problem: `its recipe fails the recipe checks: ${errs.slice(0, 3).join('; ')}` };
+  return { lock, problem: null };
+}
+
+function lockedRecipe(root, state) {
+  const { lock, problem, resealable } = lockProblem(root, state);
+  if (!lock) return null;
+  if (problem) {
+    try {
+      require('./events').append(root, { event: 'recipe_lock_invalid', job: state.id, problem });
+    } catch {
+      /* the refusal says it */
+    }
+    const { fail } = require('../lib/util');
+    fail(`${state.id}'s recipe lock (.factory/jobs/${state.id}/recipe.lock.json) is invalid: ${problem}. The factory does not silently run the current ${state.recipe.id} recipe instead (the job's steps and gates could change under it). Restore the file${resealable ? ', or run `factory reseal` in your own terminal to accept it as it now is' : ''}.`, 'recipe_lock_invalid');
+  }
+  return lock.recipe;
+}
+
 function context(root, state, loadJob) {
-  const recipe = recipes.load(state.recipe.id);
+  const recipe = lockedRecipe(root, state) || recipes.load(state.recipe.id);
   const b = invalidation.current(root, state, loadJob);
   return { root, state, recipe, b, loadJob };
 }
@@ -58,6 +88,26 @@ function allTasksMerged(ctx) {
   });
 }
 
+// A gate that approves more than its own document (0.10.0): the recipe step's `combined` list
+// (design, plan, environment). At medium risk H3 is one gate for design + plan + the build
+// environment the plan runs in; approving it seals that environment (human.approve), so
+// "confirm environment" is no separate reply. null for an ordinary gate.
+function combinedOf(ctx, gate) {
+  const s = ctx.recipe.steps.find((x) => x.step === gate && x.run === 'gate');
+  return s && Array.isArray(s.combined) && s.combined.length ? s.combined : null;
+}
+
+// The parts a combined gate binds, by name: { design, plan, environment: { status, hash, … } }.
+function combinedParts(ctx, gate) {
+  const list = combinedOf(ctx, gate);
+  if (!list) return null;
+  const out = {};
+  if (list.includes('design')) out.design = ctx.b.design || null;
+  if (list.includes('plan')) out.plan = ctx.b.plan || null;
+  if (list.includes('environment')) out.environment = require('./environment').gateProposal(ctx.root, ctx.state.id);
+  return out;
+}
+
 function approved(ctx, gate, hash) {
   const a = (ctx.state.approvals || {})[gate];
   return Boolean(a && hash && a.hash === hash);
@@ -73,8 +123,12 @@ function gateHash(ctx, gate) {
     case 'EH2':
       return b.design;
     case 'H3':
-    case 'EH3':
-      return b.plan;
+    case 'EH3': {
+      const parts = gate === 'H3' ? combinedParts(ctx, gate) : null;
+      if (!parts || !b.plan) return b.plan;
+      if ('design' in parts && !parts.design) return null;
+      return require('../lib/util').sha256(require('../lib/util').stableStringify({ design: parts.design, plan: parts.plan, environment: parts.environment ? parts.environment.hash : undefined }));
+    }
     case 'HS':
       return b.fingerprint;
     case 'HF':
@@ -93,10 +147,20 @@ function gateDocs(ctx, gate) {
     case 'H2':
     case 'EH2':
     case 'HF':
-      return [...(gate === 'HF' ? [jp.findings] : []), ...invalidation.designFiles(ctx.root, ctx.state.id), `${jp.critiquesDir}/design.json`];
+      return [...(gate === 'HF' ? [jp.findings] : []), ...invalidation.designFiles(ctx.root, ctx.state.id), `${jp.critiquesDir}/design.json`, ...(require('fs').existsSync(require('./deps').LEDGER(ctx.root, ctx.state.id)) ? [require('./deps').LEDGER(ctx.root, ctx.state.id)] : [])];
     case 'H3':
-    case 'EH3':
-      return [ctx.state.epic ? jp.slices : jp.plan, `${jp.critiquesDir}/plan.json`];
+    case 'EH3': {
+      const list = gate === 'H3' ? combinedOf(ctx, gate) || [] : [];
+      const fs = require('fs');
+      const deps = require('./deps');
+      return [
+        ...(list.includes('design') ? [...invalidation.designFiles(ctx.root, ctx.state.id), `${jp.critiquesDir}/design.json`, deps.LEDGER(ctx.root, ctx.state.id)] : []),
+        ctx.state.epic ? jp.slices : jp.plan,
+        `${jp.critiquesDir}/plan.json`,
+        ...(list.length ? [require('path').join(jp.dir, 'probe.json')] : []),
+        ...(list.includes('environment') ? [require('path').join(jp.dir, 'environment.proposed.json')] : []),
+      ].filter((f, i, a) => a.indexOf(f) === i && (fs.existsSync(f) || f.endsWith('.json') && /critiques/.test(f)));
+    }
     case 'HS':
       return [jp.report];
     default:
@@ -113,6 +177,35 @@ function lastAtFingerprint(ctx, step) {
   const s = ledger.steps(ctx.root, ctx.state.id, step).filter((e) => (e.bound || {}).fingerprint === ctx.b.fingerprint);
   return s.length ? s[s.length - 1] : null;
 }
+
+// Local mode: ship pushes nothing (policy ship.mode "local", or no "origin" remote), so the
+// irreversible sign-off HS has nothing outward to sign off: the human's own merge (H4) is the step.
+// ONE predicate for "is this a local ship?" and "may ship push?": the router (HS, the push
+// approval), the floors and `factory ship` all use it, so nothing skipped as local ever pushes.
+// A job already shipped counts its earlier mode only for that same build (a rebuilt job asks again).
+function isLocalShip(ctx) {
+  const { root, state } = ctx;
+  const live = (() => {
+    try {
+      return require('./policy').load(root);
+    } catch {
+      return {};
+    }
+  })();
+  // the repository's setting (its live policy); a job snapshot from before 0.9.0 has none
+  const ship = live.ship || (state.policy && state.policy.ship) || {};
+  if (ship.mode === 'local') return true;
+  let remote = false;
+  try {
+    remote = git.hasRemote(root);
+  } catch {
+    remote = false;
+  }
+  if (!remote) return true;
+  if (state.pr && state.pr.mode && state.pr.fingerprint && state.pr.fingerprint === ctx.b.fingerprint) return state.pr.mode === 'local';
+  return false;
+}
+const shipsLocally = isLocalShip;
 
 function isDone(ctx, stepDef) {
   const { root, state, b } = ctx;
@@ -136,15 +229,25 @@ function isDone(ctx, stepDef) {
     case 'HS':
     case 'HF': {
       if (id === 'H2' && stepDef.when === 'adr' && !invalidation.hasAdr(root, state.id)) return true;
-      if (id === 'H3' && stepDef.auto === 'plan_critique' && fresh('plan_critique', { plan: b.plan })) return true;
+      // a plan God Eye approved skips H3 at low risk, unless the gate would seal a build
+      // environment: only the human accepts commands that run on this machine
+      if (id === 'H3' && stepDef.auto === 'plan_critique' && fresh('plan_critique', { plan: b.plan }) && !require('./environment').needsConfirmation(root, state.id)) return true;
+      if (id === 'HS' && shipsLocally(ctx)) return true;
       return approved(ctx, id, gateHash(ctx, id));
     }
+    case 'deps':
+      // once per contract; packages ground or the planner ask for later are fetched where they
+      // are asked for (ground's factory.fetchDeps, decompose's record)
+      return fresh('deps', { contract: b.contract });
     case 'ground':
       return fresh('ground', { contract: b.contract });
     case 'decide':
       return Boolean(b.design) && fresh('decide', { contract: b.contract, design: b.design });
-    case 'decompose':
-      return Boolean(b.plan) && fresh('decompose', { plan: b.plan });
+    case 'decompose': {
+      // under a gate that approves design and plan together, a revised design re-plans
+      const withDesign = (combinedOf(ctx, 'H3') || []).includes('design');
+      return Boolean(b.plan) && fresh('decompose', withDesign ? { plan: b.plan, design: b.design } : { plan: b.plan });
+    }
     case 'realize':
       return allTasksDone(ctx);
     case 'reconcile':
@@ -178,4 +281,4 @@ function isDone(ctx, stepDef) {
   }
 }
 
-module.exports = { context, isDone, planTasks, taskDone, allTasksDone, allTasksMerged, taskBranch, gateHash, gateDocs, approved, latestAt, lastAtFingerprint };
+module.exports = { lockProblem, isLocalShip, lockedRecipe, combinedOf, combinedParts, context, isDone, shipsLocally, planTasks, taskDone, allTasksDone, allTasksMerged, taskBranch, gateHash, gateDocs, approved, latestAt, lastAtFingerprint };

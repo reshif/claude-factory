@@ -44,11 +44,12 @@ function builderModel(spec, attempt) {
 let runs = 0
 const checks = []
 const rebuilds = []
+const grantsLog = []
 const T = brief.tasks
 const st = {}
 // attempts counts this run's attempts (the retry limit applies per run); attempt_base is what
 // earlier runs used, so numbering and the failure history continue across realize runs.
-for (const id of Object.keys(T)) st[id] = { outcome: 'pending', attempts: 0, failures: (T[id].previous_failures || []).slice(), swept: [], summary: '' }
+for (const id of Object.keys(T)) st[id] = { outcome: 'pending', attempts: 0, failures: (T[id].previous_failures || []).slice(), history: (T[id].previous_failures || []).slice(), swept: [], summary: '', grants: 0 }
 const attemptNo = (id) => (T[id].attempt_base || 0) + st[id].attempts + 1
 const BAD = ['blocked', 'exhausted', 'skipped_dependency']
 const cap = Math.max(1, brief.max_parallel_tasks || 4)
@@ -74,6 +75,25 @@ function skipDependents() {
 // failure: the run stops, no attempt is spent on it, and the job parks once with the reason.
 let envBroken = null
 
+// 0.10.0: before a task counts as exhausted it gets ONE escalated attempt: the strongest model,
+// a fresh session, and a diagnosis brief with every failure so far (code, plan or environment?).
+// Only then is it exhausted, and the park names the failure and asks a specific question.
+const limitOf = (id) => (T[id].retry_limit || 3) + (st[id].escalated ? 1 : 0)
+function exhaust(id, summary) {
+  const s = st[id]
+  if (!s.escalated && !T[id].escalated && T[id].escalation) {
+    s.escalated = true
+    s.diagnose = true
+    return
+  }
+  s.outcome = 'exhausted'
+  s.summary = summary
+}
+function diagnosisBrief(id) {
+  const s = st[id]
+  return `\n\nESCALATION — this task used its ${T[id].retry_limit || 3} attempt(s) without passing task verify. You run on a stronger model, in a fresh session, for ONE more attempt. Diagnose before you change anything, from every failure below:\n- code: the failures point at this task's own code → fix it and commit;\n- plan: the task cannot pass as written (its verify command cannot prove it, it needs files outside its allowed paths, it depends on work no task does) → reply blocked (needs_paths for paths) and say exactly what must change in the summary;\n- environment: the build environment is broken (a tool, dependency, setting or service it should provide) → reply blocked with blocked_reason environment_broken and the command and output that show it.\nEvery failure so far, oldest first:\n${(s.history || []).slice(-12).map((f) => `  - ${f}`).join('\n') || '  - (none recorded)'}`
+}
+
 // The tester only runs `task verify` and relays it (a workflow script cannot run a command);
 // one that returns nothing is asked once more, since nothing was relayed.
 async function relayVerify(id) {
@@ -96,10 +116,18 @@ async function attempt(id) {
   const prompt = T[id].builder_prompt
     .replace('{{attempt}}', () => String(attemptNo(id)))
     .replace('{{failures}}', () => (s.failures.length ? s.failures.map((f) => `  - ${f}`).join('\n') : '  - (none)'))
-  const b = await call(prompt, opts({ ...T[id].builder, schema: brief.builder_schema }, `build ${id} #${attemptNo(id)}`, builderModel(T[id].builder, attemptNo(id))))
-  if (b && b.status === 'blocked' && b.blocked_reason === 'environment_broken') {
-    // task start could not set the environment up: not this builder's failure
-    if (!envBroken) envBroken = { task: id, reason: String(b.summary || 'environment broken').split('\n')[0] }
+  // After the retry limit the task gets ONE escalated attempt: the strongest model, and a
+  // diagnosis brief with every failure so far (each agent call is a fresh session already).
+  const escalating = Boolean(s.diagnose)
+  s.diagnose = false
+  const o = opts({ ...T[id].builder, schema: brief.builder_schema }, `build ${id} #${attemptNo(id)}${escalating ? ' (escalated)' : ''}`, escalating ? (T[id].escalation && T[id].escalation.model) || builderModel(T[id].builder, attemptNo(id)) : builderModel(T[id].builder, attemptNo(id))) // the global attempt: escalation holds across runs
+  const b = await call(escalating ? `${prompt}${diagnosisBrief(id)}` : prompt, o)
+  if (b && b.status === 'blocked' && ['environment_broken', 'environment'].includes(b.blocked_reason)) {
+    // task start could not set the environment up, or the builder found it broken (a tool, a
+    // service, a dependency it should provide): not this builder's failure. No attempt is spent,
+    // the run stops and the job goes to environment repair (only the human accepts a changed
+    // environment), never to an amendment for paths.
+    if (!envBroken) envBroken = { task: id, source: 'builder', reason: String(b.summary || 'environment broken').split('\n')[0].slice(0, 800) }
     return
   }
   // dependency_conflict, the first time: task start could not merge into the task's branch. Its
@@ -110,6 +138,18 @@ async function attempt(id) {
     s.conflictRebuilt = true
     s.failures = [`Attempt ${attemptNo(id)}: task start could not merge into this task's branch (${b.summary || 'dependency_conflict'}). The branch is restarted from the integrated job branch: build the task there.`]
     rebuilds.push({ task: id, kind: 'dependency_conflict' })
+    return
+  }
+  // needs_paths inside the contract's allowed paths that no other task owns: the builder's
+  // `task built --status blocked --reason needs_paths --paths …` had the CLI grant them (never
+  // widening the contract; cli/core/tasks.js grant) and it relays what was granted. The builder
+  // then goes on without spending an attempt (twice per task per run at most). The grant itself
+  // is held in the job state: the guard, task verify and the scope check read it there, never
+  // from this reply, so a wrong relay costs one free attempt at most.
+  if (b && b.status === 'blocked' && b.blocked_reason === 'needs_paths' && (b.granted || []).length && s.grants < 2) {
+    s.grants += 1
+    s.failures = [`Attempt ${attemptNo(id)}: you asked for ${(b.needs_paths || []).join(', ') || 'more paths'}; the factory granted ${b.granted.join(', ')} (inside the contract's allowed paths, owned by no other task). Go on with the task; task start keeps your branch.`]
+    grantsLog.push({ task: id, paths: b.granted })
     return
   }
   if (b && b.status === 'blocked') {
@@ -126,10 +166,8 @@ async function attempt(id) {
   if (!b) {
     s.attempts += 1
     s.failures = [`Attempt ${attemptNo(id) - 1}: the builder returned no result (crashed, stopped or replied without the JSON); nothing was verified. What it left uncommitted becomes a \`wip:\` commit at your task start: continue from it.`]
-    if (s.attempts >= (T[id].retry_limit || 3)) {
-      s.outcome = 'exhausted'
-      s.summary = `Exhausted after ${s.attempts} attempt(s): ${s.failures[0]}`
-    }
+    s.history.push(...s.failures)
+    if (s.attempts >= limitOf(id)) exhaust(id, `Exhausted after ${s.attempts} attempt(s)${s.escalated ? ' (the last one escalated)' : ''}: ${s.failures[0]}`)
     return
   }
   s.swept = b.swept || []
@@ -150,10 +188,8 @@ async function attempt(id) {
   }
   const why = !t ? ['the tester returned nothing twice, so task verify\'s result was not relayed (`task show` has it under history if it ran).'] : t.refused ? [`task verify refused (${t.refused}): ${(t.failures || []).join(' ')}`] : (t.failures || []).length ? t.failures : ['task verify did not pass.']
   s.failures = why.map((f) => `Attempt ${attemptNo(id) - 1}: ${f}`)
-  if (s.attempts >= (T[id].retry_limit || 3)) {
-    s.outcome = 'exhausted'
-    s.summary = `Exhausted after ${s.attempts} attempt(s): ${s.failures.slice(0, 2).join('; ')}`
-  }
+  s.history.push(...s.failures)
+  if (s.attempts >= limitOf(id)) exhaust(id, `Exhausted after ${s.attempts} attempt(s)${s.escalated ? ' (the last one escalated, with a diagnosis brief)' : ''}: ${s.failures.slice(0, 2).join('; ')}`)
 }
 
 // ---------------------------------------------------------------- the attempt barrier
@@ -270,10 +306,9 @@ async function integrateDone() {
     if (s.outcome !== 'done') continue // only work that was integrated goes back
     s.failures = [`Attempt ${attemptNo(id) - 1}: the integrated build failed after wave ${frontier} (${why}). \`task show\` lists the failing commands and their output under integration_failures; task start brings the integrated branch into yours.`]
     integrated.delete(id)
-    if (s.attempts >= (T[id].retry_limit || 3)) {
-      s.outcome = 'exhausted'
-      s.summary = `Exhausted after ${s.attempts} attempt(s): the integrated build failed: ${why}`
-      continue
+    if (s.attempts >= limitOf(id)) {
+      exhaust(id, `Exhausted after ${s.attempts} attempt(s): the integrated build failed: ${why}`)
+      if (s.outcome === 'exhausted') continue
     }
     s.outcome = 'pending'
     s.reopened = (s.reopened || 0) + 1
@@ -337,7 +372,7 @@ for (const id of order) {
   st[id].summary = envBroken ? 'Not started: the build environment is broken.' : bad ? `Skipped: depends on ${bad} (${st[bad].outcome})` : `Skipped: its dependencies were not integrated${brokenIntegration ? ` (${brokenIntegration})` : ''}.`
 }
 
-const tasks = Object.keys(T).map((id) => ({ id, outcome: st[id].outcome, attempts: st[id].attempts, summary: st[id].summary }))
+const tasks = Object.keys(T).map((id) => ({ id, outcome: st[id].outcome, attempts: st[id].attempts, summary: st[id].summary, ...(st[id].escalated ? { escalated: true } : {}), ...(st[id].outcome === 'exhausted' ? { last_failures: (st[id].failures || []).slice(0, 3).map((f) => String(f).slice(0, 900)) } : {}) }))
 const base = {
   workflow: 'realize',
   config: null,
@@ -351,7 +386,7 @@ const base = {
   questions: [],
 }
 if (envBroken) {
-  return { ...base, status: 'park', park_reason: envBroken.reason, summary: `Stopped: ${envBroken.reason}`, data: { tasks, verifications: checks, integrations, rebuilds, environment_broken: envBroken } }
+  return { ...base, status: 'park', park_reason: envBroken.reason, summary: `Stopped: ${envBroken.reason}`, data: { tasks, verifications: checks, integrations, rebuilds, grants: grantsLog, environment_broken: envBroken } }
 }
 const notDone = tasks.filter((t) => t.outcome !== 'done')
 return {
@@ -359,5 +394,5 @@ return {
   status: notDone.length ? 'park' : 'ok',
   park_reason: notDone.length ? `Tasks not done: ${notDone.map((t) => `${t.id} (${t.outcome})`).join(', ')}` : null,
   summary: `${tasks.length - notDone.length}/${tasks.length} task(s) done.`,
-  data: { tasks, verifications: checks, integrations, rebuilds },
+  data: { tasks, verifications: checks, integrations, rebuilds, grants: grantsLog },
 }

@@ -103,7 +103,7 @@ test('evals: skills, agents and fixtures the cases name exist', () => {
 test('evals: every fixture stages as base + change commits, with a planted injection in each review fixture', () => {
   const fixtures = path.join(FACTORY, 'evals', 'fixtures');
   for (const name of fs.readdirSync(fixtures).filter((f) => fs.statSync(path.join(fixtures, f)).isDirectory())) {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), `fixture-${name}-`));
+    const dir = require('./helpers/tmp').mkdtemp(`fixture-${name}-`);
     const r = spawnSync('bash', [path.join(fixtures, 'stage.sh'), name], { cwd: dir, encoding: 'utf8' });
     assert.equal(r.status, 0, `${name}: ${r.stderr}`);
     const log = spawnSync('git', ['log', '--format=%s'], { cwd: dir, encoding: 'utf8' }).stdout.trim().split('\n');

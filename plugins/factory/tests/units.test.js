@@ -459,7 +459,7 @@ test('doctor reports readiness', () => {
   const d = F.cli(root, ['doctor']);
   assert.equal(d.ready, true, JSON.stringify(d.checks.filter((c) => !c.ok)));
   assert.ok(d.checks.some((c) => c.name === 'remote' && c.level === 'warning'));
-  const bare = fs.mkdtempSync(path.join(os.tmpdir(), 'nogit-'));
+  const bare = require('./helpers/tmp').mkdtemp('nogit-');
   assert.equal(F.cli(bare, ['init']).code, 'no_git');
 });
 
@@ -470,6 +470,9 @@ test('spike: grounded recommendation, HF gate, close without shipping code', () 
   F.clarify(root);
   F.cli(root, ['next']);
   F.reply(root, 'approve');
+  // 0.10.0: spike fetches the pinned dependency source first (a CLI step)
+  assert.equal(F.cli(root, ['next']).step, 'deps');
+  F.cli(root, ['deps', 'fetch'], { allowFail: false });
   let b = F.cli(root, ['wfargs', 'ground']);
   F.record(root, F.envelope(b, 'ok', { topics: [{ topic: 'external', claims: [{ claim: 'lib A supports retries', source: 'https://example.com/a' }], unknowns: [] }], degraded: [] }));
   const n = F.cli(root, ['next']);
@@ -569,6 +572,8 @@ test('briefs name a real factory agent for every item, and carry only the run co
 
 test('stop hook never blocks while the human is the one to act (gate, park, open questions, a record that asked the user)', () => {
   const root = F.makeRepo();
+  // the read-back waits for the user only by policy since 0.9.0 (or on a pin conflict)
+  fs.writeFileSync(path.join(root, '.factory', 'policy.json'), JSON.stringify({ clarify: { readback: 'wait' } }));
   const J = F.cli(root, ['job', 'new', '--title', 'x', '--type', 'bug', '--risk', 'low']).job;
   fs.writeFileSync(path.join(F.jobDir(root, J), 'contract.md'), F.contractText());
   const { spawnSync } = require('child_process');

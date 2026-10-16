@@ -20,9 +20,10 @@ Return what you understood, so the user can say ok or correct it in a few second
 
 ## Redirect (mode redirect)
 The user changed course (a denial at the contract gate, or words given any time). Split their REDIRECT text into clauses, one per thing they asked for, each with the exact span of their words it rests on, the existing item it is about (I-n from the items list, or "new"), what to do (research it then decide, put a choice on the decision sheet, fix what the contract says, record a fact the user states, or follow an instruction), one line saying what is to be done, and for research whether the docs or the repo answer it. Cover every sentence of the redirect. Never merge two asks into one clause and never drop one.
+When a clause changes something the user said before (a fact, an instruction or a scope line in the items: "don't delete unless explicitly defined" after "never delete"), link it to that item by its id with action `fact`: the user's later words win over their earlier ones, and the factory shows the change ("changed: X → Y because you said …"), never silently.
 
 ## Interpret (mode interpret)
-The user answered the decision sheet in their own words. Map each part of their REPLY to a numbered decision (an option key, "recommended", "other" with their words, or "defer") or to a numbered fact (the correction). Every mapping carries the exact span of the reply it rests on. What you cannot map with confidence goes under unclear, word for word. Never answer a decision the reply does not answer.
+The user answered the decision sheet in their own words. Map each part of their REPLY to a numbered decision (an option key, "recommended", "other" with their words, or "defer") or to a numbered fact (the correction). Every mapping carries the exact span of the reply it rests on. What you cannot map with confidence goes under unclear, word for word: the factory keeps those words verbatim as the user's instructions, so never paraphrase them. Never answer a decision the reply does not answer.
 
 Do not edit any file. You only read.
 

@@ -74,8 +74,8 @@ test('console: steps, timeline and the agents per step, read-only', async () => 
   assert.match(ag.decision_id, /^J-\d+-D\d+$/);
 
   const before = snapshot(root);
-  const out = path.join(os.tmpdir(), `console-${process.pid}-${Date.now()}.html`);
-  const dataFile = `${out}.json`;
+  const out = require("./helpers/tmp").track(path.join(os.tmpdir(), `console-${process.pid}-${Date.now()}.html`));
+  const dataFile = `${out}.json`; require("./helpers/tmp").track(dataFile);
   const r = F.cli(root, ['console', '--out', out, '--data', dataFile]);
   assert.equal(r.__code, 0, JSON.stringify(r));
   assert.equal(r.written, out);
@@ -106,8 +106,8 @@ test('console: steps, timeline and the agents per step, read-only', async () => 
 test('console: never creates a factory key on a machine without one', () => {
   const root = F.makeRepo();
   F.cli(root, ['job', 'new', '--title', 'x', '--type', 'bug', '--risk', 'low']);
-  const key = path.join(os.tmpdir(), `no-key-${process.pid}-${Date.now()}`, 'secret');
-  const out = path.join(os.tmpdir(), `console-nokey-${process.pid}.html`);
+  const key = path.join(require("./helpers/tmp").track(path.join(os.tmpdir(), `no-key-${process.pid}-${Date.now()}`)), "secret");
+  const out = require("./helpers/tmp").track(path.join(os.tmpdir(), `console-nokey-${process.pid}.html`));
   const r = spawnSync('node', [F.BIN, 'console', '--out', out], { cwd: root, encoding: 'utf8', env: { ...process.env, FACTORY_ROOT: '', FACTORY_SECRET_FILE: key } });
   assert.equal(r.status, 0, r.stdout + r.stderr);
   assert.equal(JSON.parse(r.stdout).integrity, 'not_checked');
@@ -258,7 +258,7 @@ test('console: a workflow run step by step, from the brief (wfargs), the agent h
     assert.equal(require('../cli/lib/seal').valid(e), true, 'sealed like every log line');
   }
   // clarify v3: one stage per brief; this one is the research pass (two researchers, then the brief writer)
-  assert.deepEqual(wf[1].plan, { steps: { readback: 0, research: 2, brief: 1, interpret: 0, redirect: 0, write: 0, check: 0 }, modes: ['repo', 'docs'] }, 'what the brief will run');
+  assert.deepEqual(wf[1].plan, { steps: { readback: 0, research: 2, brief: 1, interpret: 0, redirect: 0, write: 0, check: 0, dispute: 0, diagnose: 0 }, modes: ['repo', 'docs'] }, 'what the brief will run');
   assert.equal(wf[2].wf_run, wf[1].wf_run, 'the record ends the run its brief started');
   assert.equal(wf[2].roster.length, 4);
   assert.ok(logLines(root).filter((e) => /^Subagent/.test(e.event)).every((e) => e.job === J && e.decision_id === D), 'every agent line names the job and the decision');
@@ -300,8 +300,8 @@ test('console: workflow steps for decide, challenge, decompose rounds and realiz
   let [d] = runOf([start(0, 'fanout-judge', 'decide', { fanout: [1, 2, 3, 4], judge: {}, critique: { revise: {} } }),
     A(1, 'o1', 'option-generator'), A(1, 'o2', 'option-generator'), A(1, 'o3', 'option-generator'), A(1, 't', 'threat-modeler'), Z(50, 'o1'), Z(51, 'o2'), Z(52, 'o3'), Z(60, 't'),
     A(61, 'a', 'architect'), Z(90, 'a'), A(91, 'g1', 'god-eye'), Z(120, 'g1'), A(121, 'a2', 'architect'), Z(150, 'a2'), A(151, 'g2', 'god-eye')], { alive: () => true });
-  assert.deepEqual(steps(d), [['done', 'fan-out (4)', 'option-generator×3,threat-modeler×1'], ['done', 'architect', 'architect×1'], ['done', 'God Eye (design) round 1', 'god-eye×1'], ['done', 'architect revises (round 1)', 'architect×1'], ['running', 'God Eye (design) round 2', 'god-eye×1']]);
-  assert.deepEqual(steps(d, 100), [['done', 'fan-out (4)', 'option-generator×3,threat-modeler×1'], ['done', 'architect', 'architect×1'], ['running', 'God Eye (design) round 1', 'god-eye×1'], ['pending', 'architect revises', '']], 'replayed at a time: the steps as they stood');
+  assert.deepEqual(steps(d), [['done', 'fan-out (4)', 'option-generator×3,threat-modeler×1'], ['done', 'architect', 'architect×1'], ['done', 'critics round 1 (god-eye)', 'god-eye×1'], ['done', 'architect revises (round 1)', 'architect×1'], ['running', 'critics round 2 (god-eye)', 'god-eye×1']]);
+  assert.deepEqual(steps(d, 100), [['done', 'fan-out (4)', 'option-generator×3,threat-modeler×1'], ['done', 'architect', 'architect×1'], ['running', 'critics round 1 (god-eye)', 'god-eye×1'], ['pending', 'architect revises', '']], 'replayed at a time: the steps as they stood');
   // with no threat model and no critique in the brief, those steps are not shown at all
   [d] = runOf([start(0, 'fanout-judge', 'decide', { fanout: [1, 2, 3], judge: {} }), A(1, 'o1', 'option-generator')], { alive: () => true });
   assert.deepEqual(steps(d), [['running', 'fan-out (3)', 'option-generator×1'], ['pending', 'architect decides', '']]);
@@ -398,7 +398,7 @@ test('console: workflow run templates follow the workflow sources and their conf
   const cl = cfg('clarify').agents;
   const cs = fs.readFileSync(path.join(F.PLUGIN, 'cli', 'core', 'clarify.js'), 'utf8');
   const ph = [...(/const PH = \{([^\n]*)\};/.exec(cs) || ['', ''])[1].matchAll(/'([^']+)'\]/g)].map((m) => m[1]);
-  assert.equal(ph.length, 5, ph.join(' | '));
+  assert.equal(ph.length, 7, ph.join(' | ')); // 0.9.0: + the tie-break and the diagnosis
   assert.match(cs, /'research brief' : `research \(\$\{/);
   for (const t of [...ph, 'research brief', 'research (repo, docs)', 'research (repo)', 'research (docs)']) assert.ok(RS.matchStep(RS.TEMPLATES.clarify, `clarify: ${t}`) >= 0, `clarify: "${t}" has a template step`);
   assert.match(src('clarify.js'), /phase\(`clarify: \$\{\(brief\.phases/, 'the clarify workflow prints the CLI\'s phase texts');
@@ -411,7 +411,9 @@ test('console: workflow run templates follow the workflow sources and their conf
   const de = cfg('decide');
   assert.deepEqual(roles('fanout-judge:decide', 'fanout'), [...new Set(de.fanout.map((f) => f.role))].sort());
   assert.deepEqual(roles('fanout-judge:decide', 'architect'), [de.judge.role]);
-  assert.deepEqual(roles('fanout-judge:decide', 'god-eye'), [de.critique.role]);
+  // 0.10.0: the design critics (decide.json critics): God Eye, and the API-conformance critic
+  assert.deepEqual(roles('fanout-judge:decide', 'god-eye'), [...new Set(de.critics.map((c) => c.role))].sort());
+  assert.deepEqual(roles('fanout-judge:decide', 'verify'), [de.verifier.role]);
   assert.deepEqual(roles('fanout-judge:decide', 'revise'), [de.critique.revise_role]);
   const ch = cfg('challenge');
   assert.deepEqual(roles('fanout-judge:challenge', 'fanout'), [...new Set(Object.values(ch.lanes))].sort());
@@ -618,6 +620,8 @@ test('console blueprint: gates wait on you with the reply the prompt hook applie
 
 test('console: clarify v3 — items with who decided them, findings with source and verdict (another version never used), gaps and the stage line per step', () => {
   const root = F.makeRepo();
+  // the read-back turn and a sheet of facts (both off by default since 0.9.0) give the console its waiting lines
+  fs.writeFileSync(path.join(root, '.factory', 'policy.json'), JSON.stringify({ clarify: { readback: 'wait', facts_sheet: true } }));
   const J = F.cli(root, ['job', 'new', '--title', 'Fix add', '--type', 'feature', '--risk', 'medium', '--request', 'fix add on nautobot 2.4 so the cart totals add up']).job;
   fs.writeFileSync(path.join(F.jobDir(root, J), 'contract.md'), F.contractText());
   const NB = 'https://docs.nautobot.com/projects/core/en';

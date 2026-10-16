@@ -43,7 +43,7 @@ function transcript(dir, name, { usage = true } = {}) {
 // ------------------------------------------------------------------------------ P4.1
 
 test('P4.1: the SubagentStop hook records where Claude Code keeps the agent\'s transcript and what it reports (tool calls, tokens per message once, models); unknown is never zero', () => {
-  const cfg = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-cfg-'));
+  const cfg = require('./helpers/tmp').mkdtemp('claude-cfg-');
   const T = core('transcripts');
   const f = transcript(cfg, 'agent-a1');
   const s = T.summarize(f);
@@ -77,7 +77,7 @@ test('P4.1: the SubagentStop hook records where Claude Code keeps the agent\'s t
 });
 
 test('P4.1: console --serve serves a transcript only from Claude Code\'s transcript folders, only one an event names, never through a symlink out', async () => {
-  const cfg = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-cfg-'));
+  const cfg = require('./helpers/tmp').mkdtemp('claude-cfg-');
   const saved = process.env.CLAUDE_CONFIG_DIR;
   process.env.CLAUDE_CONFIG_DIR = cfg;
   try {
@@ -212,7 +212,10 @@ test('P4.3 distill proposals: the lesson writer\'s brief edits wait for the user
   assert.equal(F.cli(root, ['inbox']).items.filter((x) => x.kind === 'brief').length, 0);
   // the drive's done stop lists a proposal made in its own distill
   const D = core('drive');
-  assert.match(D.stopDetail('done', { job: J, reason: 'closed' }, { briefs: [{ id: 'P2' }], lessons: [] }).summary, /accept brief Pn/);
+  // 0.9.0: the end-of-job digest names the one reply that settles them all
+  const done = D.stopDetail('done', { job: J, reason: 'closed' }, { briefs: [{ id: 'P2' }], lessons: ['L4'] });
+  assert.match(done.summary, /One reply settles them all, e\.g\. "accept lesson L4; accept brief P2"/);
+  assert.equal(done.digest.reply, 'accept lesson L4; accept brief P2');
 });
 
 // ------------------------------------------------------------------------------ P4.4

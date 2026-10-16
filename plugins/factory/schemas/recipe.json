@@ -89,6 +89,19 @@
           },
           "plan_critique": {
             "type": "boolean"
+          },
+          "combined": {
+            "type": "array",
+            "items": {
+              "enum": [
+                "design",
+                "plan",
+                "environment"
+              ]
+            }
+          },
+          "plan_probe": {
+            "type": "boolean"
           }
         }
       }

@@ -130,7 +130,10 @@ test('P3.1: factory drive steps a whole bug@low job; the main session runs only 
   // every human stop is a drive_stop event with a notify attempt (off here); hand-offs notify nobody
   const ds = ev.filter((e) => e.event === 'drive_stop');
   assert.ok(ds.some((e) => e.kind === 'gate' && e.gate === 'H1'));
-  assert.ok(ds.some((e) => e.kind === 'clarify'));
+  // 0.9.0 (intentional): the read-back is shown at H1, not waited on, and a sheet of facts alone is
+  // no turn: the user is needed at H1 and for the merge only
+  assert.ok(!ds.some((e) => e.kind === 'clarify'), 'no clarify turn for this job');
+  assert.deepEqual(ds.filter((e) => !e.handoff && e.kind !== 'yield').map((e) => (e.kind === 'gate' ? `gate ${e.gate}` : e.kind)), ['gate H1', 'wait', 'done']);
   for (const d of ds) assert.equal(d.notified, d.handoff ? 'none' : 'off', JSON.stringify(d));
   assert.ok(ds.filter((e) => e.kind === 'workflow').length >= 5, 'clarify stages, ground, decompose, realize, prove/challenge handed over');
   // drive.json keeps the last stop, without the brief
@@ -247,7 +250,7 @@ test('P3.2: notifications: notify-send on Linux, wsl-notify-send or a PowerShell
   const root = F.makeRepo();
   newJob(root);
   F.clarify(root);
-  const bin = fs.mkdtempSync(path.join(os.tmpdir(), 'factory-bin-'));
+  const bin = require('./helpers/tmp').mkdtemp('factory-bin-');
   const out = path.join(bin, 'shown.txt');
   fs.writeFileSync(path.join(bin, 'notify-send'), `#!/bin/sh\necho "$@" >> "${out}"\n`, { mode: 0o755 });
   if (N.isWsl()) return;
@@ -337,9 +340,10 @@ test('P3.3: amend submit while parked: gate A pre-empts the park once presented 
   F.cli(root, ['next']);
   F.reply(root, 'approve');
   F.cli(root, ['next']);
-  // a budget park
+  // a review-rounds park (0.9.0: a budget park is not lifted by an amendment: the budget is
+  // absolute, only "resume +N%" grants more; checked at the end)
   const st = stateOf(root, J);
-  core('decision-table').park(root, st, 'Agent run budget used up', 'budget');
+  core('decision-table').park(root, st, 'Review rounds used up with confirmed serious findings still open.', 'review');
   const limit = stateOf(root, J).policy.limits.max_agent_runs_per_job;
   F.cli(root, ['amend', 'start', '--reason', 'widen the goal', '--by', 'user']);
   const cf = path.join(F.jobDir(root, J), 'contract.md');
@@ -358,8 +362,20 @@ test('P3.3: amend submit while parked: gate A pre-empts the park once presented 
   const after = stateOf(root, J);
   assert.equal(after.status, 'active');
   assert.equal(after.resumed.via, 'amendment');
-  assert.equal(after.policy.limits.max_agent_runs_per_job, Math.ceil(limit * 1.5), 'the budget got its 50% more, as resume gives it');
+  assert.equal(after.policy.limits.max_agent_runs_per_job, limit, 'the budget is absolute: no automatic extra runs');
   assert.ok(core('decisions').forJob(root, J).some((d) => d.action === 'human.resume' && d.via === 'amendment'));
+  // a budget park stays parked when an amendment is approved: only "resume +N%" grants more
+  core('decision-table').park(root, stateOf(root, J), 'Agent run budget used up', 'budget');
+  F.cli(root, ['amend', 'start', '--reason', 'one more change', '--by', 'user']);
+  fs.writeFileSync(cf, fs.readFileSync(cf, 'utf8').replace('add(0, 0) returns 0', 'add(0, 0) returns 0 and add(1, 0) returns 1'));
+  F.cli(root, ['amend', 'submit']);
+  assert.equal(F.cli(root, ['next']).step, 'A');
+  const r2 = F.reply(root, 'approve');
+  assert.ok(!r2.resumed);
+  assert.match(r2.message, /stays parked on its spent budget/);
+  assert.throws(() => F.reply(root, 'resume'), /budget is absolute/);
+  assert.equal(F.reply(root, 'resume +50%').resumed, true);
+  assert.equal(stateOf(root, J).policy.limits.max_agent_runs_per_job, Math.ceil(limit * 1.5));
 });
 
 test('P3.3: after a dependency_conflict, the task\'s next start restarts its branch from the integrated job branch, keeping the old head on a ref; a task starts from the last green integration', () => {

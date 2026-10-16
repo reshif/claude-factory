@@ -24,7 +24,7 @@ function oldCli(rev) {
   const own = process.env[`FACTORY_OLD_${rev}`];
   if (!plugins[rev] && own) plugins[rev] = path.join(own, 'plugins', 'factory', 'bin', 'factory');
   if (!plugins[rev]) {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), `factory-${rev}-`));
+    const dir = require('./helpers/tmp').mkdtemp(`factory-${rev}-`);
     const r = spawnSync('bash', ['-c', `git -C "${REPO}" archive ${rev} plugins/factory | tar -x -C "${dir}"`], { encoding: 'utf8' });
     if (r.status !== 0) throw new Error(r.stderr);
     plugins[rev] = path.join(dir, 'plugins', 'factory', 'bin', 'factory');
@@ -130,7 +130,8 @@ test('upgrade from 0.15.1 (clarify v2) mid-questions: the answered question is t
   assert.deepEqual([who.status, who.strength], ['decided', 'user'], 'asked on the v3 sheet and answered there');
   assert.ok(h.screens.some((s) => s.stage === 'sheet_wait' && /Who reads the totals/.test(s.screen)));
   assert.match(h.screens[0].screen, /Carried over from before v3: .*clarify v2/);
-  assert.ok(!h.screens.some((s) => s.stage === 'sheet_wait' && /numeric strings/.test(s.screen)), 'the answered question is not asked again');
+  // (the sheet opens with the read-back since 0.9.0, which quotes the user's answer: only its questions count)
+  assert.ok(!h.screens.some((s) => s.stage === 'sheet_wait' && /^\d+\. \*\*[^\n]*numeric strings/m.test(s.screen)), 'the answered question is not asked again');
 });
 
 test('upgrade from 0.15.1 waiting at H1: the job is read back once more and reaches H1 under v3, nothing lost', { skip: !has(V2_REV) && `needs ${V2_REV} from git history` }, () => {
@@ -180,10 +181,11 @@ test('upgrade from 0.15.1 parked by clarify: resume, then v3 reads it back and r
   // ---- upgraded
   const p = F.cli(root, ['next']);
   assert.equal(p.action, 'parked');
-  assert.equal(F.cli(root, ['clarify', 'reply', 'ok']).code, 'parked', 'words wait while it is parked');
+  // 0.9.0 (intentional): words sent while parked are recorded, never refused (read back as a redirect on resume)
+  assert.equal(F.cli(root, ['clarify', 'reply', 'ok']).stored, true, 'words are recorded while it is parked');
   F.reply(root, `resume ${J}`);
   const n = F.cli(root, ['next']);
-  assert.equal(n.clarify.stage, 'readback');
+  assert.equal(n.clarify.stage, 'redirect', 'the words stored while parked are read back first, as a redirect');
   const h = toH1(root, J);
   assert.equal(h.next.step, 'H1', JSON.stringify(h.next).slice(0, 300));
 });

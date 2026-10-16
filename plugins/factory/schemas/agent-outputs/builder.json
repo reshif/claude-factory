@@ -2,5 +2,6 @@
   "status": { "enum": ["done", "blocked"] }, "summary": { "type": "string" },
   "blocked_reason": { "enum": ["needs_paths", "dependency_conflict", "environment_broken"] },
   "needs_paths": { "type": "array", "items": { "type": "string" } },
+  "granted": { "type": "array", "items": { "type": "string" } },
   "swept": { "type": "array", "items": { "type": "string" } },
   "commits": { "type": "array", "items": { "type": "string" } } } }

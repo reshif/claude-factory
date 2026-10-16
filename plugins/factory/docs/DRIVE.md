@@ -58,6 +58,14 @@ command for a human-only one (`command`; it asks for a code shown on that termin
 the last record's result (`recorded`). A rerun that stops at the same gate, park or clarify turn
 tells the user once only (`notified: "repeat"`).
 
+Since the 0.10.0 port: a `parked` stop carries the park's `question` and `options` (the specific
+thing the factory needs from the user, after one escalation to a stronger model has not settled
+it), so the user answers in the same reply instead of a bare `resume`; a `wait` stop carries
+`ship_review` (the criteria to confirm, findings to accept or fix, and whether the push needs
+`approve ship`, all in one reply) or `environment` (the planner's proposed environment, when it
+is not confirmed by a combined gate); the `done` stop carries the job's `digest`. A medium job's
+`gate` stop names what its one approval covers (design + plan + environment).
+
 ### Replies are the user's own: scheduled and sent prompts
 
 The reply hook (UserPromptSubmit) also fires on a scheduled task firing (CronCreate,
@@ -69,11 +77,17 @@ A cron prompt fires verbatim, so a scheduled `approve` would read as the user's.
 
 - the guard also runs on `CronCreate`, `ScheduleWakeup`, `RemoteTrigger`, `SendMessage` and MCP
   tools named like `send_message`, `send_later`, `create_trigger`, `update_trigger`,
-  `fire_trigger`, and refuses any text that the reply hook's own parsers would take as a reply
-  (`cli/core/reply-origin.js`); it refuses a Bash command that names this session's inbox socket
+  `fire_trigger`, and refuses any text that the reply hook would take as a reply: one reader,
+  `human.readReply` (exact replies and `;` batches, near misses, clarify's ok and sheet answers, a
+  park's option letters and numbers, "yes"/"do it"/"use it", budget grants, the inspector's
+  replies); while any job waits on the user (a park, a gate, a clarify screen, the ship review, a
+  merge), it also refuses every short text (12 words or fewer) unless it clearly is not a reply
+  (a slash command, a question) (`cli/core/reply-origin.js`); it refuses a Bash command that names this session's inbox socket
   (`CLAUDE_CODE_MESSAGING_SOCKET`, `CLAUDE_CODE_MESSAGING_TOKEN`, `cc-socks-`);
 - every text it lets through is noted as a sealed hash in `.factory/log/agent-prompts.jsonl`, and
-  the reply hook refuses a prompt with a matching hash (each note counts once, for 7 days);
+  the reply hook refuses a prompt with a matching hash: a one-shot message's note counts once, a
+  recurring schedule's (a recurring cron, `/loop`, a wakeup it re-arms, a trigger) on every firing,
+  for 7 days;
 - a prompt wrapped in an envelope tag (a task notification, a teammate or peer message) is never
   applied and never noted as heard from the user.
 
@@ -253,3 +267,7 @@ like a lesson. The inbox and the drive's `done` stop list open proposals.
 | model ids, a refused-model fallback, a CLI version check | aliases per call, one switch | aliases follow the main conversation's model family; a workflow agent that cannot start returns null, so a refusal can't be told apart (the switch is the escape hatch) |
 | the dead-hook notice fix (`reply-watch.js`) | not applicable | claude-factory has no dead-hook notice |
 | `factory run`'s `drive_in_progress` refusal | `factory next` answers `driving` | there is no `factory run` |
+| the loop engine (`cli/core/loop.js`) required by the runner | the same engine copied inline into `workflows/fanout-judge.js` (between `LOOP ENGINE BEGIN`/`END`, no clock), and `cli/core/loop.js` used by `factory record` | a workflow script cannot require modules or read the clock; a fuzz test keeps the copy identical in behaviour |
+| the plan probe run by the runner between planner and God Eye | after the decompose workflow's `plan` phase, `factory next` names the CLI step `factory plan probe` (a long step: only in a fresh drive call); it runs detached, bounded by the call's time, and the next call picks up its result; then the `critique` phase | only the CLI can run commands, and a probe inside `factory record` could outlive the Bash call; decompose costs one more hand-off |
+| the ground ledger's second look run inside the runner | `factory record` checks the ledger, writes `ground.reask.json` and returns `retry`; the ground workflow runs again with only those probes | the same: the ledger check needs the fetched files |
+| `task grant` run by the runner for a builder's `needs_paths` | the builder asks with `task built --status blocked --reason needs_paths --paths …`; the CLI checks the grant (exact files, inside allowed paths, no other task's files) and the workflow retries without spending an attempt | there is no runner; `task grant`, `deps fetch`, `plan probe` and `record` stay refused to agents (the guard, xargs forms included, and the CLI while an agent works); a builder may record only the task it started, once per attempt, and a granted path is one exact file |

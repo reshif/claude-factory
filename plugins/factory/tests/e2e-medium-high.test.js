@@ -1,6 +1,7 @@
 'use strict';
-// standard@medium and full@high routes: design record + critique, H2 only when there's an ADR,
-// planned tasks in waves with a dependency, all required lanes, threat model and HS at high risk.
+// standard@medium and full@high routes: dependency source (deps), design record + critique, one
+// combined design + plan + environment gate at medium (H3), separate H2 and H3 at high, planned
+// tasks in waves with a dependency, all required lanes, threat model and HS at high risk.
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -18,7 +19,12 @@ function clarifyAndApprove(root, J) {
   assert.equal(F.clarify(root).status, 'ok');
   assert.equal(next(root).step, 'H1');
   F.reply(root, 'approve');
-  const n = next(root);
+  // 0.10.0: the pinned dependency source comes before ground (nothing pinned here: nothing fetched)
+  let n = next(root);
+  assert.equal(n.step, 'deps');
+  assert.match(n.command, /deps fetch/);
+  assert.equal(F.cli(root, ['deps', 'fetch']).__code, 0);
+  n = next(root);
   assert.equal(n.workflow, 'ground');
   const g = F.cli(root, ['wfargs', 'ground']);
   assert.equal(F.record(root, F.envelope(g, 'ok', { topics: [{ topic: 'codebase', claims: [{ claim: 'x', source: 'src/add.js:1' }], unknowns: [] }], degraded: [] })).status, 'ok');
@@ -68,7 +74,7 @@ function buildAll(root, J) {
   assert.equal(pv.ok, true, JSON.stringify(pv));
 }
 
-test('standard@medium: ADR → H2, plan → H3, three lanes, floors before ship', () => {
+test('standard@medium: ADR and plan approved at ONE gate (H3, with the build environment), three lanes, floors before ship', () => {
   const root = F.makeRepo();
   const J = F.cli(root, ['job', 'new', '--title', 'Math module', '--type', 'feature', '--risk', 'medium']).job;
   clarifyAndApprove(root, J);
@@ -103,16 +109,42 @@ test('standard@medium: ADR → H2, plan → H3, three lanes, floors before ship'
   assert.equal(r.status, 'park', 'three template failures in a row park the job');
   assert.match(r.park_reason, /unbalanced brackets[\s\S]*does not cover AC-2|does not cover AC-2[\s\S]*unbalanced brackets/);
   F.reply(root, 'resume decide');
-  // architect writes a valid ADR; the critique says revise twice → H2 shows it to the human
+  // architect writes a valid ADR; the critics stop with an objection open → it goes to the gate, never a park
   F.write(F.jobDir(root, J), 'adr-001-math.md', F.adrText({ job: J, acs: ['AC-1', 'AC-2'], decision: 'We will add separate modules.' }));
   assert.equal(F.cli(root, ['doc', 'check', adrPath]).ok, true);
   brief = F.cli(root, ['wfargs', 'fanout-judge', '--config', 'decide']);
-  r = F.record(root, F.envelope(brief, 'ok', { options: [], degraded: [], judge: { kind: 'adr', paths: [path.join(F.jobDir(root, J), 'adr-001-math.md')], summary: 's' }, critiques: [{ verdict: 'revise', items: [{ issue: 'i', severity: 'minor' }] }, { verdict: 'revise', items: [] }] }));
+  assert.equal(brief.verifier.agent_type, 'factory:finding-verifier', 'the design critics\' serious items are verified');
+  assert.deepEqual(brief.critics.map((c) => c.id), ['god-eye'], 'no dependency source: no API-conformance critic');
+  r = F.record(root, F.envelope(brief, 'ok', { options: [], degraded: [], judge: { kind: 'adr', paths: [path.join(F.jobDir(root, J), 'adr-001-math.md')], summary: 's' }, stop: 'no_progress', revised_after_last: true, open: ['god-eye-2-1'], critiques: [{ round: 1, verdict: 'revise', items: [{ id: 'god-eye-1-1', critic: 'god-eye', issue: 'i', severity: 'major', verified: 'confirmed' }], open: ['god-eye-1-1'] }, { round: 2, verdict: 'revise', items: [{ id: 'god-eye-2-1', critic: 'god-eye', issue: 'i', severity: 'major', verified: 'confirmed' }], open: ['god-eye-2-1'] }] }));
   assert.equal(r.status, 'ok');
-  assert.match(r.message, /you will see it at H2/);
+  assert.match(r.message, /you will see them at H3/);
+  // decompose → the one gate for design + plan + environment
   n = next(root);
-  assert.equal(n.step, 'H2');
-  assert.ok(n.gate.docs.some((d) => d.endsWith('design.json')));
+  assert.equal(n.workflow, 'decompose', 'medium risk has no separate H2');
+  brief = F.cli(root, ['wfargs', 'decompose']);
+  assert.ok(brief.critique, 'the plan critique runs at every risk level');
+  // claude-factory: the CLI runs the plan probe in factory record; decompose runs in two phases
+  assert.equal(brief.phase, 'plan', 'and the plan probe (the planner first)');
+  plan(root, J);
+  let rd = F.record(root, F.envelope(brief, 'ok', { planner: { valid: true, errors: [], path: 'plan.json' }, critique: null, phase: 'plan' }));
+  assert.equal(rd.status, 'retry', JSON.stringify(rd));
+  // (review MAJ-2, intentional) the probe is the CLI's own next step, then God Eye
+  assert.equal(rd.probe_pending, true, 'the plan is valid; the CLI probes it next');
+  assert.match(next(root).command, /factory plan probe --job J-0001/);
+  assert.equal(F.probe(root).ok, true);
+  assert.equal(next(root).workflow, 'decompose', 'the probe passed; God Eye critiques the probed plan next');
+  brief = F.cli(root, ['wfargs', 'decompose']);
+  assert.equal(brief.phase, 'critique');
+  assert.match(fs.readFileSync(brief.critique.prompt.split('\n')[1].trim(), 'utf8'), /INPUTS \(the plan probe's record/, 'the plan critique reads the probe record');
+  rd = F.record(root, F.envelope(brief, 'ok', { planner: { valid: true, errors: [], path: 'plan.json' }, critique: { verdict: 'approve', items: [] }, phase: 'critique' }));
+  assert.equal(rd.status, 'ok', JSON.stringify(rd));
+  n = next(root);
+  assert.equal(n.step, 'H3');
+  assert.ok(n.gate.docs.some((d) => d.endsWith('design.json')) && n.gate.docs.some((d) => d.endsWith('plan.json')) && n.gate.docs.some((d) => d.endsWith('probe.json')), JSON.stringify(n.gate.docs));
+  assert.deepEqual(n.review.approves, ['design', 'plan', 'environment']);
+  assert.equal(n.review.design_critique.open.length, 1, 'the open objection is shown at the gate');
+  assert.match(n.review.design_critique.not_rechecked, /final revision not re-checked by the critics/, 'm12: the gate says the last revision was never critiqued');
+  assert.match(n.review.objections, /1 objection/);
   // a document edited after it was presented can't be approved
   F.write(F.jobDir(root, J), 'adr-001-math.md', F.adrText({ job: J, acs: ['AC-1', 'AC-2'], decision: 'We will add separate modules, edited.' }));
   assert.throws(() => F.reply(root, 'approve'), /changed after it was presented/);
@@ -127,10 +159,8 @@ test('standard@medium: ADR → H2, plan → H3, three lanes, floors before ship'
   const archText = fs.readFileSync(brief.judge.prompt.split('\n')[1].trim(), 'utf8');
   assert.match(archText, /## Your tools[\s\S]*Change files only with Write and Edit[\s\S]*Never run python, node/, 'writers are told to use Write/Edit, not scripts');
   F.record(root, F.envelope(brief, 'ok', { options: [], degraded: [], judge: { kind: 'adr', paths: [path.join(F.jobDir(root, J), 'adr-001-math.md')], summary: 's' }, critiques: [{ verdict: 'approve', items: [] }] }));
-  assert.equal(next(root).step, 'H2');
-  F.reply(root, 'approve');
 
-  // decompose → H3
+  // a revised design re-plans (the combined gate binds both), then the one gate
   n = next(root);
   assert.equal(n.workflow, 'decompose');
   brief = F.cli(root, ['wfargs', 'decompose']);
@@ -138,9 +168,13 @@ test('standard@medium: ADR → H2, plan → H3, three lanes, floors before ship'
   assert.equal(F.cli(root, ['plan', 'validate']).valid, true);
   r = F.record(root, F.envelope(brief, 'ok', { planner: { valid: true, errors: [], path: 'plan.json' }, critique: null }));
   assert.equal(r.status, 'ok');
+  assert.match(r.message, /plan probe ran every verify command/);
   n = next(root);
   assert.equal(n.step, 'H3');
   F.reply(root, 'approve');
+  const st = F.cli(root, ['job', 'show']);
+  assert.deepEqual(st.approvals.H3.combined, ['design', 'plan', 'environment']);
+  assert.equal(F.cli(root, ['finalize', '--mode', 'before_ship']).missing.includes('design_critique'), false, 'the design was approved at the combined gate');
 
   buildAll(root, J);
 
@@ -165,6 +199,10 @@ test('standard@medium: ADR → H2, plan → H3, three lanes, floors before ship'
 
 test('full@high: threat model required, H2 and H3 human, HS before ship, trial recipes refused', () => {
   const root = F.makeRepo();
+  // a remote, so ship would push: HS signs off that outward step (local mode skips it, below)
+  const bare = require('./helpers/tmp').mkdtemp('factory-origin-');
+  F.sh(bare, 'git init -q --bare');
+  F.sh(root, `git remote add origin "${bare}"`);
   const J = F.cli(root, ['job', 'new', '--title', 'Auth math', '--type', 'feature', '--risk', 'high']).job;
   assert.equal(F.cli(root, ['job', 'show']).recipe.id, 'full@high');
   clarifyAndApprove(root, J);
@@ -191,9 +229,13 @@ test('full@high: threat model required, H2 and H3 human, HS before ship, trial r
   assert.equal(next(root).step, 'H2');
   F.reply(root, 'approve');
   n = next(root);
-  brief = F.cli(root, ['wfargs', 'decompose']);
   plan(root, J);
-  F.record(root, F.envelope(brief, 'ok', { planner: { valid: true, errors: [], path: 'plan.json' }, critique: null }));
+  // the CLI's probe step (review MAJ-2), then the decompose workflow's critique phase
+  const pr0 = F.probe(root);
+  assert.ok(pr0.ok !== undefined && !pr0.error, JSON.stringify(pr0).slice(0, 400));
+  brief = F.cli(root, ['wfargs', 'decompose']);
+  const rdp = F.record(root, F.envelope(brief, 'ok', { planner: { valid: true, errors: [], path: 'plan.json' }, critique: { verdict: 'approve', items: [] }, phase: brief.phase }));
+  assert.equal(rdp.status, 'ok', JSON.stringify(rdp));
   assert.equal(next(root).step, 'H3');
   F.reply(root, 'approve');
   buildAll(root, J);
@@ -226,7 +268,7 @@ test('full@high: threat model required, H2 and H3 human, HS before ship, trial r
 
 test('high-risk jobs refuse recipes that are not proven', () => {
   const os = require('os');
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'recipes-'));
+  const dir = require('./helpers/tmp').mkdtemp('recipes-');
   for (const f of fs.readdirSync(path.join(F.PLUGIN, 'recipes'))) fs.copyFileSync(path.join(F.PLUGIN, 'recipes', f), path.join(dir, f));
   const r = JSON.parse(fs.readFileSync(path.join(dir, 'full@high.json'), 'utf8'));
   r.status = 'trial';
@@ -235,4 +277,97 @@ test('high-risk jobs refuse recipes that are not proven', () => {
   const { spawnSync } = require('child_process');
   const out = spawnSync('node', [F.BIN, 'job', 'new', '--title', 'x', '--type', 'feature', '--risk', 'high'], { cwd: root, encoding: 'utf8', env: { ...process.env, FACTORY_RECIPES_DIR: dir } });
   assert.match(out.stdout, /no_trial_recipes|omits floor "no_trial_recipes"|only run proven recipes/);
+});
+
+// ------------------------------------------------------------------ release review B1 / M1: ship
+// A fake gh on PATH (authenticated, logs every call) and a bare origin: what would `factory ship` push?
+function fakeGh(root) {
+  const dir = require('./helpers/tmp').mkdtemp('factory-gh-');
+  const log = path.join(dir, 'gh.log');
+  fs.writeFileSync(path.join(dir, 'gh'), `#!/bin/sh\necho "$@" >> "${log}"\ncase "$1" in\n  pr) if [ "$2" = view ]; then exit 1; fi; echo https://github.com/x/y/pull/1 ;;\nesac\nexit 0\n`);
+  fs.chmodSync(path.join(dir, 'gh'), 0o755);
+  const bare = require('./helpers/tmp').mkdtemp('factory-origin-');
+  F.sh(bare, 'git init -q --bare');
+  F.sh(root, `git remote add origin "${bare}"`);
+  const env = { PATH: `${dir}:${process.env.PATH}` };
+  return { env, bare, calls: () => (fs.existsSync(log) ? fs.readFileSync(log, 'utf8').trim().split('\n').filter(Boolean) : []), pushed: () => F.sh(bare, "git for-each-ref --format='%(refname)'") };
+}
+
+// A job taken to the ship step by hand (decide approved, plan, build, prove, every lane clean).
+function toShip(root, risk, h) {
+  const J = F.cli(root, ['job', 'new', '--title', 'Ship me', '--type', 'feature', '--risk', risk]).job;
+  clarifyAndApprove(root, J);
+  if (risk === 'high') F.write(F.jobDir(root, J), 'threat-model.md', F.threatModelText({ job: J }));
+  F.write(F.jobDir(root, J), 'adr-001-x.md', F.adrText({ job: J, acs: ['AC-1', 'AC-2'], threats: risk === 'high' ? ['TH-1'] : [] }));
+  let brief = F.cli(root, ['wfargs', 'fanout-judge', '--config', 'decide']);
+  assert.equal(F.record(root, F.envelope(brief, 'ok', { options: [], degraded: [], judge: { kind: 'adr', paths: [path.join(F.jobDir(root, J), 'adr-001-x.md')], summary: 's' }, critiques: [{ verdict: 'approve', items: [] }] }, { threat_model: risk === 'high' })).status, 'ok');
+  if (risk === 'high') {
+    assert.equal(next(root).step, 'H2');
+    F.reply(root, 'approve');
+  }
+  next(root);
+  plan(root, J);
+  // the CLI's probe step (review MAJ-2), then the decompose workflow's critique phase
+  const pr0 = F.probe(root);
+  assert.ok(pr0.ok !== undefined && !pr0.error, JSON.stringify(pr0).slice(0, 400));
+  brief = F.cli(root, ['wfargs', 'decompose']);
+  const rdp = F.record(root, F.envelope(brief, 'ok', { planner: { valid: true, errors: [], path: 'plan.json' }, critique: { verdict: 'approve', items: [] }, phase: brief.phase }));
+  assert.equal(rdp.status, 'ok', JSON.stringify(rdp));
+  assert.equal(next(root).step, 'H3');
+  F.reply(root, 'approve');
+  buildAll(root, J);
+  next(root);
+  brief = F.cli(root, ['wfargs', 'fanout-judge', '--config', 'challenge']);
+  F.record(root, F.envelope(brief, 'ok', { lanes: brief.fanout.map((f) => ({ lane: f.id, findings: [] })), degraded: [], verifications: [] }, { fingerprint: brief.fingerprint }));
+  void h;
+  return J;
+}
+
+test('B1: policy ship.mode "local" at high risk skips HS AND keeps `factory ship` local: no push, no PR, even with a remote and an authenticated gh', () => {
+  const root = F.makeRepo();
+  const g = fakeGh(root);
+  fs.writeFileSync(path.join(root, '.factory', 'policy.json'), JSON.stringify({ ship: { mode: 'local' } }));
+  const J = toShip(root, 'high');
+  const n = F.cli(root, ['next'], { env: g.env });
+  assert.equal(n.skill, 'ship', 'HS skipped: nothing outward to sign off');
+  const r = F.cli(root, ['ship'], { env: g.env });
+  assert.equal(r.mode, 'local', JSON.stringify(r));
+  assert.deepEqual(g.calls().filter((c) => /^pr /.test(c)), [], 'no gh pr call');
+  assert.equal(g.pushed(), '', 'nothing pushed to origin');
+  const st = require('../cli/core/job').load(root, J);
+  assert.equal(st.pr.mode, 'local');
+  // a stale local pr.mode counts only for the build it shipped: a rebuilt job with a remote asks HS again
+  fs.writeFileSync(path.join(root, '.factory', 'policy.json'), '{}');
+  st.pr = { ...st.pr, fingerprint: 'an-older-build' };
+  require('../cli/core/job').save(root, st);
+  const ctx = require('../cli/core/steps').context(root, require('../cli/core/job').load(root, J), require('../cli/core/job').load);
+  assert.equal(require('../cli/core/steps').isLocalShip(ctx), false);
+  assert.equal(require('../cli/core/steps').isDone(ctx, { step: 'HS' }), false);
+});
+
+test('M1: at medium `factory ship` itself refuses to push without "approve ship"; with the draft opt-in it opens only a draft; approved, a normal PR', () => {
+  const root = F.makeRepo();
+  const g = fakeGh(root);
+  const J = toShip(root, 'medium');
+  const n = F.cli(root, ['next'], { env: g.env });
+  assert.equal(n.rule, 'ship.review', 'the router asks for the push approval');
+  // run directly anyway: refused at the CLI, nothing pushed
+  let r = F.cli(root, ['ship'], { env: g.env });
+  assert.equal(r.code, 'needs_ship_approval', JSON.stringify(r));
+  assert.equal(g.pushed(), '');
+  // the repository's one-time opt-in: a draft, never a normal PR
+  fs.writeFileSync(path.join(root, '.factory', 'policy.json'), JSON.stringify({ ship: { auto_pr: 'draft' } }));
+  r = F.cli(root, ['ship'], { env: g.env });
+  assert.equal(r.mode, 'github', JSON.stringify(r));
+  assert.ok(g.calls().some((c) => /^pr create .*--draft/.test(c)), g.calls().join('\n'));
+  // the human's "approve ship" for this build: a normal PR
+  const root2 = F.makeRepo();
+  const g2 = fakeGh(root2);
+  toShip(root2, 'medium');
+  F.cli(root2, ['next'], { env: g2.env });
+  F.reply(root2, 'approve ship');
+  r = F.cli(root2, ['ship'], { env: g2.env });
+  assert.equal(r.mode, 'github', JSON.stringify(r));
+  assert.ok(g2.calls().some((c) => /^pr create /.test(c) && !/--draft/.test(c)), g2.calls().join('\n'));
+  void J;
 });

@@ -21,6 +21,7 @@ One JSON object, fields in this order:
 - `errors`: the errors that last run still lists, word for word; `[]` when valid.
 - `path`: the slices.json path you wrote.
 - `summary`: one sentence: the slices and what each delivers.
+- `deps`: leave it out for slices (each slice job's planner names the pinned packages it needs, each `ecosystem`, `name` and `version`).
 
 ```json
 {"valid":true,"errors":[],"path":".factory/jobs/J-0012/slices.json","summary":"4 slices: S00 freezes the orders API v1 and adds orders_v2 (off); S01 create, S02 list, S03 cancel, each behind the flag."}

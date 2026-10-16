@@ -47,7 +47,11 @@ function toRealize(root) {
   F.record(root, F.envelope(b, 'ok', { topics: [{ topic: 'codebase', claims: [{ claim: 'slug is in myapp/text.py', source: 'myapp/text.py:1' }], unknowns: [] }], degraded: [] }));
   F.cli(root, ['next']);
   F.cli(root, ['plan', 'from-contract'], { allowFail: false });
-  assert.equal(F.cli(root, ['next']).workflow, 'realize');
+  // 0.10.0: no build starts in an environment nobody accepted (bug@low has no plan gate to seal it)
+  const w = F.cli(root, ['next']);
+  assert.equal(w.action, 'wait', JSON.stringify(w));
+  assert.equal(w.rule, 'env.unconfirmed');
+  assert.match(w.reason, /not confirmed, so no task is built[\s\S]*confirm environment [0-9a-f]{8}/);
   return { J, h1 };
 }
 
@@ -139,6 +143,7 @@ test('P2.1 acceptance: the builder works inside the worktree\'s venv and its wor
   const root = P.makePyRepo();
   const { J } = toRealize(root);
   terminal(root, ['env', 'set', '--file', writeEnv(root, P.ENV)]);
+  assert.equal(F.cli(root, ['next']).workflow, 'realize', 'confirmed: the build may start');
   const wt = path.join(root, '.factory', 'worktrees', `${J}-T1`);
   // Before: the root venv's runner tests the ROOT's code, wherever it is run from.
   let seen = null;
