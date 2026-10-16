@@ -41,6 +41,11 @@ function itemFor(root, state, driveStop, plain = false) {
   const base = { job: J, title: state.title, status: state.status, since: null };
   const pg = state.pending_gate;
   // a submitted amendment pre-empts a park (approving it resumes the job)
+  // until the router presented it, the amendment waits for factory next / factory drive to show
+  // it (an approval before that is refused): listed as such, not as a gate to approve (minor 5)
+  if (state.amendment && state.amendment.status === 'submitted' && !(pg && pg.id === 'A')) {
+    return { ...base, kind: 'amend', since: state.amendment.submitted_at || null, what: 'an amendment waits for factory drive (or factory next) to present it as gate A', reply: ['tell Claude to go on'], command: null, human_only: false };
+  }
   if (state.amendment && state.amendment.status === 'submitted') {
     return { ...base, kind: 'gate', gate: 'A', hash: state.amendment.hash, docs: [state.amendment.file], since: state.amendment.submitted_at || null, what: `approve ${GATE_WHAT.A}${state.status === 'parked' ? ' (approving it also resumes the parked job)' : ''}`, reply: ['approve', 'deny <what must change>'], command: `factory approve --job ${J}`, human_only: true };
   }
@@ -73,8 +78,8 @@ function itemFor(root, state, driveStop, plain = false) {
   }
   // a drive stop that waits on the main session or on you (questions, a degraded run, an amendment)
   // (a hand-off to the main session — a workflow to run, the lesson writer — waits on Claude, not you)
-  if (driveStop && driveStop.job === J && ['questions', 'amend', 'ship', 'error', 'limit'].includes(driveStop.kind)) {
-    return { ...base, kind: `drive_${driveStop.kind}`, since: driveStop.at, what: driveStop.summary, ...(driveStop.questions ? { questions: driveStop.questions } : {}), reply: driveStop.kind === 'questions' ? ['your answers'] : driveStop.kind === 'ship' ? ['ship it', 'what to change first'] : ['tell Claude how to go on'], command: null, human_only: false };
+  if (driveStop && driveStop.job === J && ['questions', 'amend', 'ship', 'error', 'limit', 'step_too_long'].includes(driveStop.kind)) {
+    return { ...base, kind: `drive_${driveStop.kind}`, since: driveStop.at, what: driveStop.summary, ...(driveStop.questions ? { questions: driveStop.questions } : {}), reply: driveStop.kind === 'questions' ? ['your answers'] : driveStop.kind === 'ship' ? ['ship it', 'what to change first'] : ['tell Claude how to go on'], command: driveStop.kind === 'step_too_long' ? driveStop.command || null : null, human_only: false };
   }
   return null;
 }

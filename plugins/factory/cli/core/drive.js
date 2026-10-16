@@ -48,10 +48,18 @@ const events = require('./events');
 
 const MAX_STEPS = 200;
 const MAX_SECONDS = 480; // under the Bash tool's 10-minute ceiling, with room for the last step
-const STALE_MS = 15 * 60 * 1000; // another host's drive counts as gone after this long without a step
-const HUMAN_ONLY = new Set(['approve', 'deny', 'resume', 'proceed', 'cancel', 'abandon', 'waive', 'merged', 'confirm', 'reseal', 'finding']);
+const STALE_MS = 30 * 60 * 1000; // a drive known only by its last step counts as gone after this long without one
+// the guard's own list (hooks/guard-rules.js isHumanOnly), so the two never drift
+const isHumanOnly = (a, b) => require('../../hooks/guard-rules').isHumanOnly(a, b);
+// Steps that may run long (they run the project's commands, push, or merge): the drive starts one
+// only with nearly the whole budget left (it yields first), and one that was killed in it twice,
+// or that last took nearly the shell tool's ceiling, is handed to the user's terminal (review M1).
+const LONG = new Set(['verify', 'ci', 'reconcile', 'pr', 'ship', 'epic', 'close']);
+const FRESH_SECONDS = 30;
+const ceilingMs = () => Number(process.env.BASH_MAX_TIMEOUT_MS) > 0 ? Number(process.env.BASH_MAX_TIMEOUT_MS) : 600000;
 const HANDOFF = new Set(['workflow', 'agent', 'evidence', 'skill', 'yield']);
 const FAILURE = new Set(['error', 'limit']);
+const QUIET = new Set(['superseded']); // a stop nobody needs to hear about: logged, never notified
 
 const driveFile = (root) => path.join(project(root).dir, 'drive.json');
 
@@ -84,10 +92,22 @@ function pidAlive(pid) {
   }
 }
 
-// Is this pid still a node/factory process? true / false, or null where /proc can't tell.
-function nodeProcess(pid) {
+// When this pid's process started: /proc/<pid>/stat field 22 (clock ticks since boot) on Linux,
+// `ps -o lstart=` elsewhere; null when neither can tell. A pid reused by another process has
+// another start time (review M2): a pid alone proves nothing.
+function procStart(pid) {
+  if (!Number.isInteger(pid) || pid <= 0) return null;
   try {
-    return /factory|node/.test(fs.readFileSync(`/proc/${pid}/cmdline`, 'utf8'));
+    const t = fs.readFileSync(`/proc/${pid}/stat`, 'utf8');
+    const f = t.slice(t.lastIndexOf(')') + 2).split(' ');
+    if (f[19]) return `proc:${f[19]}`;
+  } catch {
+    /* no /proc: ps */
+  }
+  try {
+    const r = spawnSync('ps', ['-o', 'lstart=', '-p', String(pid)], { encoding: 'utf8', timeout: 3000 });
+    const v = String(r.stdout || '').trim();
+    return r.status === 0 && v ? `ps:${v}` : null;
   } catch {
     return null;
   }
@@ -95,14 +115,18 @@ function nodeProcess(pid) {
 
 // A running drive, by what can be known about it: on another machine (a container, a renamed
 // host) only its last step speaks for it, so an old one is gone (and its pid means nothing here);
-// on this machine, its process: a live node/factory process is alive however long its step
-// takes, a gone or reused pid is dead.
+// on this machine, its process: the recorded pid alive with the recorded start time is alive
+// however long its step takes; a gone pid, or one reused by another process, is dead; where the
+// start time can't be read (or the record predates it), only a recent last step counts.
 const sameHost = (st) => !st.host || st.host === os.hostname();
+const beatFresh = (st) => Date.now() - (Date.parse(st.heartbeat_at || st.started_at || '') || 0) <= STALE_MS;
 function alive(st) {
   if (!st || st.status !== 'running') return false;
-  if (!sameHost(st)) return Date.now() - (Date.parse(st.heartbeat_at || st.started_at || '') || 0) <= STALE_MS;
+  if (!sameHost(st)) return beatFresh(st);
   if (!pidAlive(st.pid)) return false;
-  return nodeProcess(st.pid) !== false;
+  const now = procStart(st.pid);
+  if (st.pid_start && now) return now === st.pid_start;
+  return beatFresh(st);
 }
 
 function liveFor(root, jobId = null) {
@@ -213,6 +237,7 @@ const STOP_TITLE = {
   done: 'job done',
   error: 'drive stopped on an error',
   limit: 'drive step limit reached',
+  step_too_long: 'a step needs your terminal',
 };
 
 const ENVELOPE = '.factory/scratch/envelope.json';
@@ -270,8 +295,10 @@ function stopDetail(kind, n, extra = {}) {
       return { commands: n.commands || [], acs: n.acs || [], summary: `${J}: ${(n.acs || []).join(', ')} need${(n.acs || []).length === 1 ? 's' : ''} a doc/diff record the drive could not pick a file for: check the build shows it, run its line with the real path, then factory drive.` };
     case 'skill':
       return { skill: n.skill || null, summary: `${J}: the ${n.skill || 'next'} step is the main session's: follow the factory:${n.skill || 'start'} skill, then factory drive.` };
+    case 'step_too_long':
+      return { command: extra.command, summary: `${J}: "factory ${extra.step}" ${extra.why}: it runs longer than the shell tool lets a drive run. Run it in your own terminal (\`${extra.command}\`; it is not human-only, it is just long), then tell Claude to run factory drive again.`, reply: 'done (after running it in your terminal)' };
     case 'yield':
-      return { summary: `${J}: the drive used its time budget (${extra.seconds}s) between steps; run factory drive again: it continues from where the job is.` };
+      return { summary: `${J}: the drive used ${extra.seconds}s of its time budget${extra.before ? ` and ${extra.before} may run long, so it starts in a fresh drive` : ''}; run factory drive again: it continues from where the job is.` };
     case 'done':
       return {
         summary: `${J} is done: ${n.reason || 'closed'}${extra.lessons && extra.lessons.length ? ` Lessons proposed: ${extra.lessons.join(', ')} (reply "accept lesson Ln" or "reject lesson Ln <why>").` : ''}${extra.briefs && extra.briefs.length ? ` Project brief changes proposed: ${extra.briefs.map((b) => b.id).join(', ')} (reply "accept brief Pn" or "reject brief Pn <why>"; they reach every later agent).` : ''}`,
@@ -319,7 +346,8 @@ function loop(ctx) {
   const fails = {};
   let unknown = 0;
   for (;;) {
-    if (!ctx.owns()) return ctx.stop('error', { job: ctx.job }, { message: 'another factory drive took over this repository' });
+    // another drive took this one over (it looked dead): stop quietly, touching nothing
+    if (!ctx.owns()) return ctx.stop('superseded', { job: ctx.job }, { message: 'another factory drive took over this repository; this one stopped without touching the job' });
     ctx.steps += 1;
     if (ctx.steps > ctx.maxSteps) return ctx.stop('limit', { job: ctx.job }, { message: `stopped after ${ctx.maxSteps} steps on ${ctx.job} without reaching a stop (a loop?): read factory why --format md` });
     if (ctx.steps > 1 && Date.now() - ctx.t0 > ctx.maxSeconds * 1000) return ctx.stop('yield', { job: ctx.job }, { seconds: ctx.maxSeconds });
@@ -335,8 +363,9 @@ function loop(ctx) {
         if (n.action === 'skill' && n.skill !== 'clarify') {
           if (n.skill === 'ship') {
             if (ctx.stopBeforeShip) return ctx.stop('ship', n);
-            ctx.beat('ship');
-            const s = runChild(ctx, ['ship']);
+            const long = ctx.longStep('ship', 'ship', n);
+            if (long) return long;
+            const s = ctx.timed('ship', () => runChild(ctx, ['ship']));
             if (!s.json || s.json.error) return ctx.stop('error', n, { message: `factory ship failed: ${(s.json && s.json.message) || `exit ${s.code}`}`, code: s.json && s.json.code });
             ctx.shipped = s.json;
             continue;
@@ -369,11 +398,12 @@ function loop(ctx) {
         const w = words(n.command);
         // the router never names a human-only verb or a relay of the user's words; if one ever
         // did, the drive would not run it
-        if (!w.length || HUMAN_ONLY.has(w[0]) || (w[0] === 'lessons' && ['accept', 'reject', 'promote'].includes(w[1])) || w[0] === 'answer' || (w[0] === 'clarify' && ['reply', 'redirect', 'note'].includes(w[1])) || w[0] === 'drive') {
+        if (!w.length || isHumanOnly(w[0], w[1]) || w[0] === 'answer' || (w[0] === 'clarify' && ['reply', 'redirect', 'note'].includes(w[1])) || w[0] === 'drive') {
           return ctx.stop('error', n, { message: `factory next asked for "${n.command}", which is not the drive's to run` });
         }
-        ctx.beat(w.join(' '));
-        const res = runChild(ctx, w);
+        const long = ctx.longStep(w.join(' '), w[0], n);
+        if (long) return long;
+        const res = ctx.timed(w.join(' '), () => runChild(ctx, w));
         const key = n.command;
         if (res.code !== 0 || !res.json || res.json.error) {
           fails[key] = (fails[key] || 0) + 1;
@@ -447,10 +477,11 @@ function acquire(root, jobId) {
   return require('./job').withLock(path.join(project(root).dir, 'drive.lock'), () => {
     const prev = readState(root);
     if (alive(prev) && prev.pid !== process.pid) {
-      fail(`factory drive is already running (pid ${prev.pid}, ${prev.job}, since ${prev.started_at}): wait for it to return (factory drive status).`, 'drive_in_progress', { pid: prev.pid, job: prev.job });
+      fail(`factory drive is already running (pid ${prev.pid}, ${prev.job}, since ${prev.started_at}): wait for it to return (factory drive status). If you know it is gone, run factory drive takeover in your own terminal (it asks for a code shown there).`, 'drive_in_progress', { pid: prev.pid, job: prev.job });
     }
     const st = {
       pid: process.pid,
+      pid_start: procStart(process.pid),
       host: os.hostname(),
       job: jobId,
       status: 'running',
@@ -459,12 +490,26 @@ function acquire(root, jobId) {
       step: null,
       steps: 0,
       ...(prev && prev.status === 'running' ? { recovered_from: { pid: prev.pid, started_at: prev.started_at, step: prev.step || null } } : {}),
+      // the step a drive was killed in (a shell tool's time-out), and how many times in a row
+      ...(prev && prev.status === 'running' && prev.step && prev.step_long ? { killed_in: { step: prev.step, count: (prev.killed_in && prev.killed_in.step === prev.step ? prev.killed_in.count : 0) + 1 } } : prev && prev.killed_in ? { killed_in: prev.killed_in } : {}),
+      durations: (prev && prev.durations) || {},
       last: prev ? prev.last || null : null,
       stops: prev ? (prev.stops || []).slice(-20) : [],
     };
     writeState(root, st);
     return st;
   }, { waitMs: 10000, staleMs: 30000, what: 'the drive lock' });
+}
+
+// What to do before a step (null: run it), from what the drive record remembers.
+function longStepDecision({ label, verb, killedIn, durations, elapsedSec, job, ceiling = ceilingMs() }) {
+  if (!LONG.has(verb)) return null;
+  const took = (durations || {})[label];
+  const command = `factory ${label}${label.includes('--job') ? '' : ` --job ${job}`}`;
+  if (killedIn && killedIn.step === label && killedIn.count >= 2) return { kind: 'step_too_long', extra: { step: label, command, why: `was stopped ${killedIn.count} times while running` } };
+  if (typeof took === 'number' && took >= ceiling * 0.85) return { kind: 'step_too_long', extra: { step: label, command, why: `took ${Math.round(took / 1000)} s last time` } };
+  if (elapsedSec > FRESH_SECONDS) return { kind: 'yield', extra: { seconds: Math.round(elapsedSec), before: label } };
+  return null;
 }
 
 function drive(root, { jobId, record = null, lessons = null, maxSteps = MAX_STEPS, maxSeconds = MAX_SECONDS } = {}) {
@@ -504,14 +549,31 @@ function drive(root, { jobId, record = null, lessons = null, maxSteps = MAX_STEP
     current = { ...current, ...patch, heartbeat_at: nowIso() };
     writeState(root, current);
   };
-  ctx.beat = (step) => save({ job: ctx.job, steps: ctx.steps, step });
+  ctx.beat = (step, extra = {}) => save({ job: ctx.job, steps: ctx.steps, step, step_long: false, ...extra });
+  // Before a long step: yield unless the budget is still nearly whole; hand it to the user's
+  // terminal when it was killed in twice, or last took nearly the ceiling.
+  ctx.longStep = (label, verb, n) => {
+    const d = longStepDecision({ label, verb, killedIn: current.killed_in, durations: current.durations, elapsedSec: (Date.now() - ctx.t0) / 1000, job: ctx.job });
+    return d ? ctx.stop(d.kind, n, d.extra) : null;
+  };
+  ctx.timed = (label, fn) => {
+    const long = LONG.has(String(label).split(' ')[0]);
+    ctx.beat(label, { step_long: long, step_started_at: nowIso() });
+    const t = Date.now();
+    const r = fn();
+    if (long) {
+      const killed = current.killed_in && current.killed_in.step === label ? null : current.killed_in;
+      save({ durations: { ...(current.durations || {}), [label]: Date.now() - t }, killed_in: killed || null, step_long: false });
+    }
+    return r;
+  };
   ctx.stop = (kind, n, extra = {}) => {
     const d = stopDetail(kind, n || {}, { job: ctx.job, ...extra });
     const rec = {
       at: nowIso(),
       job: ctx.job,
       kind,
-      handoff: HANDOFF.has(kind),
+      handoff: HANDOFF.has(kind) || QUIET.has(kind),
       summary: d.summary,
       action: (n && n.action) || null,
       step: (n && n.step) || null,
@@ -520,11 +582,13 @@ function drive(root, { jobId, record = null, lessons = null, maxSteps = MAX_STEP
       ...(extra.code ? { code: extra.code } : {}),
       ...(n && n.environment ? { environment: n.environment } : {}),
       ...(ctx.shipped && ['wait', 'done'].includes(kind) ? { ship: ctx.shipped } : {}),
-      ...(ctx.recorded ? { recorded: ctx.recorded } : {}),
+      // a hand-off carries only what the main session runs (the brief, the distill context): kept
+      // small, since a large tool output is cut to a preview (review minor 11)
+      ...(ctx.recorded && !['workflow', 'agent'].includes(kind) ? { recorded: ctx.recorded } : {}),
       steps: ctx.steps,
       // the `factory next` output at this stop, whole: the gate, park and clarify skills read
       // their fields from it (no second factory next needed)
-      ...(n && n.action ? { next: n } : {}),
+      ...(n && n.action && !['workflow', 'agent'].includes(kind) ? { next: n } : {}),
     };
     // A rerun that stops at the same gate, park or clarify turn again tells the human once only;
     // a hand-off to the main session tells nobody (the session is at work).
@@ -553,6 +617,21 @@ function drive(root, { jobId, record = null, lessons = null, maxSteps = MAX_STEP
   } catch (e) {
     return ctx.stop('error', ctx.lastNext || { job: ctx.job }, { message: `drive failed: ${e.message}` });
   }
+}
+
+// factory drive takeover (human-only, from the user's terminal): release the drive record so the
+// next factory drive starts, when the user knows the recorded one is gone (a pid this check can't
+// tell, a drive that hangs). It signals nothing: a process still running keeps running, and its
+// next step finds it no longer owns drive.json and stops.
+function takeover(root, { channel }) {
+  const human = require('./human');
+  human.requireHumanChannel(channel);
+  const st = readState(root);
+  if (!st || st.status !== 'running') return { released: false, message: 'No drive record is held: factory drive can start.' };
+  human.confirmTyped(channel, st.job || 'drive', 'release the drive record');
+  writeState(root, { ...st, status: 'stopped', stopped_at: nowIso(), last: { at: nowIso(), job: st.job, kind: 'interrupted', summary: 'the drive record was released by factory drive takeover' } });
+  events.append(root, { event: 'drive_takeover', job: st.job || null, pid: st.pid, alive: alive(st) });
+  return { released: true, pid: st.pid, job: st.job, message: `Released the drive record of pid ${st.pid} (${st.job}). Run factory drive to continue.` };
 }
 
 function statusView(root) {
@@ -588,4 +667,4 @@ function status(root) {
   return v;
 }
 
-module.exports = { drive, status, statusView, liveFor, isDriveChild, drivingAnswer, readState, words, wfargsArgs, evidencePath, stopDetail, alive, driveFile, HANDOFF, MAX_SECONDS };
+module.exports = { drive, takeover, longStepDecision, procStart, status, statusView, liveFor, isDriveChild, drivingAnswer, readState, words, wfargsArgs, evidencePath, stopDetail, alive, driveFile, HANDOFF, MAX_SECONDS };

@@ -54,6 +54,7 @@ Drive      drive [--record <envelope.json>] [--lessons <reply.json>] [--max-seco
            (steps the job itself: CLI steps, briefs, records, ship, distill, evidence it can check; returns a typed stop:
            a workflow or the lesson writer for the main session, or a gate, clarify turn, park or done for you, notified)
            drive status · inbox [--format md]   (everything waiting on you, across jobs)
+           drive takeover   (human only: release a drive record you know is gone)
 Contract   contract show · contract check [--plan-fields]
            answer "<the user's words>"   (during clarify: the same as clarify reply; after H1: answer --question "…" --answer "…")
 Clarify    clarify reply "<the user's words>"   (read-back ok or edit, sheet answers, a redirect's ok; not a gate verb)
@@ -148,13 +149,16 @@ function run(argv) {
       return C('decision-table').decide(root, J);
     }
     case 'drive': {
+      if (sub !== 'status' && sub !== 'takeover') C('agents-open').refuseWhileAgentsWork(R(), 'drive');
       const D = C('drive');
       if (sub === 'status') return D.status(R());
-      if (sub !== undefined) return fail('drive [--record <envelope.json>] [--lessons <reply.json>] | drive status', 'bad_input');
+      if (sub === 'takeover') return D.takeover(R(), { channel: tty }); // human-only
+      if (sub !== undefined) return fail('drive [--record <envelope.json>] [--lessons <reply.json>] | drive status | drive takeover', 'bad_input');
       const file = (k) => (typeof opt[k] === 'string' ? opt[k] : opt[k] === true ? fail(`--${k} needs a file`, 'bad_input') : null);
       return D.drive(R(), { jobId: J, record: file('record'), lessons: file('lessons'), maxSteps: opt['max-steps'], maxSeconds: opt['max-seconds'] });
     }
     case 'inbox': {
+      C('agents-open').refuseWhileAgentsWork(R(), 'inbox');
       const r = C('inbox').list(R());
       return opt.format === 'md' ? C('inbox').markdown(r) : r;
     }
@@ -181,6 +185,7 @@ function run(argv) {
       return fail('contract show | check', 'bad_input');
     }
     case 'answer': {
+      C('agents-open').refuseWhileAgentsWork(R(), 'answer');
       // factory answer "<the user's words>" | <n|D-n.n> "<words>" | --default | --question "…" --answer "…"
       const idLike = (x) => x && /^([UQ]-\d+|D-\d+\.\d+|\d{1,2})$/i.test(x);
       const ref = idLike(sub) ? sub : opt.id;
@@ -188,6 +193,7 @@ function run(argv) {
       return C('record').answer(R(), { jobId: J, ref, question: opt.question, answer: text, acceptDefault: Boolean(opt.default) });
     }
     case 'clarify':
+      if (['reply', 'note', 'redirect'].includes(sub)) C('agents-open').refuseWhileAgentsWork(R(), `clarify ${sub}`);
       if (sub === 'status') return C('clarify').status(R(), { jobId: J, json: Boolean(opt.json), h1: Boolean(opt.h1) });
       if (sub === 'reply' || sub === 'note') return C('clarify').reply(R(), { jobId: J, text: opt.text || pos.slice(2).join(' ') });
       if (sub === 'redirect') return C('clarify').redirect(R(), { jobId: J, text: opt.text || pos.slice(2).join(' ') });
@@ -287,7 +293,12 @@ function run(argv) {
       if (sub !== 'sync') fail('pr sync', 'bad_input');
       return C('ship').prSync(R(), { jobId: J });
     case 'ci': {
-      if (sub === 'install') return C('ship').ciInstall(R());
+      if (sub === 'install') {
+        // human-only, as the guard and the help say: it writes CI files the user commits
+        C('human').requireHumanChannel(tty);
+        C('human').confirmTyped(tty, 'ci', 'install the CI gate');
+        return C('ship').ciInstall(R());
+      }
       if (sub === 'verify') {
         const r = opt['manifest-dir'] ? C('ship').ciVerify(null, { manifestDir: opt['manifest-dir'] }) : C('ship').ciVerify(R(), { jobId: J, commit: opt.commit });
         if (!r.ok) process.exitCode = 1;
