@@ -111,11 +111,10 @@ test('doc check --job checks every doc of a job; findings and the lessons regist
   const root = F.makeRepo();
   const J = F.cli(root, ['job', 'new', '--title', 'Fix add', '--type', 'bug', '--risk', 'low']).job;
   fs.writeFileSync(path.join(F.jobDir(root, J), 'contract.md'), F.contractText());
-  let b = F.cli(root, ['wfargs', 'fanout-judge', '--config', 'clarify']);
-  F.record(root, F.envelope(b, 'ok', { analysts: [], degraded: [], judge: { questions: [], dismissed: [] }, critique: { verdict: 'approve', items: [] } }));
+  F.clarify(root);
   F.cli(root, ['next']);
   F.reply(root, 'approve');
-  b = F.cli(root, ['wfargs', 'ground']);
+  let b = F.cli(root, ['wfargs', 'ground']);
   F.record(root, F.envelope(b, 'ok', { topics: [{ topic: 'codebase', claims: [{ claim: 'add subtracts', source: 'src/add.js:1' }, { claim: 'callers exist', source: 'UNVERIFIED' }], unknowns: [{ question: 'Floats too?', blocking: false }] }, { topic: 'history', claims: [], unknowns: [] }], degraded: [] }));
   const findings = fs.readFileSync(path.join(F.jobDir(root, J), 'findings.md'), 'utf8');
   assert.match(findings, /^---\ndoc: findings\ntemplate: findings@1\njob: J-0001\ntitle: Fix add\nstatus: grounded/);

@@ -96,7 +96,7 @@ test('evals: skills, agents and fixtures the cases name exist', () => {
   for (const c of outcomes.cases) if (!fs.existsSync(path.join(FACTORY, 'evals', 'fixtures', c.fixture, 'base'))) problems.push(`outcome ${c.id}: fixture ${c.fixture} missing`);
   // Tier 3 must cover the planted defects the benchmark asked for.
   const lanes = new Set(outcomes.cases.map((c) => c.agent));
-  for (const a of ['security-reviewer', 'test-reviewer', 'ux-reviewer', 'code-reviewer', 'god-eye', 'intent-analyst']) if (!lanes.has(a)) problems.push(`no Tier 3 case for ${a}`);
+  for (const a of ['security-reviewer', 'test-reviewer', 'ux-reviewer', 'code-reviewer', 'god-eye', 'interviewer']) if (!lanes.has(a)) problems.push(`no Tier 3 case for ${a}`);
   assert.deepEqual(problems, []);
 });
 

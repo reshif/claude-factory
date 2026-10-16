@@ -1,44 +1,48 @@
 'use strict';
-// UserPromptSubmit: your own reply ("approve", "deny …", "resume", "accept lesson L4", "merged <sha>", …)
-// is applied by the CLI before the model sees it. Subagent prompts never pass through here.
-// A short message that only looks like a reply ("aprove", "approve the plan please") is
-// never applied; Claude is told so, with the exact forms.
-// Clarify v2: while the current job waits on clarify questions, a numbered reply ("1 yes,
-// 2 trunk ports too", one per line or comma-separated, "Q-4 no", or "defaults") is recorded as
-// the answers to the question set the last round showed, through the same path as
-// `factory answer`. All or nothing; a message that is not that shape is left alone.
+// UserPromptSubmit: your own reply ("approve", "deny …", "resume", "proceed", "accept lesson L4",
+// "merged <sha>", …) is applied by the CLI before the model sees it. Subagent prompts never pass
+// through here. A short message that only looks like a reply ("aprove", "approve the plan
+// please") is never applied; Claude is told so, with the exact forms.
+// Clarify v3: while the current job waits on a clarify screen, an unmistakable reply (ok on the
+// read-back or a redirect, a structured sheet reply such as "ok, but 2 b") is recorded through the
+// same path as `factory clarify reply`; other words are left for the main session, which records
+// them verbatim with `factory clarify reply`. Every message you type is also noted as a hash (never
+// the text) in .factory/log/prompts.jsonl, so words the main session relays that are exactly yours
+// count as yours (heard directly), not as relayed.
 
 const { safe, emit, findRoot } = require('./lib');
 
 const say = (msg) => emit({ hookSpecificOutput: { hookEventName: 'UserPromptSubmit', additionalContext: msg } });
 
-// A numbered reply to the current clarify questions: recorded as answers, or left alone when
-// the current job has no open question set (it was just a numbered message).
-function answers(root, input, numbered) {
+// A reply to clarify's current screen, recorded through factory clarify reply; anything else is
+// left for the main session. Returns true when it was recorded (or refused with a reason).
+function clarifyReply(root, input) {
   const events = require('../cli/core/events');
   const ctx = events.context(root, null);
   let r;
   try {
-    r = require('../cli/core/clarify').applyNumbered(root, numbered, { jobId: ctx.job || undefined, via: 'chat' });
+    r = require('../cli/core/clarify').chatReply(root, input.prompt, { jobId: ctx.job || undefined });
   } catch (e) {
-    events.append(root, { event: 'reply_refused', reply: 'answers', code: e.code || null, reason: e.message.slice(0, 200), ...ctx });
-    say(`[factory] Your answers were NOT recorded: ${e.message} Tell the user this in one line; do not record them yourself.`);
-    return;
+    events.append(root, { event: 'reply_refused', reply: 'clarify', code: e.code || null, reason: e.message.slice(0, 200), ...ctx });
+    say(`[factory] Your reply was NOT recorded: ${e.message} Tell the user this in one line; do not record it yourself.`);
+    return true;
   }
-  if (!r) return;
-  events.append(root, { event: 'reply_applied', reply: 'answers', answered: r.answered.map((a) => a.id || a.issue), ...ctx });
-  say(`[factory] ${r.message} Continue with \`factory next\` (skill factory:start); do not record them again.`);
+  if (!r) return false;
+  events.append(root, { event: 'reply_applied', reply: 'clarify', stage: r.stage || null, ...ctx });
+  say(`[factory] Recorded your reply for clarify: ${r.message} Continue with \`factory next\` (skill factory:start); do not record it again.`);
+  return true;
 }
 
 safe((input) => {
   const human = require('../cli/core/human');
-  const parsed = human.parseReply(input.prompt);
-  const miss = parsed ? null : human.nearMiss(input.prompt);
   const root = findRoot(input.cwd || process.cwd());
   if (!root) return;
+  // what you typed, as a hash: relayed words that are exactly yours are heard directly
+  require('../cli/core/clarify').notePrompt(root, input.prompt);
+  const parsed = human.parseReply(input.prompt);
+  const miss = parsed ? null : human.nearMiss(input.prompt);
   if (!parsed && !miss) {
-    const numbered = require('../cli/core/clarify').parseNumbered(input.prompt);
-    if (numbered) answers(root, input, numbered);
+    clarifyReply(root, input);
     return;
   }
   const events = require('../cli/core/events');

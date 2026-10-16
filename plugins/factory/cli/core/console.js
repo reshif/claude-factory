@@ -77,12 +77,28 @@ function stepsOf(lock, state) {
   return list;
 }
 
+// Clarify v3's stage lines on the timeline: where clarify went next, in plain words.
+const CLARIFY_STAGE_TEXT = {
+  readback: () => 'Clarify starts again from the read-back',
+  readback_wait: () => 'Read your words back; waiting for your ok or your corrections',
+  research: () => 'Research next: one time-boxed pass, pinned to the versions you confirmed',
+  sheet_wait: (d) => `Decision sheet ready; waiting for your answer${num(d.failures) ? ` (${num(d.failures)} research gap(s) listed)` : ''}`,
+  interpret: () => 'Your sheet answer is in; the interviewer maps it to the decisions',
+  redirect: (d) => `Your redirect${d.redirect ? ` ${d.redirect}` : ''} is in; the interviewer reads it back`,
+  redirect_wait: () => 'Read your redirect back; waiting for your ok',
+  assemble: () => 'The contract writer writes the contract from what was settled',
+  check: () => 'Readiness check: the CLI\'s checks, then God Eye\'s checklist',
+  ready: () => 'Clarify is done: H1 next',
+  park: (d) => `Clarify parked${d.reason ? `: ${d.reason}` : ''}`,
+};
+
 function resultText(step, ok, d) {
   d = d || {};
   switch (step) {
     case 'clarify': {
       // God Eye objects (0.15.1): the round is over, but God Eye did not approve; H1 shows why
       if (ok && d.approved === false) return `Clarify can do no more; God Eye did not approve: ${num(d.god_eye_objects)} objection(s), shown at H1`;
+      if (ok && d.version === 3) return `Contract passed its readiness check${d.research_passes ? ` after ${num(d.research_passes)} research pass(es)` : ''}`;
       if (ok) return d.approved_with_notes ? 'Contract judged clear; God Eye approved with notes' : 'Contract judged clear; God Eye approved the intent';
       const cats = [...new Set(Array.isArray(d.categories) ? d.categories : [])];
       const held = num(d.held);
@@ -119,28 +135,12 @@ function resultText(step, ok, d) {
   }
 }
 
-// Clarify v2: the issue ledger as the page shows it (the Clarify block in the job and section
-// views, the Board's question count). A pre-v2 job is shown migrated, as factory clarify status
-// shows it; nothing is written.
+// Clarify v3: the stage, the items with who decided them, the open sheet and the failures, as
+// factory clarify status shows them (the latest state). A job still in clarify under 0.15 shows
+// none until its first v3 touch migrates it; jobs approved before v3 show none.
 function clarifyBlock(root, state) {
   try {
-    const clarify = require('./clarify');
-    const data = clarify.ensure(root, state);
-    if (!data || !data.issues.length) return null;
-    const v = clarify.view(state, data);
-    return {
-      migrated: Boolean(data.migration),
-      totals: v.totals,
-      open_by_owner: v.open_by_owner,
-      questions: v.questions.map((q) => ({ id: q.id, issue: q.issue, question: short(String(q.question || ''), 200), default: q.default ? short(String(q.default), 140) : null })),
-      issues: v.issues.slice(0, 60).map((r) => ({ id: r.id, subject: r.subject, title: short(r.title, 160), kind: r.kind, status: r.status, owner: r.owner, settled_by: r.settled_by || null, next: short(r.next, 160), aliases: r.aliases, answer: r.answer ? short(r.answer, 140) : null })),
-      deferred: v.deferred_to_design,
-      rounds: v.rounds,
-      trend: v.trend,
-      limits: v.limits,
-      notes: (v.notes || []).slice(-5).map((n) => ({ round: n.round || null, ref: n.ref || null, text: short(String(n.text || ''), 200) })),
-      migration: data.migration ? { folded: (data.migration.folded || []).length, matched_answers: (data.migration.matched_answers || []).map((m) => m.issue), deferred: (data.migration.deferred || []).map((x) => x.id) } : null,
-    };
+    return require('./clarify').consoleBlock(root, state);
   } catch {
     return null;
   }
@@ -175,6 +175,9 @@ function jobData(root, id, all, checker, nowMs = Date.now()) {
   }
   checker.check(state);
   checker.check(lock);
+  // clarify v3's record is sealed too: a hand-edited one shows as tampered
+  const cdata = readJson(path.join(jp.dir, 'clarify.json'), null);
+  if (cdata) checker.check(cdata);
   const ledger = readJsonl(jp.ledger).filter((e) => e && e.job === id);
   ledger.forEach(checker.check);
   const decisions = all.decisions.filter((d) => d.job === id);
@@ -281,6 +284,10 @@ function jobData(root, id, all, checker, nowMs = Date.now()) {
         return { label: short(a.label, 100), role: roleOf(a.agent_type), model: a.model || null, retry: Boolean(a.retry), outcome: a.outcome || null, ms };
       });
       push({ t: e.at, type: 'agents', step, workflow: e.workflow, config: e.config, mode: e.mode, decision_id: e.decision_id, status: e.status, runs: e.agent_runs || agents.length, agents });
+    } else if (e.kind === 'clarify') {
+      // clarify v3: one line per stage it moved to (cli/core/clarify.js ledgerNote)
+      const d = e.detail || {};
+      push({ t: e.at, type: 'clarify', step: ids.has('clarify') ? 'clarify' : null, stage: String(e.stage || ''), outcome: String(e.outcome || ''), failures: num(d.failures), text: short(CLARIFY_STAGE_TEXT[e.outcome] ? CLARIFY_STAGE_TEXT[e.outcome](d) : `Clarify: ${e.outcome}`, 240), waiting: /_wait$/.test(String(e.outcome || '')) });
     } else if (e.kind === 'error') {
       push({ t: e.at, type: 'error', step: null, text: short(`${e.workflow} reported an error: ${e.summary}`, 200) });
     }
@@ -363,7 +370,7 @@ function jobData(root, id, all, checker, nowMs = Date.now()) {
     pr: state.pr ? { mode: state.pr.mode, url: state.pr.url || null, merged: Boolean(state.pr.merged), merged_at: state.pr.merged_at || null } : null,
     review_lanes: reviewLanes.map(String),
     // the caps the job runs under (policy.limits), so the page never assumes them
-    limits: Object.fromEntries(['max_review_rounds', 'max_verify_fix_rounds', 'max_intent_rounds', 'max_design_critique_rounds', 'max_plan_validate_rounds', 'retry_limit'].filter((k) => Number.isInteger((policy.limits || {})[k])).map((k) => [k, policy.limits[k]])),
+    limits: Object.fromEntries(['max_review_rounds', 'max_verify_fix_rounds', 'max_design_critique_rounds', 'max_plan_validate_rounds', 'retry_limit'].filter((k) => Number.isInteger((policy.limits || {})[k])).map((k) => [k, policy.limits[k]])),
     lessons_max: Number.isInteger(policy.lessons_max_per_job) ? policy.lessons_max_per_job : null,
     models: ((state.policy || {}).agents || {}).models || {},
     escalation: ((state.policy || {}).agents || {}).builder_escalation || [],
@@ -376,7 +383,7 @@ function jobData(root, id, all, checker, nowMs = Date.now()) {
     tasks,
     lessons,
     clarify: clarifyBlock(root, state),
-    // what H1 shows besides the contract (factory next's `clarify` at the gate): God Eye's objections, drops, angles gone on without
+    // what H1 shows besides the contract (factory next's `clarify` at the gate): checked against your words, decisions, gaps, drops, God Eye's objections
     h1: state.pending_gate && ['H1', 'EH1'].includes(state.pending_gate.id) ? require('./clarify').h1Summary(root, state) : null,
   };
   // A cheap revision: the page re-renders only the jobs whose rev changed.

@@ -85,13 +85,16 @@ function quality(metrics) {
     laneOut[lane] = { raised: l.raised, sent_to_verifier: sent, verified, refuted: l.refuted, unverified: l.unverified, unverifiable: l.unverifiable || 0, refute_rate: rate(l.refuted, verified), unverifiable_rate: rate(l.unverifiable || 0, sent) };
   }
   const ge = roles['god-eye'] ? roles['god-eye'].outcomes : {};
-  const verdicts = (ge.approve || 0) + (ge.revise || 0);
+  // clarify v3's readiness check answers ready or blocked
+  const approve = (ge.approve || 0) + (ge.ready || 0);
+  const revise = (ge.revise || 0) + (ge.blocked || 0);
+  const verdicts = approve + revise;
   return {
     roles,
     lanes: laneOut,
     park_reasons: parks,
     degraded_steps: degraded,
-    god_eye: { verdicts, approve: ge.approve || 0, revise: ge.revise || 0, revise_rate: rate(ge.revise || 0, verdicts) },
+    god_eye: { verdicts, approve, revise, revise_rate: rate(revise, verdicts) },
   };
 }
 
@@ -104,6 +107,28 @@ function reverts(root, state) {
   } catch {
     return 0;
   }
+}
+
+// Clarify v3: what clarify cost the user (turns) and the factory (passes, checks), and what it
+// could not research. null for a job clarify v3 never touched.
+function clarifyMetrics(root, state) {
+  const data = require('./clarify').load(root, state.id);
+  if (!data || data.tampered) return null;
+  return {
+    version: 3,
+    user_turns: data.words.filter((w) => w.via !== 'request' && w.via !== 'migration').length,
+    relayed_words: data.words.filter((w) => w.relayed).length,
+    research_passes: data.research.passes.length,
+    sheets: data.sheets.length,
+    decisions: data.items.filter((it) => it.kind === 'decision').length,
+    decided_by_user: data.items.filter((it) => it.kind === 'decision' && it.strength === 'user').length,
+    recommendations_accepted: data.items.filter((it) => it.kind === 'decision' && it.strength === 'accepted').length,
+    redirects: data.redirects.length,
+    readiness_checks: data.checks.length,
+    failures: data.failures.length,
+    proceeded: Boolean(data.proceeded),
+    migrated_from: data.migration ? data.migration.from : null,
+  };
 }
 
 function jobMetrics(root, state, all) {
@@ -138,7 +163,7 @@ function jobMetrics(root, state, all) {
     wall_hours: Math.round(((Date.parse(state.closed_at || state.updated_at) - Date.parse(state.created_at)) / 36e5) * 10) / 10,
     review_fix_rounds: state.counters.review_rounds,
     verify_fix_rounds: state.counters.verify_fix_rounds,
-    clarify_rounds: state.counters.clarify_rounds,
+    clarify: clarifyMetrics(root, state),
     gate_denials: (state.denials || []).length,
     amendments: state.amendments_count || 0,
     parked: decs.filter((d) => d.action === 'parked').length,
@@ -171,6 +196,11 @@ function report(root, { sinceDays = 30 } = {}) {
     if (m.merged) r.merged += 1;
     if (m.parked) r.parked_jobs += 1;
     for (const k of ['escaped_defects_30d', 'reverts_30d', 'agent_runs', 'wall_hours', 'review_fix_rounds', 'verify_fix_rounds', 'gate_denials']) r[k] += m[k];
+    if (m.clarify) {
+      const rc = (r.clarify = r.clarify || { jobs: 0, user_turns: 0, relayed_words: 0, research_passes: 0, decisions: 0, decided_by_user: 0, recommendations_accepted: 0, redirects: 0, readiness_checks: 0, failures: 0, proceeded: 0 });
+      rc.jobs += 1;
+      for (const k of Object.keys(rc)) if (k !== 'jobs') rc[k] += k === 'proceeded' ? (m.clarify.proceeded ? 1 : 0) : m.clarify[k] || 0;
+    }
     for (const [lane, v] of Object.entries(m.lanes)) {
       const t = (r.lanes[lane] = r.lanes[lane] || { raised: 0, confirmed: 0, refuted: 0, unverified: 0, unverifiable: 0, minor: 0 });
       for (const k of Object.keys(t)) t[k] += v[k] || 0;
@@ -198,6 +228,11 @@ function toMarkdown(r) {
   for (const [id, x] of Object.entries(r.by_recipe)) {
     L.push(`| ${id} | ${x.jobs} | ${x.merged} | ${x.escaped_defects_30d} | ${x.reverts_30d} | ${x.avg_agent_runs} | ${x.avg_wall_hours} | ${x.review_fix_rounds} | ${x.verify_fix_rounds} | ${x.gate_denials} | ${x.parked_jobs} |`);
   }
+  L.push('', '## Clarify', '', 'What clarify cost you (your turns, redirects) and what it could not do (research gaps, God Eye objections you proceeded past). Many gaps point at `intent_research` (web off) or `clarify.research_minutes`; many decisions you overrode at the research brief; many redirects at the read-back.', '', '| Recipe | Jobs | Your turns | Relayed words | Research passes | Decisions | Decided by you | Recommendations accepted | Redirects | Readiness checks | Research gaps | Proceeded past God Eye |', '|---|---|---|---|---|---|---|---|---|---|---|---|');
+  for (const [id, x] of Object.entries(r.by_recipe)) {
+    const c = x.clarify || {};
+    L.push(`| ${id} | ${c.jobs || 0} | ${c.user_turns || 0} | ${c.relayed_words || 0} | ${c.research_passes || 0} | ${c.decisions || 0} | ${c.decided_by_user || 0} | ${c.recommendations_accepted || 0} | ${c.redirects || 0} | ${c.readiness_checks || 0} | ${c.failures || 0} | ${c.proceeded || 0} |`);
+  }
   L.push('', '## Review lanes', '', '| Recipe | Lane | Raised | Confirmed | Refuted | Unverified | Minor | Precision | Refute rate |', '|---|---|---|---|---|---|---|---|---|');
   for (const [id, x] of Object.entries(r.by_recipe)) {
     for (const [lane, l] of Object.entries(x.lanes)) L.push(`| ${id} | ${lane} | ${l.raised} | ${l.confirmed} | ${l.refuted} | ${l.unverified} | ${l.minor} | ${l.precision ?? '—'} | ${l.refute_rate ?? '—'} |`);
@@ -218,4 +253,4 @@ function toMarkdown(r) {
   return L.join('\n');
 }
 
-module.exports = { report, toMarkdown, jobMetrics, quality, roleStats, parkReasons };
+module.exports = { report, toMarkdown, jobMetrics, clarifyMetrics, quality, roleStats, parkReasons };

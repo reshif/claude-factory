@@ -113,7 +113,16 @@ function reseal(root, jobId) {
   const s = readJson(jobPaths(root, jobId).state, null);
   if (!s) fail(`Job ${jobId} not found`, 'job_missing');
   save(root, s);
-  return { job: jobId, resealed: true };
+  // the clarify record too: a hand edit of clarify.json otherwise leaves the job with no way on
+  // (the human who reseals takes the file as it now is)
+  const C = require('./clarify');
+  const d = C.load(root, jobId);
+  const out = { job: jobId, resealed: true };
+  if (d && d.tampered) {
+    C.save(root, jobId, d);
+    out.clarify_resealed = true;
+  }
+  return out;
 }
 
 function current(root) {
@@ -172,7 +181,7 @@ function rulebookSnapshot({ recipe, policy, workType, risk, effRisk, epic }) {
   });
 }
 
-function create(root, { title, workType, risk, epic = false, parent = null, sliceId = null, contractText = null, followupOf = null }) {
+function create(root, { title, workType, risk, epic = false, parent = null, sliceId = null, contractText = null, followupOf = null, request = null }) {
   const policy = policyMod.load(root);
   if (!policy.work_types.includes(workType)) fail(`Unknown work type "${workType}". Use one of: ${policy.work_types.join(', ')}`, 'bad_input');
   if (!policyMod.RISKS.includes(risk)) fail(`Unknown risk "${risk}". Use low, medium or high.`, 'bad_input');
@@ -201,6 +210,8 @@ function create(root, { title, workType, risk, epic = false, parent = null, slic
   const state = {
     id,
     title,
+    // the user's request, verbatim: clarify's read-back quotes it (cli/core/clarify.js)
+    request: request ? String(request).slice(0, 8000) : null,
     created_at: nowIso(),
     work_type: workType,
     risk: effRisk,

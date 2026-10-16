@@ -231,7 +231,7 @@ function deniedReroute(ctx, gate) {
   if (ledger.steps(root, state.id, from).some((e) => e.at > denied.at)) return null;
   const why = denied.reason ? `: "${denied.reason}"` : '';
   const how = from === 'clarify'
-    ? 'Clarify runs again with your reason in its brief: its contract editor revises the contract (don\'t edit it by hand).'
+    ? 'Clarify reads your words back as tracked items, then restarts from the earliest step they touch.'
     : producer.run.startsWith('skill:')
     ? `Revise the document to address it, then run the ${from} step again.`
     : `Run the ${producer.run.slice(9)} workflow again (factory wfargs ${producer.run.slice(9)}${producer.config ? ` --config ${producer.config}` : ''}); the reason is in its brief.`;
@@ -387,18 +387,12 @@ function route(root, jobId) {
     }
   }
 
+  // Clarify v3: the stage to run or the screen the user answers (its caps live in the stages).
+  if (action.action === 'skill' && action.skill === 'clarify') {
+    action.clarify = require('./clarify').nextInfo(root, state);
+    state = job.load(root, state.id);
+  }
   // Caps on loops that live inside a step.
-  // Clarify v2: the hard ceiling counts rounds that were not degraded (the no-progress rule
-  // parks earlier, from factory record).
-  const CL = action.step === 'clarify' ? require('./clarify').limits(state) : null;
-  if (CL && CL.counted >= CL.ceiling) {
-    park(root, state, `Clarify reached its ceiling of ${CL.ceiling} rounds without an approvable contract (factory clarify status shows what is open).`, 'clarify');
-    return record(root, state, al, out({ action: 'parked', reason: state.park.reason, rule: 'cap.clarify_rounds' }));
-  }
-  if (CL && action.action === 'skill' && action.skill === 'clarify') {
-    const summary = require('./clarify').nextSummary(root, state);
-    if (summary) action.clarify = summary;
-  }
   if (action.step === 'decompose' && state.counters.decompose_rounds >= L.max_plan_validate_rounds) {
     park(root, state, `The plan still fails validation after ${state.counters.decompose_rounds} rounds.`, 'decompose');
     return record(root, state, al, out({ action: 'parked', reason: state.park.reason, rule: 'cap.decompose_rounds' }));
@@ -413,11 +407,14 @@ function route(root, jobId) {
       job.save(root, state);
     }
     action.gate = state.pending_gate;
-    // H1 / EH1: what the contract alone does not show (God Eye's objections, dropped issues and
-    // why, analyst angles gone on without)
+    // H1 / EH1: what the contract alone does not show (checked against the user's words,
+    // decisions and who made them, gaps, drops and why, God Eye's objections)
     if (['H1', 'EH1'].includes(action.step)) {
       const h1 = require('./clarify').h1Summary(root, state);
-      if (h1) action.clarify = h1;
+      if (h1) {
+        action.clarify = h1;
+        action.clarify_h1 = h1;
+      }
     }
   } else if (action.action === 'merge') {
     if (state.pr && state.pr.mode === 'github') {
@@ -484,6 +481,8 @@ function record(root, state, al, result) {
       skill: result.skill || null,
       mode: result.mode || null,
       scope: result.scope || null,
+      // clarify v3: which stage, and whether it runs agents or waits on the user (the inspector reads it)
+      ...(result.skill === 'clarify' && result.clarify && result.clarify.stage ? { clarify: { stage: result.clarify.stage, run: Boolean(result.clarify.run), waiting_for_user: Boolean(result.clarify.waiting_for_user) } } : {}),
       node: state.parent ? `${state.parent}/${state.id}` : state.id,
       recipe: state.recipe.id,
       recipe_version: state.recipe.version,

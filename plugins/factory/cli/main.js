@@ -8,7 +8,7 @@ const path = require('path');
 const { FactoryError, fail, readText, writeJson } = require('./lib/util');
 const { requireRoot, findRoot, PLUGIN_ROOT } = require('./lib/paths');
 
-const BOOL = new Set(['epic', 'local', 'check', 'json', 'plan-fields', 'help', 'threat-model', 'plan-critique', 'no-threat-model', 'accept-degraded', 'serve', 'default', 'none', 'proposed']);
+const BOOL = new Set(['h1', 'epic', 'local', 'check', 'json', 'plan-fields', 'help', 'threat-model', 'plan-critique', 'no-threat-model', 'accept-degraded', 'serve', 'default', 'none', 'proposed']);
 
 function parseArgs(argv) {
   const pos = [];
@@ -48,13 +48,15 @@ function readStdin() {
 const HELP = `factory — Software Factory CLI (plugin at ${PLUGIN_ROOT})
 
 Setup      init [--base <branch>] · doctor · ci install
-Jobs       job new --title "…" --type <work type> --risk low|medium|high [--epic] · job show · job list · use <job>
+Jobs       job new --title "…" --type <work type> --risk low|medium|high [--epic] [--request "<the user's words>"] · job show · job list · use <job>
 Routing    next · why [--format md] · finalize [--mode before_ship|full] [--check]
 Contract   contract show · contract check [--plan-fields]
-           answer <U-n|Q-n> "<answer>" · answer <U-n|Q-n> --default · answer --id Q-n --answer "…" · answer --question "…" --answer "…"
-Clarify    clarify status [--json]   (the issue ledger: id, subject, status, owner, next action; per-round trend)
-           clarify note <U-n|contract> "<note>"   (context for the next clarify round)
-Workflows  wfargs <ground|fanout-judge|decompose|realize|reconcile> [--config clarify|decide|challenge] [--mode m] [--scope s] [--lanes a,b]
+           answer "<the user's words>"   (during clarify: the same as clarify reply; after H1: answer --question "…" --answer "…")
+Clarify    clarify reply "<the user's words>"   (read-back ok or edit, sheet answers, a redirect's ok; not a gate verb)
+           clarify redirect "<the user's words>"   (change course at any time before H1: read back, then restarted)
+           clarify status [--json] [--h1]   (stage, items with strength and source, the sheet, failures, checks; --h1 the H1 view)
+           clarify note "<text>"   (the same as clarify reply) · clarify split   (v3 keeps no folded issues: says so)
+Workflows  wfargs <clarify|ground|fanout-judge|decompose|realize|reconcile> [--config decide|challenge] [--mode m] [--scope s] [--lanes a,b]
            [--threat-model | --no-threat-model] [--plan-critique] [--accept-degraded] [--out file]
            record --file <envelope.json | ->
 Env        env show · env check [--proposed]   (the build environment each worktree runs in; read-only)
@@ -73,10 +75,9 @@ Learning   distill context · distill done [--result <reply.json | - | json>] ·
 Console    console [--out file.html] [--job J] [--label "…"] [--data data.json]   (read-only page of every job)
            console --serve [--port 4477] [--job J]   (the same page, live: updates as Claude works)
 Human only (your terminal, or reply in chat):
-           approve [gate] · deny --reason "…" · resume [step] · cancel · abandon · waive <floor> --reason "…"
+           approve [gate] · deny --reason "…" · resume [step] · proceed (after a clarify cap: go on, gaps shown) · cancel · abandon · waive <floor> --reason "…"
            merged <commit> · confirm <AC> · lessons accept|reject <L> · lessons promote <L> --check "cmd" · reseal
            env set [--file f | --none] [hash]   (confirm the build environment; chat: confirm environment <hash|none>)
-           clarify split <U-n> <alias U-n>   (undo a wrong fold: the alias becomes its own clarify issue again)
            finding accept|dismiss <id> --reason "…"   (a serious finding no verifier settled; chat: dismiss finding code-1 <reason>)
 Global     --root <repo> · --job <J-0001>`;
 
@@ -112,7 +113,7 @@ function run(argv) {
       const job = C('job');
       if (sub === 'new') {
         if (!opt.title || !opt.type || !opt.risk) fail('job new needs --title, --type and --risk', 'bad_input');
-        const s = job.create(R(), { title: opt.title, workType: opt.type, risk: opt.risk, epic: Boolean(opt.epic) });
+        const s = job.create(R(), { title: opt.title, workType: opt.type, risk: opt.risk, epic: Boolean(opt.epic), request: typeof opt.request === 'string' ? opt.request : null });
         return { job: s.id, recipe: `${s.recipe.id} v${s.recipe.version}`, risk: s.risk, risk_raised_by_policy: s.risk !== s.risk_proposed, branch: s.branch, contract: path.join(R(), '.factory', 'jobs', s.id, 'contract.md'), next: 'factory next' };
       }
       if (sub === 'show') return job.resolve(R(), J);
@@ -156,17 +157,18 @@ function run(argv) {
       return fail('contract show | check', 'bad_input');
     }
     case 'answer': {
-      // factory answer <U-n|Q-n> "<answer>" | <U-n|Q-n> --default | --id Q-n --answer "…" | --question "…" --answer "…"
-      const positional = sub && /^[UQ]-\d+$/i.test(sub);
-      const ref = positional ? sub : opt.id;
-      const text = opt.answer || (positional ? pos.slice(2).join(' ') : '') || '';
+      // factory answer "<the user's words>" | <n|D-n.n> "<words>" | --default | --question "…" --answer "…"
+      const idLike = (x) => x && /^([UQ]-\d+|D-\d+\.\d+|\d{1,2})$/i.test(x);
+      const ref = idLike(sub) ? sub : opt.id;
+      const text = opt.answer || (idLike(sub) ? pos.slice(2).join(' ') : pos.slice(1).join(' ')) || '';
       return C('record').answer(R(), { jobId: J, ref, question: opt.question, answer: text, acceptDefault: Boolean(opt.default) });
     }
     case 'clarify':
-      if (sub === 'status') return C('clarify').status(R(), { jobId: J, json: Boolean(opt.json) });
-      if (sub === 'note') return C('clarify').note(R(), { jobId: J, ref: pos[2], text: opt.text || pos.slice(3).join(' ') });
-      if (sub === 'split') return C('clarify').split(R(), { jobId: J, ref: pos[2], alias: pos[3], channel: tty });
-      return fail('clarify status [--json] | clarify note <U-n|contract> "<note>" | clarify split <U-n> [<alias U-n>]', 'bad_input');
+      if (sub === 'status') return C('clarify').status(R(), { jobId: J, json: Boolean(opt.json), h1: Boolean(opt.h1) });
+      if (sub === 'reply' || sub === 'note') return C('clarify').reply(R(), { jobId: J, text: opt.text || pos.slice(2).join(' ') });
+      if (sub === 'redirect') return C('clarify').redirect(R(), { jobId: J, text: opt.text || pos.slice(2).join(' ') });
+      if (sub === 'split') return C('clarify').split(R(), { jobId: J });
+      return fail('clarify reply "<words>" | clarify redirect "<words>" | clarify status [--json] [--h1]', 'bad_input');
     case 'wfargs': {
       const brief = C('wfargs').build(R(), {
         jobId: J,
@@ -361,6 +363,8 @@ function run(argv) {
       return C('human').approve(R(), { jobId: J, gate: sub, channel: tty });
     case 'deny':
       return C('human').deny(R(), { jobId: J, reason: opt.reason || pos.slice(1).join(' '), channel: tty });
+    case 'proceed':
+      return C('clarify').proceed(R(), { jobId: J, channel: tty });
     case 'resume':
       return C('human').resume(R(), { jobId: J, step: sub, channel: tty });
     case 'cancel':
@@ -410,7 +414,7 @@ function run(argv) {
   }
 }
 
-const PROSE = new Set(['reason', 'text', 'question', 'answer', 'title', 'note', 'by', 'check', 'label', 'why']);
+const PROSE = new Set(['reason', 'text', 'question', 'answer', 'title', 'note', 'by', 'check', 'label', 'why', 'request']);
 
 // One sealed line per command in .factory/log/events.jsonl, tied to the job and the
 // routing decision in force, so an auditor can check Claude did what factory next said.
@@ -426,7 +430,7 @@ function logCommand(argv, res, err) {
     const args = {};
     for (const [k, v] of Object.entries(opt)) args[k] = PROSE.has(k) && typeof v === 'string' ? `${v.slice(0, 60)}${v.length > 60 ? '…' : ''}` : v;
     // answers and notes are prose: their positional text is clipped like --answer
-    const proseArg = (pos[0] === 'answer' || (pos[0] === 'clarify' && pos[1] === 'note')) && pos.length > 2;
+    const proseArg = (pos[0] === 'answer' || (pos[0] === 'clarify' && ['note', 'reply', 'redirect'].includes(pos[1]))) && pos.length > 2;
     const r = res && typeof res === 'object' ? res : {};
     const extra = {};
     if (pos[0] === 'wfargs') Object.assign(extra, { workflow: r.workflow || pos[1] || null, config: r.config || opt.config || null, mode: r.mode || null, brief_hash: r.input_hash || null });

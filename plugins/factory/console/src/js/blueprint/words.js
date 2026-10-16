@@ -22,8 +22,8 @@
 APP.words = (function () {
   // The decisions only a person makes. `short` finishes "Waiting for you: ...".
   var GATES = {
-    // not a recipe gate: clarify asked what the repo cannot answer, and the job waits on your answers (the Blueprint's Q)
-    Q: { title: "Answer clarify's questions", short: "questions", tip: "Clarify asked what the repo can't answer. Reply in Claude Code by number, in your own words; a question you skip takes its default." },
+    // not a recipe gate: clarify waits on your reply to its read-back, decision sheet or redirect (the Blueprint's Q)
+    Q: { title: "Reply to clarify", short: "your reply", tip: "Clarify waits on one reply in Claude Code: ok (or corrections) on the read-back, or one answer to the decision sheet (ok, ok, but 2 b, fact 1: <correction>). Plain words work too; they are recorded word for word." },
     H1: { title: "Approve the contract", short: "contract", tip: "Agree that the contract and its numbered criteria describe what you want (H1 · contract)." },
     H2: { title: "Approve the design", short: "design", tip: "Agree with the approach, written as a design record." },
     H3: { title: "Approve the plan", short: "plan", tip: "Agree with the tasks; approving it starts the build." },
@@ -67,9 +67,9 @@ APP.words = (function () {
 
   // Every role in agents/*.md: a plain name, and what it does.
   var ROLES = {
-    "intent-analyst": ["Intent analyst", "finds gaps in the intent"], "contract-editor": ["Contract editor", "applies what was settled to the contract"],
+    interviewer: ["Interviewer", "reads your words back before anything slow happens"], "brief-writer": ["Brief writer", "turns one research pass into decisions with evidence"],
     "option-generator": ["Option generator", "proposes one independent design option"],
-    judge: ["Judge", "merges the analysts' reports"], "god-eye": ["God Eye", "independent reviewer: reads the whole document fresh"],
+    "contract-writer": ["Contract writer", "writes the contract once from what was settled"], "god-eye": ["God Eye", "independent reviewer: reads the whole document fresh"],
     researcher: ["Researcher", "finds facts in the code, with sources"], architect: ["Architect", "weighs the options, writes the design record"],
     "threat-modeler": ["Threat modeller", "lists what could be attacked, on high-risk work"], planner: ["Planner", "breaks the work into tasks"],
     slicer: ["Slicer", "splits an epic into slices"], builder: ["Builder", "builds one task"], tester: ["Tester", "checks one task independently"],

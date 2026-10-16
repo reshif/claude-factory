@@ -35,7 +35,7 @@ const BP_STEP_STATE = {
 const BP_GATE_OF = { awaiting_answers: 'Q', awaiting_intent_approval: 'H1', awaiting_design_approval: 'H2', awaiting_findings_approval: 'HF', awaiting_plan_approval: 'H3', awaiting_ship_approval: 'HS', awaiting_amendment_approval: 'A', pr_open: 'H4', parked: 'P' };
 const BP_MEANING = {
   received: 'the request is in; the router picks the first step', intent: 'clarify drafts the contract and asks only what the repo cannot answer',
-  awaiting_answers: 'you answer clarify\'s questions in Claude Code; a question you skip takes its default',
+  awaiting_answers: 'you reply to clarify in Claude Code (ok, or what to change); then clarify runs its next stage',
   awaiting_intent_approval: 'you approve the contract (H1)', designing: 'ground and decide: sourced facts, then a design record',
   awaiting_design_approval: 'you approve the design (H2)', awaiting_findings_approval: 'you accept the findings (HF)',
   planning: 'decompose writes the task waves', awaiting_plan_approval: 'you approve the plan (H3)', building: 'builders work in their own worktrees, testers verify each task',
@@ -72,6 +72,11 @@ function bpHistory(job) {
       go(it.t, 'awaiting_answers', 'router', `clarify asked ${n} question(s)`); asked = it;
     } else if (it.type === 'result' && it.raw_step === 'clarify' && cur === 'awaiting_answers') {
       go(it.t, 'intent', 'you', 'you answered'); asked = null;
+    } else if (it.type === 'clarify' && !BP_GATE_OF[cur] && cur !== 'closed' && cur !== 'parked') {
+      // clarify v3: a stage that waits on your reply (read-back, sheet, redirect), and the stage after it
+      if (it.waiting) { go(it.t, 'awaiting_answers', 'router', it.text); asked = it; }
+    } else if (it.type === 'clarify' && cur === 'awaiting_answers' && !it.waiting) {
+      go(it.t, 'intent', 'you', 'you replied'); asked = null;
     } else if (it.type === 'human' && (it.action === 'approve' || it.action === 'deny') && BP_GATE_OF[cur]) {
       const g = it.gate || BP_GATE_OF[cur];
       decided = it.action === 'approve' ? `you approved ${g}${it.via && it.via !== 'chat' ? ` (${it.via})` : ''}` : `you asked for changes at ${g}${it.reason ? `: ${it.reason}` : ''}`;
@@ -112,6 +117,15 @@ function bpQuestionCount(it) {
 // The answer to clarify's questions is not a reply the prompt hook applies: it is ordinary chat that reaches Claude,
 // which records each answer with `factory answer` (skill clarify: "1 yes, skip 2"). There is no terminal command for it.
 function bpAnswer(asked) {
+  // clarify v3: one reply to the screen it shows (the read-back, the decision sheet or a redirect read-back)
+  if (asked && asked.type === 'clarify') {
+    const sheet = asked.outcome === 'sheet_wait';
+    return {
+      answer: 'ok',
+      hint: sheet ? 'one reply answers the whole sheet: ok (take every recommendation), ok, but 2 b, fact 1: <correction>, or your own words'
+        : 'reply ok, or say in your own words what to change',
+    };
+  }
   const ids = asked && Array.isArray(asked.question_ids) ? asked.question_ids : [];
   const n = Math.max(1, ids.length || bpQuestionCount(asked || {}));
   const nums = n === 1 ? ['<your answer>'] : n <= 3 ? Array.from({ length: n }, (_, i) => `${i + 1} <your answer>`) : ['1 <your answer>', '2 <your answer>', `… ${n} <your answer>`];
@@ -196,7 +210,7 @@ function bpActivity(job, hist) {
 // Workflow runs (cli/core/run-steps.js, in the page as RUN_STEPS): each run as the console recorded it,
 // tagged with the station whose bank it belongs to, for the step list in that bank and the section view.
 // The steps are folded again at the replay time by RUN_STEPS.view(run, t); older data has no runs.
-const BP_RUN_STATION = { 'fanout-judge:clarify': 'intent', 'fanout-judge:decide': 'design', ground: 'design', decompose: 'plan', realize: 'build', reconcile: 'build', 'fanout-judge:challenge': 'review', distill: 'done' };
+const BP_RUN_STATION = { clarify: 'intent', 'fanout-judge:clarify': 'intent', 'fanout-judge:decide': 'design', ground: 'design', decompose: 'plan', realize: 'build', reconcile: 'build', 'fanout-judge:challenge': 'review', distill: 'done' };
 function bpRunStation(run) {
   const st = BP_STEP_STATE[run.step];
   const stage = st ? BP_STAGES.find((s) => s.states.includes(st)) : null;
@@ -215,8 +229,8 @@ function bpWaiting(job, state, asked) {
   const g = BP_GATE_OF[state];
   if (job.status !== 'active' && job.status !== 'parked') return { who: 'nobody', what: BP_MEANING[state] || state };
   if (!g) return { who: 'agent', what: BP_MEANING[state] || state };
-  // clarify v2: the ledger's open questions (new and still waiting) when the data carries them
-  if (g === 'Q') return { who: 'you', gate: g, what: BP_MEANING[state], ...bpAnswer(job.clarify && Array.isArray(job.clarify.questions) && job.clarify.questions.length ? { question_ids: job.clarify.questions.map((q) => q.id) } : asked), command: null };
+  // clarify v3: the screen it waits on; an older record: the questions it asked
+  if (g === 'Q') return { who: 'you', gate: g, what: BP_MEANING[state], ...bpAnswer(asked), command: null };
   // the replies the prompt hook applies (human.parseReply, the README's "Your replies"), and the same
   // human-only command from your own terminal (factory approve · resume · merged, with --job)
   const reply = g === 'P' ? `resume ${job.id} · cancel job ${job.id} · abandon job ${job.id}` : g === 'H4' ? `merged ${job.id} <commit>` : `approve ${job.id} ${g} · deny ${job.id} <what must change>`;

@@ -1,7 +1,7 @@
 'use strict';
 // Stop gate: no claiming a job is done while its floors fail. Checks every active
 // change job the session is on: the current one, the worktree's, and any J-#### named.
-// A job that is waiting on the human (a pending gate, unanswered clarify/ground questions,
+// A job that is waiting on the human (a pending gate, a clarify screen, unanswered ground questions,
 // a record that asked for the user since the last factory next, a wait decision) is
 // skipped: Claude is right to stop there, whatever words its summary uses.
 
@@ -77,11 +77,10 @@ function waitingOnHuman(root, state) {
   const { jobPaths } = require('../cli/lib/paths');
   const ledger = require('../cli/core/ledger');
   const answers = readJson(jobPaths(root, state.id).answers, []) || [];
-  const answeredIds = new Set(answers.map((a) => a.id).filter(Boolean));
   const answeredQs = new Set(answers.map((a) => a.question));
-  const clarify = ledger.lastStep(root, state.id, 'clarify');
-  const openQ = clarify && !clarify.ok && clarify.detail ? [...(clarify.detail.question_ids || []), ...(clarify.detail.waiting_ids || [])].filter((id) => !answeredIds.has(id)) : [];
-  if (openQ.length) return `clarify questions unanswered (${openQ.join(', ')})`;
+  // clarify v3: a read-back, a decision sheet or a redirect read-back waiting on the user
+  const clarifyWait = require('../cli/core/clarify').waitingForUser(root, state);
+  if (clarifyWait) return clarifyWait;
   const ground = ledger.lastStep(root, state.id, 'ground');
   const blocking = ground && !ground.ok && ground.detail ? (ground.detail.blocking || []).filter((q) => !answeredQs.has(q)) : [];
   if (blocking.length) return `${blocking.length} blocking question(s) from ground unanswered`;

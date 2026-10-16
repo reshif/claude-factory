@@ -9,17 +9,18 @@
 //     Grep (path and its glob filter), Glob (where it searches) and NotebookRead
 //   - force-push in any spelling, --no-verify / commit -n, hook-path redirects, writes to
 //     .git/hooks and .git/config, moving a job branch by hand, secret reads through git objects
-//   - human-only factory commands (approve, deny, resume, cancel, abandon, waive, merged,
-//     confirm, reseal, lessons accept|reject|promote, ci install, clarify split), and from a
-//     subagent the user's relay (answer, clarify note)
-//   - hand edits of a job's contract.md while the job is in clarify (clarifyLock)
+//   - human-only factory commands (approve, deny, resume, proceed, cancel, abandon, waive,
+//     merged, confirm, reseal, lessons accept|reject|promote, ci install), and from a subagent
+//     the user's relay (answer, clarify reply / redirect / note)
+// (Clarify v3: the user may edit a job's contract.md at any time; the CLI checks it again
+// before H1, so there is no clarify lock on it.)
 //   - starting an interactive shell (bash/sh/zsh/… with no command, or -i)
 //   - inline interpreter code (node -e, python -c, a heredoc or pipe into an interpreter) that
 //     reaches into factory state or internals, except read-only reads of the job in scope
 //     (opts.job: the job whose worktree the command runs in, else the current job)
 // The rules are the same for the main session and for subagents (Claude Code's payload marks
 // a subagent's call with agent_id/agent_type; guard.js logs it), with one exception: the user's
-// relay (factory answer, factory clarify note) is the main session's only.
+// relay (factory answer, factory clarify reply / redirect / note) is the main session's only.
 //
 // Shell commands are read with hooks/shell.js: a factory call is recognised only where a
 // command runs — the command word of a simple command, after env assignments and wrappers
@@ -97,7 +98,8 @@ function checkWrite(root, absIn, policy) {
   if (r.startsWith('.factory/')) {
     const parts = r.split('/');
     if (parts[1] === 'scratch') return null;
-    if (parts[1] === 'jobs' && parts.length === 4 && JOB_DOCS.test(parts[3])) return parts[3] === 'contract.md' ? clarifyLock(root, parts[2]) : null;
+    // Clarify v3: the user may edit contract.md at any time; the CLI re-checks it before H1.
+    if (parts[1] === 'jobs' && parts.length === 4 && JOB_DOCS.test(parts[3])) return null;
     if (parts[1] === 'worktrees' && parts.length >= 4) {
       const scope = taskScope(root, parts[2]);
       const inner = parts.slice(3).join('/');
@@ -112,25 +114,6 @@ function checkWrite(root, absIn, policy) {
   if (r.startsWith('.git/') || r === '.git') return 'Editing git internals is not allowed.';
   if (matchesAny(r, policy.protected_paths)) return `${r} is a protected path (policy.protected_paths).`;
   return null;
-}
-
-// Clarify v2, one writer: while a job is in clarify (a clarify round recorded, H1/EH1 not
-// approved, no amendment open) its contract changes only through the clarify workflow (the
-// contract editor) and factory record. The first draft (before round 1: intake, the clarify
-// skill) and amendments after H1 stay writable. Best effort: an unreadable state allows it.
-function clarifyLock(root, jobId) {
-  let st;
-  try {
-    st = JSON.parse(require('fs').readFileSync(path.join(root, '.factory', 'jobs', jobId, 'state.json'), 'utf8'));
-  } catch {
-    return null;
-  }
-  if (!st || !['active', 'parked'].includes(st.status)) return null;
-  const rounds = (st.counters && st.counters.clarify_rounds) || 0;
-  const approved = st.approvals && (st.approvals.H1 || st.approvals.EH1);
-  const amending = st.amendment && ['open', 'submitted'].includes(st.amendment.status);
-  if (rounds < 1 || approved || amending) return null;
-  return `${jobId} is in clarify: its contract is changed only by the clarify workflow (the contract editor) and factory record, not by hand. Record the user's answers with \`factory answer <U-n|Q-n> "<answer>"\` (or --default), add context with \`factory clarify note <U-n|contract> "<note>"\`, see what is open with \`factory clarify status\`, then run \`factory next\`.`;
 }
 
 function checkRead(root, absIn, policy) {
@@ -182,9 +165,9 @@ function checkReadTool(root, tool, ti, absFile, cwd, policy) {
 
 // ---- factory CLI recognition -------------------------------------------------------------
 
-const HUMAN_ONLY = new Set(['approve', 'deny', 'resume', 'cancel', 'abandon', 'waive', 'merged', 'confirm', 'reseal', 'finding']);
+const HUMAN_ONLY = new Set(['approve', 'deny', 'resume', 'proceed', 'cancel', 'abandon', 'waive', 'merged', 'confirm', 'reseal', 'finding']);
 // Mirrors cli/main.js parseArgs: --k=v, --k v (unless the flag is boolean or v starts with --), and --.
-const CLI_BOOL = new Set(['epic', 'local', 'check', 'json', 'plan-fields', 'help', 'threat-model', 'plan-critique', 'no-threat-model', 'accept-degraded', 'serve', 'default']);
+const CLI_BOOL = new Set(['h1', 'epic', 'local', 'check', 'json', 'plan-fields', 'help', 'threat-model', 'plan-critique', 'no-threat-model', 'accept-degraded', 'serve', 'default']);
 const TTY_FAKERS = /^(script|unbuffer|expect|socat|faketty|ptyexec|zpty|empty)$/;
 const SHELLS = /^(bash|sh|zsh|dash|ksh|mksh|fish|csh|tcsh|ash|busybox)$/;
 const PWSH = /^(pwsh|powershell|powershell\.exe|pwsh\.exe)$/i;
@@ -200,14 +183,14 @@ const SECRET_FILE = /software-factory[\\/]secret|\.config[\\/]software-factory/;
 const KNOWN_VARS = /^(HOME|PWD|OLDPWD|PATH|TMPDIR|TMP|TEMP|USER|SHELL|VIRTUAL_ENV|CONDA_PREFIX|PYENV_ROOT|NVM_DIR|GOPATH|GOROOT|CARGO_HOME|JAVA_HOME|ANDROID_HOME|XDG_\w+|CI|GITHUB_\w+|RUNNER_\w+|npm_\w+|env:\w+)$/;
 
 function isHumanOnly(a, b) {
-  return HUMAN_ONLY.has(a) || (a === 'lessons' && ['accept', 'reject', 'promote'].includes(b)) || (a === 'ci' && b === 'install') || (a === 'clarify' && b === 'split') || (a === 'env' && b === 'set');
+  return HUMAN_ONLY.has(a) || (a === 'lessons' && ['accept', 'reject', 'promote'].includes(b)) || (a === 'ci' && b === 'install') || (a === 'env' && b === 'set');
 }
 
-// The user's relay, never a factory agent's: answers and clarify notes come from the main
-// session (what the user said), so a subagent may not record them (opts.agent: the hook payload
-// names a subagent).
+// The user's relay, never a factory agent's: answers, clarify replies, redirects and notes come
+// from the main session (what the user said), so a subagent may not record them (opts.agent: the
+// hook payload names a subagent).
 function isUserRelay(a, b) {
-  return a === 'answer' || (a === 'clarify' && b === 'note');
+  return a === 'answer' || (a === 'clarify' && ['note', 'reply', 'redirect'].includes(b));
 }
 
 function humanMessage(a, b) {
@@ -767,4 +750,4 @@ function normalise(cmd) {
   return parse(cmd).map((c) => c.words.map((w) => w.text).join(' ')).join('; ');
 }
 
-module.exports = { checkWrite, clarifyLock, checkRead, checkReadTool, READ_TOOLS, checkBash, checkContent, normalise, deny, loadPolicy, isSecret, HUMAN_ONLY };
+module.exports = { checkWrite, checkRead, checkReadTool, READ_TOOLS, checkBash, checkContent, normalise, deny, loadPolicy, isSecret, HUMAN_ONLY };

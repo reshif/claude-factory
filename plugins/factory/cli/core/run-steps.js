@@ -25,20 +25,18 @@
 // "pending". tests/console.test.js keeps them honest to the workflow code and the configs.
 var RUN_STEPS = (function () {
   var TEMPLATES = {
-    // fanout-judge.js, clarify: the contract editor applies what was settled (when there is something) → the intent gate
-    // alone → the other angles (held back while the intent is open) → judge → God Eye (intent) → the contract editor
-    // revises for God Eye's pointed items and God Eye looks once more (when it asked for something)
-    'fanout-judge:clarify': {
-      next: 'your answers or H1',
+    // clarify.js (v3): one stage per run: the read-back, a research pass (the researchers, then the brief
+    // writer), reading a sheet reply or a redirect, the contract writer, or the readiness check
+    clarify: {
+      next: 'the next clarify stage, your reply, or H1',
       steps: [
-        { key: 'edit', label: 'apply what was settled', match: /^clarify: contract editor \(apply/, roles: ['contract-editor'], optional: true, only_when_run: true, text: function () { return 'clarify: contract editor (apply what was settled)'; } },
-        { key: 'gate', label: 'intent gate', match: /^clarify: intent gate/, roles: ['intent-analyst'], capped: true, text: function (n) { return 'clarify: intent gate (' + n + ')'; } },
-        { key: 'fanout', label: 'fan-out', match: /^clarify: fan-out/, roles: ['intent-analyst'], capped: true, text: function (n) { return 'clarify: fan-out (' + n + ')'; } },
-        // the judge runs again, on all angles, when it finds the intent clear after the gate held the others back
-        { key: 'judge', label: 'judge', match: /^clarify: judge/, roles: ['judge'], text: function (n, k) { return k > 1 ? 'clarify: judge (all angles)' : 'clarify: judge'; } },
-        { key: 'god-eye', label: 'God Eye (intent)', match: /^clarify: God Eye \(intent\)$/, roles: ['god-eye'], text: function () { return 'clarify: God Eye (intent)'; } },
-        // the editor's revision for God Eye's items, then God Eye's second look at it
-        { key: 'revise', label: 'contract editor revises, God Eye again', match: /^clarify: (contract editor \(God Eye|God Eye \(intent, )/, roles: ['contract-editor', 'god-eye'], optional: true, only_when_run: true, text: function (n, k) { return k > 1 ? 'clarify: God Eye (intent, after the revision)' : "clarify: contract editor (God Eye's items)"; } },
+        { key: 'readback', label: 'read your words back', match: /^clarify: read your words back/, roles: ['interviewer'], optional: true, only_when_run: true, text: function () { return 'clarify: read your words back'; } },
+        { key: 'research', label: 'research (pinned versions)', match: /^clarify: research \(/, roles: ['researcher'], optional: true, only_when_run: true, text: function (n, k, run) { return 'clarify: research (' + ((run && run.plan && run.plan.modes) || []).join(', ') + ')'; } },
+        { key: 'brief', label: 'research brief', match: /^clarify: research brief/, roles: ['brief-writer'], optional: true, only_when_run: true, text: function () { return 'clarify: research brief'; } },
+        { key: 'interpret', label: 'read your sheet answer', match: /^clarify: read your sheet answer/, roles: ['interviewer'], optional: true, only_when_run: true, text: function () { return 'clarify: read your sheet answer'; } },
+        { key: 'redirect', label: 'read your redirect back', match: /^clarify: read your redirect back/, roles: ['interviewer'], optional: true, only_when_run: true, text: function () { return 'clarify: read your redirect back'; } },
+        { key: 'write', label: 'write the contract', match: /^clarify: write the contract/, roles: ['contract-writer'], optional: true, only_when_run: true, text: function () { return 'clarify: write the contract'; } },
+        { key: 'check', label: 'readiness check', match: /^clarify: readiness check/, roles: ['god-eye'], optional: true, only_when_run: true, text: function () { return 'clarify: readiness check'; } },
       ],
     },
     // fanout-judge.js, decide: options (and the threat model) → architect → God Eye rounds, the architect revising between them
@@ -105,10 +103,15 @@ var RUN_STEPS = (function () {
   // The agents each step starts, by step key (0: the step does not run in this brief), and realize's waves.
   function planOf(brief) {
     var b = brief || {}, fan = Array.isArray(b.fanout) ? b.fanout : [], p = {};
-    if (b.workflow === 'fanout-judge' && b.config === 'clarify') {
-      var gate = fan.filter(function (f) { return f.gate || f.category === 'intent'; }).length;
-      var todo = b.editor && Array.isArray(b.editor.todo) ? b.editor.todo.length : 0;
-      p = { edit: todo ? 1 : 0, gate: gate, fanout: fan.length - gate, judge: b.judge ? 1 : 0, 'god-eye': b.critique ? 1 : 0, revise: b.editor && b.critique ? null : 0 };
+    if (b.workflow === 'clarify') {
+      // one stage per brief: its agents, by the stage's step; every other step does not run
+      var all = [].concat.apply([], Array.isArray(b.groups) ? b.groups : []);
+      var scouts = all.filter(function (a) { return a.mode === 'repo' || a.mode === 'docs'; });
+      var STEP = { readback: 'readback', interpret: 'interpret', redirect: 'redirect', assemble: 'write', check: 'check' };
+      p = { readback: 0, research: 0, brief: 0, interpret: 0, redirect: 0, write: 0, check: 0 };
+      if (b.stage === 'research') { p.research = scouts.length; p.brief = all.length - scouts.length; }
+      else if (STEP[b.stage]) p[STEP[b.stage]] = all.length;
+      return { steps: p, modes: scouts.map(function (a) { return a.mode; }) };
     } else if (b.workflow === 'fanout-judge' && b.config === 'decide') {
       p = { fanout: fan.length, architect: b.judge ? 1 : 0, 'god-eye': b.critique ? null : 0, revise: b.critique && b.critique.revise ? null : 0 };
     } else if (b.workflow === 'fanout-judge' && b.config === 'challenge') {
@@ -162,7 +165,7 @@ var RUN_STEPS = (function () {
         var r = {
           id: e.wf_run, job: e.job || null, workflow: e.workflow || null, config: e.config || null, mode: e.mode || null, template: templateKey(e.workflow, e.config),
           decision_id: e.decision_id || null, step: stepOf[e.decision_id] || null, round: typeof e.round === 'number' ? e.round : null, visit: 1,
-          started_at: e.ts, ended_at: null, status: 'running', result: null, error: null, phases: [], agents: [], plan: { steps: plan.steps || {}, waves: plan.waves || null }, cur: -1,
+          started_at: e.ts, ended_at: null, status: 'running', result: null, error: null, phases: [], agents: [], plan: { steps: plan.steps || {}, waves: plan.waves || null, modes: plan.modes || null }, cur: -1,
         };
         r.visit = runs.filter(function (x) { return x.workflow === r.workflow && x.config === r.config && x.mode === r.mode; }).length + 1;
         runs.push(r); by[r.id] = r;

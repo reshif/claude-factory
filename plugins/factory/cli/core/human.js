@@ -244,18 +244,8 @@ function resume(root, { jobId, step, channel }) {
   };
   if (from === 'review') oneMore('review_rounds', L.max_review_rounds);
   if (from === 'verify') oneMore('verify_fix_rounds', L.max_verify_fix_rounds);
-  if (from === 'clarify') {
-    // Clarify v2: the round counter stays monotonic. Resume resets the no-progress counter and,
-    // after the hard ceiling, allows as many more rounds as the no-progress rule needs.
-    const CL = require('./clarify').limits(state);
-    state.counters.clarify_no_progress = 0;
-    state.counters.clarify_degraded_streak = 0;
-    const short = CL.counted + CL.no_progress - CL.ceiling;
-    if (short > 0) state.counters.clarify_bonus_rounds = (state.counters.clarify_bonus_rounds || 0) + short;
-    // Parked on unclear intent: one more intent round, with a question budget.
-    const IL = readJson(pluginPath('config', 'workflows', 'clarify.json')).limits.intent_rounds;
-    if ((state.counters.intent_rounds || 0) >= IL) state.counters.intent_rounds = IL - 1;
-  }
+  // Clarify v3: one more try of the stage that hit its cap (cli/core/clarify.js onResume).
+  if (from === 'clarify') require('./clarify').onResume(root, state);
   if (from === 'decompose') oneMore('decompose_rounds', L.max_plan_validate_rounds);
   if (from === 'reverify') state.counters.reverify_bonus = (state.counters.reverify_bonus || 0) + 1;
   if (from === 'budget') state.policy.limits.max_agent_runs_per_job = Math.ceil(state.policy.limits.max_agent_runs_per_job * 1.5);
@@ -382,6 +372,7 @@ function parseReply(text) {
   if ((m = t.match(new RegExp(`^approve(?:\\s+${J})?(?:\\s+(${GATE_IDS.join('|')}))?$`, 'i')))) return { cmd: 'approve', jobId: m[1] && m[1].toUpperCase(), gate: m[2] && m[2].toUpperCase() };
   if ((m = t.match(new RegExp(`^deny(?:\\s+${J})?(?:(?:\\s*[:\u2014\u2013-]\\s*|\\s+)(.*))?$`, 'i')))) return { cmd: 'deny', jobId: m[1] && m[1].toUpperCase(), reason: (m[2] || '').trim() };
   if ((m = t.match(new RegExp(`^resume(?:\\s+${J})?(?:\\s+(.*))?$`, 'i')))) return { cmd: 'resume', jobId: m[1] && m[1].toUpperCase(), step: (m[2] || '').trim() || null };
+  if ((m = t.match(new RegExp(`^proceed(?:\\s+${J})?$`, 'i')))) return { cmd: 'proceed', jobId: m[1] && m[1].toUpperCase() };
   if ((m = t.match(new RegExp(`^(cancel|abandon)\\s+job(?:\\s+${J})?(?:\\s+(.*))?$`, 'i')))) return { cmd: m[1].toLowerCase() === 'cancel' ? 'cancel' : 'abandon', jobId: m[2] && m[2].toUpperCase(), reason: (m[3] || '').trim() };
   if ((m = t.match(new RegExp(`^(accept|dismiss)\\s+finding(?:\\s+${J})?\\s+([a-z][\\w.@-]*-\\d+(?:@r\\d+)?)(?:\\s*[:\u2014\u2013-]?\\s+(.*))?$`, 'i')))) return { cmd: 'settle_finding', decision: m[1].toLowerCase(), jobId: m[2] && m[2].toUpperCase(), id: m[3], reason: (m[4] || '').trim() };
   if ((m = t.match(/^confirm\s+environment(?:\s+(none|[0-9a-f]{8}))?$/i))) return { cmd: 'set_environment', none: Boolean(m[1] && m[1].toLowerCase() === 'none'), hash: m[1] && m[1].toLowerCase() !== 'none' ? m[1].toLowerCase() : null };
@@ -389,14 +380,14 @@ function parseReply(text) {
   if ((m = t.match(new RegExp(`^waive(?:\\s+${J})?\\s+([a-z_:]+)\\s+(.+)$`, 'i')))) return { cmd: 'waive', jobId: m[1] && m[1].toUpperCase(), floor: m[2], reason: m[3].trim() };
   if ((m = t.match(new RegExp(`^merged(?:\\s+${J})?\\s+([0-9a-f]{7,40})$`, 'i')))) return { cmd: 'merged', jobId: m[1] && m[1].toUpperCase(), commit: m[2] };
   if ((m = t.match(new RegExp(`^confirm\\s+((?:E-)?AC-\\d+)(?:\\s+${J})?$`, 'i')))) return { cmd: 'confirm', ac: m[1], jobId: m[2] && m[2].toUpperCase() };
-  // clarify v2: undo a wrong fold of two clarify issues ("split U-7 U-19", or "split U-19")
+  // clarify v2's "split U-7 U-19": v3 keeps no folded issues, so it only says so (clarify.split)
   if ((m = t.match(new RegExp(`^split(?:\\s+${J})?\\s+(U-\\d+)(?:\\s+(U-\\d+))?$`, 'i')))) return { cmd: 'split', jobId: m[1] && m[1].toUpperCase(), ref: m[2].toUpperCase(), alias: m[3] && m[3].toUpperCase() };
   return null;
 }
 
 // The exact forms, for "that was not applied" hints.
-const REPLY_FORMS = ['approve [J-0001] [H1]', 'deny [J-0001] <reason>', 'resume [J-0001] [step]', 'cancel job [J-0001] [reason]', 'abandon job [J-0001] [reason]', 'waive [J-0001] <floor> <reason>', 'merged [J-0001] <sha>', 'confirm AC-1 [J-0001]', 'accept lesson L4', 'reject lesson L4 [reason]', 'split [J-0001] U-7 U-19', 'accept finding code-1 <reason>', 'dismiss finding code-1 <reason>', 'confirm environment [hash|none]'];
-const VERBS = ['approve', 'approved', 'deny', 'denied', 'resume', 'cancel', 'abandon', 'waive', 'merged', 'merge', 'confirm', 'accept', 'reject', 'dismiss', 'lgtm'];
+const REPLY_FORMS = ['approve [J-0001] [H1]', 'deny [J-0001] <reason>', 'resume [J-0001] [step]', 'proceed [J-0001]', 'cancel job [J-0001] [reason]', 'abandon job [J-0001] [reason]', 'waive [J-0001] <floor> <reason>', 'merged [J-0001] <sha>', 'confirm AC-1 [J-0001]', 'accept lesson L4', 'reject lesson L4 [reason]', 'accept finding code-1 <reason>', 'dismiss finding code-1 <reason>', 'confirm environment [hash|none]'];
+const VERBS = ['approve', 'approved', 'deny', 'denied', 'resume', 'proceed', 'cancel', 'abandon', 'waive', 'merged', 'merge', 'confirm', 'accept', 'reject', 'dismiss', 'lgtm'];
 
 function editDistance(a, b) {
   const d = Array.from({ length: a.length + 1 }, (_, i) => [i, ...Array(b.length).fill(0)]);
@@ -427,6 +418,8 @@ function applyReply(root, parsed, channel = 'chat') {
       return deny(root, { jobId: parsed.jobId, reason: parsed.reason, channel });
     case 'resume':
       return resume(root, { jobId: parsed.jobId, step: parsed.step, channel });
+    case 'proceed':
+      return require('./clarify').proceed(root, { jobId: parsed.jobId, channel });
     case 'cancel':
       return stop(root, { jobId: parsed.jobId, kind: 'cancelled', channel, reason: parsed.reason });
     case 'abandon':
@@ -442,7 +435,7 @@ function applyReply(root, parsed, channel = 'chat') {
     case 'confirm':
       return confirmAc(root, { jobId: parsed.jobId, ac: parsed.ac, channel });
     case 'split':
-      return require('./clarify').split(root, { jobId: parsed.jobId, ref: parsed.ref, alias: parsed.alias, channel });
+      return require('./clarify').split(root, { jobId: parsed.jobId });
     case 'set_environment':
       return setEnvironment(root, { none: parsed.none, expectHash: parsed.hash, channel });
     case 'settle_finding':

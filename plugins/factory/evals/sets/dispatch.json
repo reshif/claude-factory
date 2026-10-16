@@ -7,7 +7,7 @@
       "skill": "gate",
       "next": { "action": "gate", "gate": { "id": "H1", "hash": "4be1c09f2a7d31e05c66b2a9", "docs": [".factory/jobs/J-0004/contract.md"] }, "decision_id": "J-0004-D0007" },
       "extra": "The contract says: Goal — discounted carts show the same total as checkout. AC-1: cart total equals checkout total for a 10% code (evidence: test). AC-2: totals are rounded to the cent once, after the discount (evidence: test). Allowed paths: src/cart/**, tests/cart/**. Verify: `npm test -- cart` (AC-1, AC-2).",
-      "outcome": { "pattern": "H1[\\s\\S]{0,200}(approve|deny)", "flags": "i", "about": "Ends by presenting gate H1 with the exact approve / deny replies." }
+      "outcome": { "pattern": "H1[\\s\\S]{ 0,200 }(approve|deny)", "flags": "i", "about": "Ends by presenting gate H1 with the exact approve / deny replies." }
     },
     {
       "skill": "park",
@@ -16,8 +16,14 @@
     },
     {
       "skill": "clarify",
-      "next": { "action": "skill", "skill": "clarify", "decision_id": "J-0004-D0002" },
-      "outcome": { "pattern": "contract", "flags": "i", "about": "Talks about writing or settling the outcome contract." }
+      "next": { "action": "skill", "skill": "clarify", "decision_id": "J-0004-D0002", "clarify": { "stage": "readback", "run": "factory wfargs clarify", "workflow": "clarify", "waiting_for_user": false, "status_command": "factory clarify status --job J-0004" } },
+      "outcome": { "pattern": "wfargs clarify|factory:clarify|read[- ]?back", "flags": "i", "about": "Runs (or names) the clarify stage: factory wfargs clarify, then the clarify workflow, then factory record." }
+    },
+    {
+      "id": "clarify-waits",
+      "skill": "clarify",
+      "next": { "action": "skill", "skill": "clarify", "decision_id": "J-0004-D0003", "clarify": { "stage": "readback_wait", "run": null, "workflow": null, "waiting_for_user": true, "screen": "**Read-back · J-0004 Fix the cart total**\n\n**What you want** (my words; correct me)\n- Problem: shoppers with a discount code see the wrong cart total\n- Outcome: the cart total matches checkout\n\n**What I will find out**\n1. [repo] Where the cart total is computed\n\nReply **ok** to start research, or tell me in your own words what to change.", "reply_command": "factory clarify reply \"<the user's words>\"", "status_command": "factory clarify status --job J-0004" } },
+      "outcome": { "pattern": "\\bok\\b[\\s\\S]{ 0,200 }(change|correct)|Read-back", "flags": "i", "about": "Shows the read-back screen as it is and stops for the user's ok or correction." }
     },
     {
       "skill": "ship",
