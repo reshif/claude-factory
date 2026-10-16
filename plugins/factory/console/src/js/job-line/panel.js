@@ -43,7 +43,10 @@ function who(it) {
 function agentRowsHtml(list) {
   return `<div class="alist">${list.map((a) => {
     const fam = modelFamily(a.model);
-    return `<div class="arow"><span class="mdot ${fam}" title="${esc(a.model || 'session model')}">${esc(modelLetter(a.model))}</span><b title="${esc(a.label)}">${esc(a.label)}</b><span class="o ${outcomeClass(a.outcome)}">${esc(a.outcome || '')}${a.ms ? ` · ${fmtDur(a.ms)}` : ''}</span></div>`;
+    const u = a.usage && a.usage.reported ? ` · ${fmtNum(a.usage.input_tokens)}/${fmtNum(a.usage.output_tokens)} tok` : '';
+    const tools = typeof a.tool_calls === 'number' ? ` · ${a.tool_calls} tool${a.tool_calls === 1 ? '' : 's'}` : '';
+    const link = fileLink(a.transcript, 'transcript');
+    return `<div class="arow"><span class="mdot ${fam}" title="${esc(a.model || (a.models_used || []).join(', ') || 'session model')}">${esc(modelLetter(a.model))}</span><b title="${esc(a.label)}">${esc(a.label)}</b><span class="o ${outcomeClass(a.outcome)}">${esc(a.outcome || '')}${a.ms ? ` · ${fmtDur(a.ms)}` : ''}${esc(tools)}${esc(u)}${link ? ` · ${link}` : ''}</span></div>`;
   }).join('')}</div>`;
 }
 function paintNow(i, S) {

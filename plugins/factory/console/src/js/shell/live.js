@@ -10,6 +10,7 @@ function paintFlags() {
     if (h.length) flags.push(`<button type="button" class="flag bad" id="f-health" aria-pressed="${UI.wireHealth}" style="cursor:pointer;background:none" title="${esc(h.map((f) => `${f.id} ${f.rule}: ${f.summary}`).join('\n'))}">⚑ ${h.length} health</button>`);
   }
   $('#flags').innerHTML = flags.join('');
+  paintInbox(DATA && DATA.inbox);
   const hb = $('#f-health');
   if (hb) hb.addEventListener('click', () => { UI.wireHealth = !UI.wireHealth; if (UI.wireHealth && UI.view === 'job') { UI.wireOpen = true; $('#app').classList.add('wire-open'); } if (window.innerWidth <= 960) { const t = document.querySelector('.mtabs [data-mpane="wire"]'); if (t) t.click(); } paintFlags(); renderWire(); });
   $('#proj').textContent = DATA ? `${DATA.project} · read-only${DATA.plugin_version ? ` · factory ${DATA.plugin_version}` : ''}` : 'Software Factory · read-only';

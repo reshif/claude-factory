@@ -358,6 +358,7 @@ button { font: inherit; color: inherit; }
 .mdot.opus { background: var(--m-opus); } .mdot.sonnet { background: var(--m-sonnet); } .mdot.haiku { background: var(--m-haiku); } .mdot.none { background: transparent; border: 1px dashed var(--rule); color: var(--muted); }
 .arow b { font: 500 12.5px var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .arow .o { font: 500 11px var(--mono); color: var(--muted); white-space: nowrap; }
+.txl { color: var(--ink); text-decoration: underline; text-underline-offset: 2px; }
 .arow .o.bad { color: var(--stop); } .arow .o.good { color: var(--track); } .arow .o.warn { color: var(--signal); }
 .log { margin: 0; padding: 0; list-style: none; display: grid; gap: 1px; font-size: 13px; max-height: 260px; overflow-y: auto; }
 .log button { width: 100%; text-align: left; display: grid; grid-template-columns: 70px 66px minmax(0, 1fr); gap: 6px; align-items: baseline; padding: 4px 6px; border: 0; border-left: 3px solid transparent; background: transparent; cursor: pointer; border-radius: 2px; }
@@ -701,6 +702,20 @@ kbd { font: 500 10.5px/1 var(--mono); padding: 2px 5px 3px; border-radius: 3px; 
 }
 
 /* the wire */
+
+/* the inbox: what waits on you, across jobs */
+.inbox { display: block; margin: 10px 0 2px; padding: 9px 12px; border: 1px solid var(--rule); border-left: 4px solid var(--signal); border-radius: 3px; background: var(--paper); font-size: 13px; line-height: 1.45; }
+.inbox[hidden] { display: none; }
+.inbox h3 { margin: 0 0 4px; font-size: 13px; font-weight: 700; }
+.inbox h3 .cnt { margin-left: 4px; color: var(--signal); }
+.inbox ul { list-style: none; margin: 0; padding: 0; }
+.inbox .ib-item { padding: 5px 0; border-top: 1px dashed var(--rule); }
+.inbox .ib-item:first-child { border-top: 0; }
+.inbox .ib-job { font-weight: 700; }
+.inbox .ib-gate, .inbox .ib-since, .inbox .ib-note, .inbox .ib-drive, .inbox .ib-none { color: var(--muted); font-size: 12px; }
+.inbox .ib-drive { margin: 0 0 4px; }
+.inbox .ib-next, .inbox .ib-how { font-size: 12px; margin-top: 2px; overflow-wrap: anywhere; }
+.inbox code { font-size: 11.5px; }
 .wire { border-left: 1px solid var(--rule); background: var(--paper); display: grid; grid-template-rows: auto minmax(0, 1fr); min-height: 0; overflow: hidden; }
 .wireh { display: flex; align-items: center; gap: 8px; padding: 12px 12px 10px 14px; border-bottom: 1px solid var(--rule); flex-wrap: wrap; }
 .wireh h2 { font: 800 20px/1 var(--display); text-transform: uppercase; letter-spacing: .03em; margin-right: auto; display: flex; align-items: center; gap: 8px; }
@@ -1716,6 +1731,7 @@ html[data-theme="light"] .dx-blueprint{
           <label class="pick2">Group <select id="groupby" aria-label="Group by"><option value="attention">attention</option><option value="status">status</option><option value="recipe">recipe</option><option value="risk">risk</option><option value="stage">stage</option><option value="epic">epic</option><option value="day">day</option></select></label>
           <label class="pick2">Sort <select id="sortby" aria-label="Sort by"><option value="urgency">urgency</option><option value="updated">updated</option><option value="created">created</option><option value="id">id</option></select></label>
         </div>
+        <div class="inbox" id="inbox" role="region" aria-label="Waiting on you (factory inbox)" hidden></div>
         <div class="board" id="board" role="list" aria-label="Jobs"></div>
       </section>
 
@@ -2042,6 +2058,18 @@ const ENFORCE = ['guard hook on every tool call', 'your replies applied by hook'
 // ===================================================================== helpers
 const $ = (s, el = document) => el.querySelector(s);
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
+// A link to an agent's transcript, where Claude Code keeps it (an absolute .jsonl path the
+// SubagentStop hook recorded): the server's /transcript route when live (it serves only Claude
+// Code's transcript folders), a file:// link in a snapshot.
+function fileHref(p) {
+  if (typeof p !== 'string' || !/^\//.test(p) || !/\.jsonl$/.test(p)) return null;
+  return LIVE.on ? `/transcript?path=${encodeURIComponent(p)}` : `file://${p.split('/').map(encodeURIComponent).join('/')}`;
+}
+function fileLink(p, text) {
+  const h = fileHref(p);
+  return h ? `<a class="txl" href="${esc(h)}" target="_blank" rel="noopener" title="${esc(p)}">${esc(text)}</a>` : '';
+}
+const fmtNum = (n) => (typeof n === 'number' ? (n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e4 ? `${Math.round(n / 1e3)}k` : String(n)) : '—');
 const NS = 'http://www.w3.org/2000/svg';
 function el(tag, attrs = {}, parent) {
   const e = document.createElementNS(NS, tag);
@@ -3537,7 +3565,10 @@ function who(it) {
 function agentRowsHtml(list) {
   return `<div class="alist">${list.map((a) => {
     const fam = modelFamily(a.model);
-    return `<div class="arow"><span class="mdot ${fam}" title="${esc(a.model || 'session model')}">${esc(modelLetter(a.model))}</span><b title="${esc(a.label)}">${esc(a.label)}</b><span class="o ${outcomeClass(a.outcome)}">${esc(a.outcome || '')}${a.ms ? ` · ${fmtDur(a.ms)}` : ''}</span></div>`;
+    const u = a.usage && a.usage.reported ? ` · ${fmtNum(a.usage.input_tokens)}/${fmtNum(a.usage.output_tokens)} tok` : '';
+    const tools = typeof a.tool_calls === 'number' ? ` · ${a.tool_calls} tool${a.tool_calls === 1 ? '' : 's'}` : '';
+    const link = fileLink(a.transcript, 'transcript');
+    return `<div class="arow"><span class="mdot ${fam}" title="${esc(a.model || (a.models_used || []).join(', ') || 'session model')}">${esc(modelLetter(a.model))}</span><b title="${esc(a.label)}">${esc(a.label)}</b><span class="o ${outcomeClass(a.outcome)}">${esc(a.outcome || '')}${a.ms ? ` · ${fmtDur(a.ms)}` : ''}${esc(tools)}${esc(u)}${link ? ` · ${link}` : ''}</span></div>`;
   }).join('')}</div>`;
 }
 function paintNow(i, S) {
@@ -3768,6 +3799,8 @@ function renderBelow(job) {
   const totalMs = crew.reduce((n, a) => n + a.ms, 0);
   const html = [];
   html.push(`<section class="panel"><h3>Crew used</h3>${crew.length ? `<div class="tblwrap"><table class="tbl"><tr><th>Agent</th><th>Runs</th><th>Model</th><th>Retries</th><th>Failed</th><th>Time</th></tr>${crew.map((a) => `<tr><td class="n">${esc(a.role)}</td><td class="n">${a.n}</td><td class="n">${esc(a.models.join(' → ') || 'session')}</td><td class="n">${a.retries || ''}</td><td class="n">${a.fails ? `<span class="stt fail">${a.fails}</span>` : ''}</td><td class="n">${a.ms ? esc(fmtDur(a.ms)) : '—'}</td></tr>`).join('')}</table></div><p class="label">${crew.reduce((n, a) => n + a.n, 0)} runs · ${crew.length} agent types${totalMs ? ` · ${esc(fmtDur(totalMs))} of agent time` : ''}</p>` : '<p class="lede" style="margin:0">No agents have run for this job yet.</p>'}</section>`);
+  const c = job.cost;
+  if (c) html.push(`<section class="panel"><h3>Usage</h3><div class="tblwrap"><table class="tbl"><tr><th>Agent runs</th><th>Agent time</th><th>Tool calls</th><th>Input tokens</th><th>Output tokens</th><th>Cache read tokens</th></tr><tr><td class="n">${c.agent_runs}</td><td class="n">${esc(fmtDur((c.agent_seconds || 0) * 1000))}</td><td class="n">${esc(fmtNum(c.tool_calls))}</td><td class="n">${esc(fmtNum(c.input_tokens))}</td><td class="n">${esc(fmtNum(c.output_tokens))}</td><td class="n">${esc(fmtNum(c.cache_read_tokens))}</td></tr></table></div><p class="label" style="text-transform:none;letter-spacing:0">From each agent's own transcript, as Claude Code wrote it. — means it reported nothing (unknown, not zero)${c.unreported_runs ? `; ${c.unreported_runs} of ${c.agent_runs} runs came back without usage` : ''}. Claude Code reports no cost. Each agent row links to its transcript.</p></section>`);
   if (tasks.length) html.push(`<section class="panel"><h3>Tasks</h3><div class="tblwrap"><table class="tbl"><tr><th>Task</th><th>Objective</th><th>Tries</th><th>Outcome</th></tr>${tasks.map((t) => `<tr><td class="n">${esc(t.id)}${t.depends_on.length ? `<br><span class="label">after ${esc(t.depends_on.join(', '))}</span>` : ''}</td><td>${esc(t.objective)}</td><td class="n">${t.attempts || '—'}</td><td class="stt ${t.outcome === 'done' ? 'done' : t.outcome ? 'fail' : ''}">${esc(t.outcome || 'not started')}</td></tr>`).join('')}</table></div></section>`);
   if (lastChallenge) html.push(`<section class="panel"><h3>Latest review</h3><p>${esc(lastChallenge.text)}</p>${findingsHtml(lastChallenge.findings)}</section>`);
   if ((job.lessons || []).length) html.push(`<section class="panel"><h3>Lessons</h3>${job.lessons.map((l) => `<p><span class="mono">${esc(l.id)} · ${esc(l.status)}</span><br>${esc(l.text)}</p>`).join('')}</section>`);
@@ -5286,6 +5319,7 @@ function paintFlags() {
     if (h.length) flags.push(`<button type="button" class="flag bad" id="f-health" aria-pressed="${UI.wireHealth}" style="cursor:pointer;background:none" title="${esc(h.map((f) => `${f.id} ${f.rule}: ${f.summary}`).join('\n'))}">⚑ ${h.length} health</button>`);
   }
   $('#flags').innerHTML = flags.join('');
+  paintInbox(DATA && DATA.inbox);
   const hb = $('#f-health');
   if (hb) hb.addEventListener('click', () => { UI.wireHealth = !UI.wireHealth; if (UI.wireHealth && UI.view === 'job') { UI.wireOpen = true; $('#app').classList.add('wire-open'); } if (window.innerWidth <= 960) { const t = document.querySelector('.mtabs [data-mpane="wire"]'); if (t) t.click(); } paintFlags(); renderWire(); });
   $('#proj').textContent = DATA ? `${DATA.project} · read-only${DATA.plugin_version ? ` · factory ${DATA.plugin_version}` : ''}` : 'Software Factory · read-only';
@@ -5312,6 +5346,20 @@ function connectLive() {
 }
 
 // ===================================================================== crew
+// factory inbox on the page: what waits on the human across jobs (a gate, a clarify turn, a park,
+// a merge), with the chat reply and the terminal command, and the drive's last stop. Read-only:
+// the page never answers anything; a human-only command asks for its code on the user's terminal.
+function paintInbox(ib) {
+  const el = $('#inbox');
+  if (!el) return;
+  const items = (ib && ib.items) || [];
+  const d = ib && ib.drive;
+  el.hidden = !items.length && !d;
+  if (el.hidden) { el.innerHTML = ''; return; }
+  const driveLine = d ? `<p class="ib-drive">${d.running ? `<b>factory drive</b> is stepping ${esc(d.job || '')}${d.step ? `: <code>${esc(d.step)}</code>` : ''}` : `<b>factory drive</b> ${esc(d.status || 'stopped')}${d.last ? `: ${esc(d.last)}` : ''}`}</p>` : '';
+  const row = (it) => `<li class="ib-item ib-${esc(it.kind)}"><span class="ib-job mono">${esc(it.job)}</span> <span class="ib-what">${esc(it.what || it.kind)}</span>${it.gate ? ` <span class="ib-gate mono">${esc(it.gate)} · ${esc(String(it.hash || '').slice(0, 12))}</span>` : ''}${it.since ? ` <span class="ib-since" data-ago="${Date.parse(it.since) || ''}">${esc(shortAgo(nowMs() - Date.parse(it.since)))}</span>` : ''}${it.next ? `<div class="ib-next">${esc(it.next)}</div>` : ''}<div class="ib-how">Reply to Claude: ${(it.reply || []).map((r) => `<code>${esc(r)}</code>`).join(' · ')}${it.command ? ` &nbsp;or in your terminal: <code>${esc(it.command)}</code>${it.human_only ? ' <span class="ib-note">(it asks for a code shown on that terminal)</span>' : ''}` : ''}</div></li>`;
+  el.innerHTML = `<h3>Waiting on you <span class="cnt">${items.length}</span></h3>${driveLine}${items.length ? `<ul>${items.map(row).join('')}</ul>` : '<p class="ib-none">Nothing waits on you.</p>'}`;
+}
 function renderCrew() {
   const used = {};
   if (DATA && DATA.jobs) {
@@ -5717,7 +5765,10 @@ var RUN_STEPS = (function () {
     },
     // realize.js: wave by wave, builders then testers per task (a wave whose tasks were all skipped has no phase);
     // the wave of an agent is the one holding the task it names (`factory task start|verify|show <id>`)
-    realize: { next: 'reconcile', steps: [{ key: 'wave', label: 'wave', match: /^realize: wave/, roles: ['builder', 'tester'], series: /wave (\d+)\/(\d+)/, text: function (n, k, run, w) { var ws = (run.plan && run.plan.waves) || []; return 'realize: wave ' + (w + 1) + '/' + Math.max(ws.length, w + 1) + ' (' + (ws[w] || []).join(', ') + ')'; } }] },
+    // (by dependency, not wave by wave: the script prints a phase per task build, integration
+    // and rebuild; the console still groups the agents by plan wave, the dependency depth, from the
+    // tasks they name. Logs from before print "realize: wave n/N (…)", which this matches too.)
+    realize: { next: 'reconcile', steps: [{ key: 'wave', label: 'wave', match: /^realize: /, roles: ['builder', 'tester', 'integrator'], series: /wave (\d+)\/(\d+)/, text: function (n, k, run, w) { var ws = (run.plan && run.plan.waves) || []; return 'realize: build ' + (ws[w] || []).join(', ') + ' (wave ' + (w + 1) + '/' + Math.max(ws.length, w + 1) + ')'; } }] },
     // reconcile.js: the integrator
     reconcile: { next: 'prove', steps: [{ key: 'integrate', label: 'integrate task branches', match: /^reconcile:/, roles: ['integrator'], text: function () { return 'reconcile: integrate task branches'; } }] },
     // the distill skill: the lesson-writer, between `factory distill context` and `factory distill done`
@@ -5742,6 +5793,7 @@ var RUN_STEPS = (function () {
     return String(text || '').replace(/^[a-z-]+: /, '')
       .replace(/(\d+) ([A-Za-z-]+)\(s\)/g, function (_, n, w) { return n + ' ' + w + (n === '1' ? '' : 's'); })
       .replace(/\(s\)/g, 's')
+      .replace(/^build (.+) \(wave (\d+)\/(\d+)\)$/, 'wave $2 of $3: $1')
       .replace(/^wave (\d+)\/(\d+) \((.+)\)$/, 'wave $1 of $2: $3')
       .replace(/^wave (\d+)\/(\d+) \(\)$/, 'wave $1 of $2');
   }

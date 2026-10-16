@@ -1,5 +1,17 @@
 const $ = (s, el = document) => el.querySelector(s);
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
+// A link to an agent's transcript, where Claude Code keeps it (an absolute .jsonl path the
+// SubagentStop hook recorded): the server's /transcript route when live (it serves only Claude
+// Code's transcript folders), a file:// link in a snapshot.
+function fileHref(p) {
+  if (typeof p !== 'string' || !/^\//.test(p) || !/\.jsonl$/.test(p)) return null;
+  return LIVE.on ? `/transcript?path=${encodeURIComponent(p)}` : `file://${p.split('/').map(encodeURIComponent).join('/')}`;
+}
+function fileLink(p, text) {
+  const h = fileHref(p);
+  return h ? `<a class="txl" href="${esc(h)}" target="_blank" rel="noopener" title="${esc(p)}">${esc(text)}</a>` : '';
+}
+const fmtNum = (n) => (typeof n === 'number' ? (n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e4 ? `${Math.round(n / 1e3)}k` : String(n)) : '—');
 const NS = 'http://www.w3.org/2000/svg';
 function el(tag, attrs = {}, parent) {
   const e = document.createElementNS(NS, tag);

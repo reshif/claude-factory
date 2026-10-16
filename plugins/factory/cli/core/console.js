@@ -55,6 +55,23 @@ const short = (s, n = 160) => (typeof s === 'string' && s.length > n ? `${s.slic
 const roleOf = (t) => String(t || '').replace(/^factory:/, '');
 const num = (v) => (Array.isArray(v) ? v.length : typeof v === 'number' ? v : 0);
 
+// What the SubagentStop hook recorded about an agent from its own transcript: where Claude Code
+// keeps it (linked by the page; served by --serve only from Claude Code's transcript folders),
+// its tool calls, tokens and models. Unknown stays absent or null, never zero.
+function agentExtras(e) {
+  const out = {};
+  if (typeof e.transcript === 'string' && path.isAbsolute(e.transcript) && /\.jsonl$/.test(e.transcript)) out.transcript = e.transcript;
+  if (e.agent_id) out.agent_id = String(e.agent_id);
+  if (Number.isInteger(e.tool_calls)) out.tool_calls = e.tool_calls;
+  if (e.usage && typeof e.usage === 'object') {
+    const u = e.usage;
+    const n = (v) => (typeof v === 'number' ? v : null);
+    out.usage = u.reported ? { reported: true, input_tokens: n(u.input_tokens), output_tokens: n(u.output_tokens), cache_read_tokens: n(u.cache_read_tokens) } : { reported: false };
+  }
+  if (Array.isArray(e.models) && e.models.length) out.models_used = e.models.slice(0, 3).map(String);
+  return out;
+}
+
 function stepsOf(lock, state) {
   const recipe = (lock && lock.recipe) || {};
   const list = [{ id: 'request', stage: 'request', kind: 'start', human: true, run: 'skill:start' }];
@@ -199,7 +216,7 @@ function jobData(root, id, all, checker, nowMs = Date.now()) {
     if (e.event === 'SubagentStop' && started[e.agent_id]) {
       const s = started[e.agent_id];
       const k = s.decision_id || 'none';
-      (hookAgents[k] = hookAgents[k] || []).push({ agent_type: e.agent_type, ms: Date.parse(e.ts) - Date.parse(s.ts) });
+      (hookAgents[k] = hookAgents[k] || []).push({ agent_type: e.agent_type, ms: Date.parse(e.ts) - Date.parse(s.ts), ...agentExtras(e) });
       delete started[e.agent_id];
     }
   }
@@ -280,8 +297,9 @@ function jobData(root, id, all, checker, nowMs = Date.now()) {
       const timed = (hookAgents[e.decision_id] || []).slice();
       const agents = (e.agents || []).map((a) => {
         const i = timed.findIndex((x) => x.agent_type === a.agent_type);
-        const ms = i >= 0 ? timed.splice(i, 1)[0].ms : null;
-        return { label: short(a.label, 100), role: roleOf(a.agent_type), model: a.model || null, retry: Boolean(a.retry), outcome: a.outcome || null, ms };
+        const hit = i >= 0 ? timed.splice(i, 1)[0] : null;
+        const { agent_type: _t, ms: _m, ...extras } = hit || {};
+        return { label: short(a.label, 100), role: roleOf(a.agent_type), model: a.model || null, retry: Boolean(a.retry), outcome: a.outcome || null, ms: hit ? hit.ms : null, ...extras };
       });
       push({ t: e.at, type: 'agents', step, workflow: e.workflow, config: e.config, mode: e.mode, decision_id: e.decision_id, status: e.status, runs: e.agent_runs || agents.length, agents });
     } else if (e.kind === 'clarify') {
@@ -300,7 +318,7 @@ function jobData(root, id, all, checker, nowMs = Date.now()) {
     const step = stepOfDecision[did];
     const last = events.filter((e) => e.decision_id === did && e.event === 'SubagentStop').pop();
     if (!last) continue;
-    push({ t: last.ts, type: 'agents', step: ids.has(step) ? step : null, decision_id: did, from: 'hooks', runs: list.length, agents: list.map((a) => ({ label: roleOf(a.agent_type), role: roleOf(a.agent_type), model: null, retry: false, outcome: null, ms: a.ms })) });
+    push({ t: last.ts, type: 'agents', step: ids.has(step) ? step : null, decision_id: did, from: 'hooks', runs: list.length, agents: list.map((a) => { const { agent_type: _t, ms: _m, ...extras } = a; return { label: roleOf(a.agent_type), role: roleOf(a.agent_type), model: null, retry: false, outcome: null, ms: a.ms, ...extras }; }) });
   }
 
   for (const [aid, r] of Object.entries(rebinds)) push({ t: r.t, type: 'amend', phase: 'rebound', id: aid, steps: r.steps, step: null, text: `${aid} re-bound ${r.steps.map((x) => x.replace(/_/g, ' ')).join(', ')} to the amended contract` });
@@ -374,6 +392,16 @@ function jobData(root, id, all, checker, nowMs = Date.now()) {
     lessons_max: Number.isInteger(policy.lessons_max_per_job) ? policy.lessons_max_per_job : null,
     models: ((state.policy || {}).agents || {}).models || {},
     escalation: ((state.policy || {}).agents || {}).builder_escalation || [],
+    // what the agents' own transcripts report (tokens, tool calls; Claude Code reports no cost):
+    // null fields were not reported
+    cost: (() => {
+      const stops = events.filter((e) => e.event === 'SubagentStop' && (e.transcript || e.usage));
+      if (!stops.length) return null;
+      const ms = {};
+      for (const e of events) if (e.event === 'SubagentStart' && e.agent_id) ms[e.agent_id] = Date.parse(e.ts);
+      const { models: _m, ...t } = require('./transcripts').totals(stops.map((e) => ({ ...e, ms: ms[e.agent_id] ? Date.parse(e.ts) - ms[e.agent_id] : null })));
+      return t;
+    })(),
     steps,
     timeline: T,
     running_agents: runningNow,
@@ -426,6 +454,15 @@ function build(root, { job: only, now } = {}) {
     })(),
     // log lines that belong to no job: hooks failing outside a job, unparsed replies
     factory_events: all.events.filter((e) => !e.job && ['hook_error', 'reply_unparsed', 'stop_block'].includes(e.event)).slice(-100).map((e) => ({ t: e.ts, type: e.event === 'reply_unparsed' ? 'unparsed' : e.event, text: short(e.event === 'hook_error' ? `The ${e.hook || 'factory'} hook failed${e.tool ? ` on ${e.tool}` : ''}: ${e.message || ''}` : e.event === 'reply_unparsed' ? `A message looked like "${e.verb || 'a reply'}" but was not applied ("${e.word || ''}")` : `The Stop hook refused a "done" claim`, 200) })),
+    // what waits on the human across jobs (factory inbox), and the drive's last stop (P3.1/P3.2)
+    inbox: (() => {
+      try {
+        const ib = require('./inbox').list(root, { plain: true });
+        return { count: ib.count, items: ib.items.map((x) => ({ ...x, screen: x.screen ? short(x.screen, 2000) : undefined })), drive: ib.drive };
+      } catch {
+        return null;
+      }
+    })(),
     // the project's own checks (policy.json `checks`, e.g. a promoted lesson's): prove runs each on every build
     checks: projectChecks(root),
     integrity: checker.hasKey ? { ...checker.tally, status: checker.tally.invalid ? 'tampered' : 'verified' } : { status: 'not_checked' },
@@ -461,7 +498,7 @@ function run(root, { out, job, label, data: dataFile } = {}) {
 // server can poll every few hundred ms without re-reading the logs.
 function watchedFiles(root) {
   const p = project(root);
-  const files = [p.eventsFile, p.decisionsFile, p.currentFile, p.lessonsFile, p.policyFile, path.join(p.dir, 'inspect', 'register.json')];
+  const files = [p.eventsFile, p.decisionsFile, p.currentFile, p.lessonsFile, p.policyFile, path.join(p.dir, 'inspect', 'register.json'), path.join(p.dir, 'drive.json'), path.join(p.dir, 'project-brief.proposals.json')];
   let ids = [];
   try { ids = fs.readdirSync(p.jobsDir).filter((d) => /^J-\d+$/.test(d)); } catch { /* no jobs yet */ }
   for (const id of ids) {
@@ -510,6 +547,16 @@ function serve(root, { port = 4477, job, label, interval = 400, onReady } = {}) 
     if (url === '/' || url === '/index.html') {
       res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
       res.end(render(data, { label, live: true }));
+    } else if (url === '/transcript') {
+      // an agent's transcript, as Claude Code wrote it: only a .jsonl inside Claude Code's own
+      // transcript folders (after symlinks), and only one an event of this project names
+      let file = null;
+      try { file = new URLSearchParams(String(req.url).slice(String(req.url).indexOf('?') + 1)).get('path'); } catch { file = null; }
+      const real = file ? require('./transcripts').safePath(file) : null;
+      const named = real && readJsonl(p.eventsFile).some((e) => e.event === 'SubagentStop' && typeof e.transcript === 'string' && (e.transcript === file || require('./transcripts').safePath(e.transcript) === real));
+      if (!named) { res.writeHead(404); res.end('not found'); return; }
+      res.writeHead(200, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store', 'x-content-type-options': 'nosniff' });
+      res.end(fs.readFileSync(real));
     } else if (url === '/data.json') {
       res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' });
       res.end(body);
@@ -545,4 +592,4 @@ function runServe(root, { port, job, label }) {
   return null;
 }
 
-module.exports = { build, render, run, serve, runServe, fingerprint, STAGE_OF, STALE_AGENT_MS };
+module.exports = { build, render, run, serve, runServe, fingerprint, agentExtras, STAGE_OF, STALE_AGENT_MS };
