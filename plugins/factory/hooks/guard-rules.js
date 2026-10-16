@@ -34,7 +34,7 @@ const path = require('path');
 const { emit, realpath } = require('./lib');
 const { parse } = require('./shell');
 
-const JOB_DOCS = /^(contract\.md|threat-model\.md|no-adr\.md|recommendation\.md|adr-\d+[^/]*\.md|contracts\.md|contracts\.json|plan\.json|slices\.json|environment\.proposed\.json)$/;
+const JOB_DOCS = /^(contract\.md|threat-model\.md|no-adr\.md|recommendation\.md|adr-\d+[^/]*\.md|contracts\.md|contracts\.json|plan\.json|slices\.json|environment\.proposed\.json|environment\.repair\.json)$/;
 
 function deny(reason) {
   emit({ hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: `[factory guard] ${reason}` } });
@@ -187,6 +187,37 @@ const WRITE_OPS = /writeFile|appendFile|createWriteStream|\bunlink|\brename|\brm
 const SECRET_FILE = /software-factory[\\/]secret|\.config[\\/]software-factory/;
 // Variables that hold well-known locations, never the factory CLI.
 const KNOWN_VARS = /^(HOME|PWD|OLDPWD|PATH|TMPDIR|TMP|TEMP|USER|SHELL|VIRTUAL_ENV|CONDA_PREFIX|PYENV_ROOT|NVM_DIR|GOPATH|GOROOT|CARGO_HOME|JAVA_HOME|ANDROID_HOME|XDG_\w+|CI|GITHUB_\w+|RUNNER_\w+|npm_\w+|env:\w+)$/;
+
+// 0.11: what a factory agent may not run by flag (the machine scan, the sealed environment's
+// check for a job or a repair, and the plain check of the confirmed environment); `flags`: the
+// words after the subcommand. Shared with the scan of inline code and scripts below.
+function machineStepRefusal(a, b, flags) {
+  const computed = flags.some((x) => /[$`]/.test(String(x)));
+  if (a === 'doctor' && (computed || flags.some((x) => /^--machine(=|$)/.test(x)))) return '"factory doctor --machine" scans this machine\'s tools; it is the main session\'s step, never a factory agent\'s (a flag computed at run time counts as one). Read the machine summary your brief carries.';
+  if (a === 'env' && b === 'check' && (computed || !flags.includes('--proposed'))) return '"factory env check" without --proposed runs the sealed build environment as the user\'s own shell (and with --job or --repair records the result the repair loop and the seal read); factory drive runs it. A factory agent may only check a proposal: factory env check --proposed.';
+  return null;
+}
+// factory doctor --machine / factory env check inside inline code (node -e, python -c …) or a
+// script an agent runs: the same rule, by text
+const MACHINE_STEP_TEXT = /\bfactory\b[^\n;|&]*?\b(doctor\b[^\n;|&]*--machine|env\s+check\b(?![^\n;|&]*--proposed))/;
+function machineStepInText(text) {
+  return MACHINE_STEP_TEXT.test(String(text || '')) ? 'Code or a script that runs "factory doctor --machine" or "factory env check" (other than --proposed) is not allowed for factory agents: those are the main session\'s steps (factory drive runs them).' : null;
+}
+
+// The script file a shell or an interpreter is handed (its first non-option argument), when it
+// can be read: at most 256 KB.
+function scriptText(head, ctx) {
+  const arg = (head.args || []).map((x) => x.text).find((t) => t && !t.startsWith('-'));
+  if (!arg || /[$`]/.test(arg)) return '';
+  try {
+    const f = path.isAbsolute(arg) ? arg : path.resolve(ctx.root || process.cwd(), arg);
+    const st = require('fs').statSync(f);
+    if (!st.isFile() || st.size > 256 * 1024) return '';
+    return require('fs').readFileSync(f, 'utf8');
+  } catch {
+    return '';
+  }
+}
 
 function isHumanOnly(a, b) {
   return HUMAN_ONLY.has(a) || (a === 'lessons' && ['accept', 'reject', 'promote'].includes(b)) || (a === 'ci' && b === 'install') || (a === 'env' && b === 'set') || (a === 'drive' && b === 'takeover');
@@ -621,6 +652,11 @@ function checkCommand(cmd, pipeline, ctx, depth, collect) {
       const why = walk(head.args.map((a) => a.text).join(' '), ctx, depth + 1, collect);
       if (why) return why;
     }
+    // a script file an agent hands a shell (bash s.sh, sh ./x): read for the machine steps
+    if (ctx.agent && SHELLS.test(n) && !head.args.some((a) => /^-[a-zA-Z]*c[a-zA-Z]*$/.test(a.text))) {
+      const why = machineStepInText(scriptText(head, ctx));
+      if (why) return why;
+    }
     if (SHELLS.test(n) || PWSH.test(n) || n === 'cmd' || n === 'cmd.exe' || TTY_FAKERS.test(n) || n === 'su' || n === 'watch') {
       const cIdx = head.args.findIndex((a) => /^-[a-zA-Z]*c[a-zA-Z]*$/.test(a.text) || /^(-Command|-command|\/c|\/C|--command)$/.test(a.text));
       if (cIdx !== -1 && head.args[cIdx + 1]) {
@@ -650,9 +686,11 @@ function checkCommand(cmd, pipeline, ctx, depth, collect) {
       ctx.found.push(call);
       if (collect) return null;
       let [a, b] = subcommand(call.args, ctx);
+      let fedWords = [];
       if (head.xargs) {
         // the verb arrives on stdin (or after :::): look at what is fed in
         const fed = `${upstreamText(cmd, pipeline)} ${cmd.words.slice(head.xargs.at).map((w) => w.text).join(' ')}`.split(/[\s'"]+/).filter(Boolean);
+        fedWords = fed;
         if (!a || a === ':::') {
           const w = fed.find((x) => HUMAN_ONLY.has(x));
           if (w) return humanMessage(w);
@@ -683,6 +721,22 @@ function checkCommand(cmd, pipeline, ctx, depth, collect) {
       // inbox lists what waits on the human. A factory agent runs neither.
       if (a && ctx.agent && MAIN_ONLY.has(a)) return mainOnlyMessage(a);
       if (a && ctx.agent && agentRefused(a, b)) return agentRefusedMessage(a, b);
+      // 0.11 machine-aware environments: the machine scan (factory doctor --machine) and the
+      // sealed environment's check for a job (factory env check --job: it runs the human's
+      // environment with their shell and records the result the repair loop and the seal read)
+      // are the main session's steps; an agent may check a proposal (env check --proposed)
+      if (a && ctx.agent) {
+        // flags as the shell would pass them: a known variable resolved, words fed by xargs
+        // included; a flag computed at run time ($(…), `…`, ${X:-…}, an unknown variable) cannot be
+        // read here, so for these two commands it is refused (port review m-2)
+        const flags = (call.args || []).map((x) => {
+          const t = x && typeof x === 'object' ? x.text : x;
+          const v = varName(t);
+          return v && ctx.vars.has(v) ? ctx.vars.get(v) : t;
+        }).filter((x) => typeof x === 'string').concat(fedWords);
+        const why = machineStepRefusal(a, b, flags);
+        if (why) return why;
+      }
       if (a && ctx.agent && isUserRelay(a, b)) return `"factory ${a}${a === 'clarify' ? ` ${b}` : ''}" records what the user said; it is the main session's, never a factory agent's. Return what you found in your final message instead.`;
     } else if (!collect) {
       const why = unknownExpansionHuman(head, ctx);
@@ -710,6 +764,10 @@ function checkCommand(cmd, pipeline, ctx, depth, collect) {
     // interpreters reaching into factory state or internals
     if (INTERPRETER.test(n) && !call) {
       const code = inlineCode(head, cmd, pipeline);
+      if (ctx.agent) {
+        const why = machineStepInText(code) || machineStepInText(scriptText(head, ctx));
+        if (why) return why;
+      }
       if (INTERNALS_STRICT.test(code) || (STATE.test(code) && WRITE_OPS.test(code))) {
         return 'Inline scripts may not change factory state or load factory internals. To read a job file use the Read tool; to change one you are allowed to change (an ADR, the plan, a threat model) use Write or Edit; for job state use the factory CLI (factory job show, contract show, why).';
       }

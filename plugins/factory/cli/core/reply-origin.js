@@ -43,7 +43,8 @@ function awaitingHuman(root) {
   try {
     return require('./inbox').list(root, { plain: true }).items.filter((x) => !['amend'].includes(x.kind));
   } catch {
-    return [];
+    // fail closed (0.11 release review m10): when the inbox cannot be read, assume something waits
+    return [{ job: 'a job', kind: 'unknown', what: 'the inbox could not be read' }];
   }
 }
 

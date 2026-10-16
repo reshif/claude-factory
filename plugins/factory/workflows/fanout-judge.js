@@ -1,6 +1,6 @@
 export const meta = {
   name: 'fanout-judge',
-  description: 'Software Factory engine for decide, challenge and diagnose: N independent agents in parallel, retry once, a judge merges; for decide, critics with evidence (God Eye, and the API-conformance critic when the job has dependency source) whose serious items are verified, the architect revising while they shrink (the shared loop engine); per-finding verifiers; a loop diagnosis. Pass the JSON brief from `factory wfargs fanout-judge --config <decide|challenge|diagnose>` as args. (Clarify runs as its own workflow, factory:clarify.)',
+  description: 'Software Factory engine for decide, challenge and diagnose: N independent agents in parallel, retry once, a judge merges; for decide, critics with evidence (God Eye, and the API-conformance critic when the job has dependency source) whose serious items are verified, the architect revising while they shrink (the shared loop engine); per-finding verifiers; a loop diagnosis. Pass the JSON brief from `factory wfargs fanout-judge --config <decide|challenge|diagnose|env_repair>` as args (env_repair: the planner repairs a sealed build environment that failed its check). (Clarify runs as its own workflow, factory:clarify.)',
 }
 
 // ---- brief (from the factory CLI; workflows cannot read files or run commands) ----
@@ -403,6 +403,14 @@ if (brief.config === 'diagnose') {
   phase('diagnose: God Eye')
   const d = await one(brief.judge.prompt, brief.judge, 'diagnosis')
   return envelope('ok', d ? `Diagnosis of the ${brief.mode} loop: ${d.needs_user ? 'a question for the human' : 'a different approach'}.` : 'The diagnosis agent returned nothing.', { loop: brief.mode, diagnosis: d || null })
+}
+
+// 0.11 (copilot-factory fix 0.10.1): the sealed build environment failed its check; the planner (repair mode) writes a
+// repaired one, the CLI checks it when this is recorded, the human seals it
+if (brief.config === 'env_repair') {
+  phase('env_repair: planner')
+  const d = await one(brief.judge.prompt, brief.judge, 'environment repair')
+  return envelope('ok', d ? `Environment repair: ${d.summary || d.path}.` : 'The repair agent returned nothing.', { repair: d || null })
 }
 
 throw new Error(`Unknown config ${brief.config}`)

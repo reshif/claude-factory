@@ -70,6 +70,11 @@ var RUN_STEPS = (function () {
       next: 'a different approach, or one question for you',
       steps: [{ key: 'diagnose', label: 'diagnose the loop', match: /^diagnose: God Eye/, roles: ['god-eye'], text: function () { return 'diagnose: God Eye'; } }],
     },
+    // fanout-judge.js, env_repair: the planner repairs a sealed build environment that failed its check
+    'fanout-judge:env_repair': {
+      next: 'the CLI checks the repair, then your seal (approve environment)',
+      steps: [{ key: 'repair', label: 'repair the build environment', match: /^env_repair: planner/, roles: ['planner'], text: function () { return 'env_repair: planner'; } }],
+    },
     // ground.js: the probes in parallel
     ground: { next: 'decide', steps: [{ key: 'probes', label: 'research probes', match: /^ground:/, roles: ['researcher'], text: function (n) { return 'ground: ' + n + ' probe(s)'; } }] },
     // decompose.js: planner rounds until valid → God Eye (plan) rounds, the planner revising inside each; a step starts again

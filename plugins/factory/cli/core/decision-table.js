@@ -42,6 +42,7 @@ const PARK_NEXT = {
   integration: 'Answer the question above in your own words (it resumes the job with them), or amend the plan.',
   epic_gate: 'Decide: a new slice (amend the epic) or a fix job for a merged slice.',
   plan_probe: 'The plan probe was interrupted twice: answer the question (a: lint only, b: run factory plan probe in your own terminal, then resume, c: no probe for this job).',
+  environment_repair: 'A repaired build environment passed its check in a scratch worktree: reply "approve environment <hash>" (the hash the question names) or "a" to seal it, or say what is wrong with it.',
   manual: 'Parked by hand: reply "resume" when ready, or "cancel job".',
   other: 'Read factory why --format md, then reply "resume", "cancel job" or "abandon job".',
 };
@@ -466,6 +467,12 @@ function orderAction(ctx, al, { humanAcs = null } = {}) {
     const g = require('./environment').gateProposal(ctx.root, state.id);
     return { step: 'realize', run: 'human:confirm environment', action: 'wait', environment: g, reason: g.status === 'tampered' ? `${g.message} The build waits until it is set again from your terminal (factory env set).` : `The build environment is not confirmed, so no task is built: ${g.env.name || 'proposed'} (${g.source || 'proposed'}) — setup: ${(g.env.setup || []).join(' && ') || '(none)'}. Reply "confirm environment ${g.short}" to accept it (or "confirm environment none" for bare worktrees).`, rule: 'env.unconfirmed' };
   }
+  // 0.11 (copilot-factory fix 0.10.1): the sealed environment sets up once in a scratch worktree before any task; a
+  // failure is repaired (an agent proposes, the CLI checks, the human seals), never built on
+  if (!ci && s.step === 'realize') {
+    const ea = require('./env-repair').routerAction(ctx);
+    if (ea) return ea;
+  }
   return { ...(ci || stepAction(ctx, s)), rule: ci ? 'order.ci_reverify' : 'order.next_step' };
 }
 
@@ -580,8 +587,11 @@ function route(root, jobId) {
         advice = null;
       }
     }
-    const next = (advice && advice.upgraded && advice.next) || p.next || parkNext(p.kind || parkKind(p.reason, p.from));
-    return out({ action: 'parked', reason: p.reason, park: { kind: p.kind || parkKind(p.reason, p.from), next, from: p.from || null, at: p.at || null, ...(advice ? { clarify: { upgraded: advice.upgraded, findings: advice.findings } } : {}) }, instructions: 'Wait for the human: resume <step> · cancel job · abandon job.' });
+    const kind = p.kind || parkKind(p.reason, p.from);
+    // a repaired environment waits for its seal: the reply names its hash (copilot-factory 0.11.1)
+    const seal = kind === 'environment_repair' ? (state.env_repair || {}).short || null : null;
+    const next = (advice && advice.upgraded && advice.next) || p.next || parkNext(kind);
+    return out({ action: 'parked', reason: p.reason, park: { kind, next: seal ? String(next).replace('"approve environment <hash>" (the hash the question names)', `"approve environment ${seal}"`) : next, from: p.from || null, at: p.at || null, ...(seal ? { seal } : {}), ...(advice ? { clarify: { upgraded: advice.upgraded, findings: advice.findings } } : {}) }, instructions: seal ? `Wait for the human: only "approve environment ${seal}" (or "a") seals the repaired environment; "b" or their words repair it again; "c" re-checks after a fix on their machine.` : 'Wait for the human: resume <step> · cancel job · abandon job.' });
   }
   if (state.amendment && state.amendment.status === 'open') {
     return out({ action: 'skill', skill: 'amend', step: 'amend', reason: 'An amendment is open: finish editing, then `factory amend submit`.' });

@@ -8,8 +8,9 @@ const RISKS = ['low', 'medium', 'high'];
 const GATES = ['H1', 'H2', 'H3', 'HF', 'HS', 'EH1', 'EH2', 'EH3'];
 // Steps a router may legitimately choose that are not recipe steps.
 // plan_probe: the CLI's own step inside decompose (the plan probe, after a valid plan), never a
-// recipe step of its own
-const SPECIAL_STEPS = new Set(['amend', 'A', 'plan_probe']);
+// recipe step of its own. env_check / env_repair (factory 0.11): the sealed build environment's
+// check before realize and its repair loop, steps the router takes before the recipe's realize
+const SPECIAL_STEPS = new Set(['amend', 'A', 'plan_probe', 'env_check', 'env_repair', 'env_repair_check']);
 // Steps whose completion the ledger records.
 const LEDGER_STEPS = new Set(['clarify', 'deps', 'ground', 'decide', 'decompose', 'reconcile', 'prove', 'challenge', 'ship', 'distill', 'close', 'epic_gate', 'post_merge_challenge']);
 // Decision rules that legitimately send the job backwards.

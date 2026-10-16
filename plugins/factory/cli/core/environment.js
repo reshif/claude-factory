@@ -111,7 +111,20 @@ const has = (root, f) => exists(path.join(root, f));
 
 // A likely environment from the repo's files, with the files it rests on. The human confirms
 // or edits it; nothing runs until then.
-function detect(root) {
+// 0.11 (copilot-factory fix 0.10.1): with this machine's tool inventory (cli/core/machine.js): a Python environment is
+// made with uv when it is installed, else poetry (a poetry repo), virtualenv, and python3 -m venv
+// only when it really works here; pip installs retry; never a tool that is missing or needs sudo.
+const PIP = '.venv/bin/pip install -q --retries 5 --timeout 60';
+function machineOf(given) {
+  if (given !== undefined) return given;
+  try {
+    // a proposal is built on routing paths (factory next): the cached inventory only, never a scan
+    return require('./machine').inventory({ cacheOnly: true });
+  } catch {
+    return null;
+  }
+}
+function detect(root, { machine: given } = {}) {
   const py = read(root, 'pyproject.toml');
   // file names go into shell commands: only plain ones (requirements-dev.txt), never shell syntax
   const reqs = fs.existsSync(root) ? fs.readdirSync(root).filter((f) => /^requirements[\w.-]*\.txt$/.test(f)) : [];
@@ -143,20 +156,39 @@ function detect(root) {
   }
   if (py || reqs.length || has(root, 'setup.py') || has(root, 'setup.cfg')) {
     const dev = py && /\[project\.optional-dependencies\][\s\S]*?^\s*dev\s*=/m.test(py);
-    const install = py || has(root, 'setup.py') ? `.venv/bin/pip install -q -e ${dev ? "'.[dev]'" : '.'}` : null;
-    const setup = ['python3 -m venv .venv', '.venv/bin/pip install -q --upgrade pip', ...(install ? [install] : []), ...reqs.filter((f) => /dev|test/.test(f) || reqs.length === 1).map((f) => `.venv/bin/pip install -q -r ${f}`)];
+    const target = py || has(root, 'setup.py') ? `-e ${dev ? "'.[dev]'" : '.'}` : null;
+    const reqFiles = reqs.filter((f) => /dev|test/.test(f) || reqs.length === 1);
+    const inv = machineOf(given);
+    const M = require('./machine');
+    const poetryRepo = has(root, 'poetry.lock') || Boolean(py && /^\[tool\.poetry\]/m.test(py));
+    const how = M.pythonInstaller(inv, { poetryRepo });
+    const env = { VIRTUAL_ENV: '{worktree}/.venv', PATH: '{worktree}/.venv/bin:$PATH' };
+    let setup;
+    if (how === 'uv') {
+      // uv retries on its own; its HTTP timeout is raised for slow indexes
+      const uvPip = 'uv pip install -q --python .venv/bin/python';
+      setup = ['uv venv -q --allow-existing .venv', ...(target ? [`${uvPip} ${target}`] : []), ...reqFiles.map((f) => `${uvPip} -r ${f}`)];
+      env.UV_HTTP_TIMEOUT = '60';
+    } else if (how === 'poetry' && py) {
+      setup = ['poetry install --no-interaction'];
+      env.POETRY_VIRTUALENVS_IN_PROJECT = 'true';
+    } else {
+      const mk = how === 'virtualenv' ? 'virtualenv -q .venv' : 'python3 -m venv .venv';
+      setup = [mk, `${PIP} --upgrade pip`, ...(target ? [`${PIP} ${target}`] : []), ...reqFiles.map((f) => `${PIP} -r ${f}`)];
+    }
     if (py) evidence.push('pyproject.toml');
     evidence.push(...reqs, ...['setup.py', 'setup.cfg', 'poetry.lock', 'uv.lock'].filter((f) => has(root, f)));
+    if (inv) evidence.push(`this machine: ${how ? `${how} (${how === 'venv' ? 'python3 -m venv works' : 'installed'})` : 'no working venv tool (python3 -m venv fails: install uv or virtualenv)'}`);
     return {
       version: 1,
-      name: 'python-venv',
+      name: how === 'uv' ? 'python-uv' : how === 'poetry' && py ? 'python-poetry' : 'python-venv',
       setup,
       cache_key: ['pyproject.toml', 'setup.py', 'setup.cfg', 'requirements*.txt', 'poetry.lock', 'uv.lock'],
-      env: { VIRTUAL_ENV: '{worktree}/.venv', PATH: '{worktree}/.venv/bin:$PATH' },
+      env,
       prefix: '',
       ignore: ['.venv/'],
       timeout_seconds: 1200,
-      notes: 'Each worktree gets its own .venv with the project installed in editable mode from that worktree, so python, pytest and console scripts import the worktree\'s code. Write verify commands as "python -m pytest …" or "pytest …".',
+      notes: `Each worktree gets its own .venv with the project installed in editable mode from that worktree, so python, pytest and console scripts import the worktree's code. Write verify commands as "python -m pytest …" or "pytest …".${how ? '' : ' python3 -m venv does not work on this machine (no ensurepip) and neither uv nor virtualenv is installed: install uv (no sudo), then propose again.'}`,
       evidence,
     };
   }
@@ -185,6 +217,81 @@ function detect(root) {
     };
   }
   return { version: 1, name: 'none', setup: [], notes: 'No dependency manifest found: worktrees need no setup.', evidence: [] };
+}
+
+// ---------------------------------------------------------------- lint against this machine
+//
+// What makes an environment fail on THIS machine before anything runs (0.11 (copilot-factory fix 0.10.1); J-0001 hit
+// all of these after its plan gate): a venv without ensurepip, a tool that is not installed or
+// needs sudo, setup reading a file a (non-bootstrap) task of the plan creates, a service health
+// check that runs once instead of waiting, pip without retries. Returns [{ rule, cmd, message }].
+const KNOWN_TOOLS = new Set(['virtualenv', 'uv', 'uvx', 'poetry', 'pipenv', 'pyenv', 'pipx', 'docker', 'docker-compose', 'node', 'npm', 'npx', 'pnpm', 'yarn', 'bun', 'python', 'python3']);
+function segments(cmd) {
+  return String(cmd || '').split(/&&|\|\||;|\|/).map((x) => x.trim().replace(/^(?:[A-Za-z_][A-Za-z0-9_]*=\S*\s+)+/, '').replace(/^env\s+(?:[A-Za-z_][A-Za-z0-9_]*=\S*\s+)*/, '').trim()).filter(Boolean);
+}
+// The files a setup command reads from the worktree.
+function readsOf(cmd) {
+  const out = [];
+  for (const seg of segments(cmd)) {
+    let m;
+    const re = /(?:^|\s)(?:-r|--requirement|-c|--constraint)[=\s]+(['"]?)([^\s'"]+)\1/g;
+    while ((m = re.exec(seg))) out.push([m[2]]);
+    if (/\bpip3?\s+install\b|\buv\s+pip\s+install\b/.test(seg) && /(?:^|\s)(?:-e\s+)?['"]?\.(?:\[[\w,-]+\])?['"]?(?:\s|$)/.test(seg)) out.push(['pyproject.toml', 'setup.py', 'setup.cfg']);
+    if (/^poetry\s+install\b|^uv\s+sync\b|^pipenv\s+install\b/.test(seg)) out.push(/^pipenv/.test(seg) ? ['Pipfile'] : ['pyproject.toml']);
+    if (/^npm\s+ci\b/.test(seg)) out.push(['package-lock.json']);
+    if (/^(npm\s+(install|i)|pnpm\s+(install|i)|yarn(\s+install)?|bun\s+install)\b/.test(seg) && !/\s(?!-)\S+@?\S*\s*$/.test(seg.replace(/^(npm|pnpm|bun)\s+(install|i)|^yarn(\s+install)?/, '').replace(/\s--?[\w-]+(=\S+)?/g, ''))) out.push(['package.json']);
+    const f = /\bdocker(?:-compose|\s+compose)\b.*?\s-f\s+(\S+)/.exec(seg);
+    if (f) out.push([f[1]]);
+  }
+  return out.map((alts) => alts.filter((x) => !/[{}$*]/.test(x))).filter((alts) => alts.length);
+}
+function lint(env, { root, base = 'HEAD', plan = null, machine = null } = {}) {
+  const e = env || {};
+  const out = [];
+  const add = (rule, cmd, message) => out.push({ rule, cmd, message });
+  const inv = machine;
+  const setup = e.setup || [];
+  const svc = e.services || null;
+  const all = [...setup, ...(e.teardown ? [e.teardown] : []), ...(svc ? [svc.up, svc.health, svc.down].filter(Boolean) : [])];
+  const M = require('./machine');
+  for (const cmd of all) {
+    for (const seg of segments(cmd)) {
+      const head = seg.split(/\s+/)[0];
+      if (head === 'sudo') add('needs_sudo', cmd, `uses sudo: a setup runs unattended in every worktree and never asks for a password; install what needs root yourself once, and leave it out of the environment`);
+      else if (inv && /^python3?(\.\d+)?$/.test(head) && !inv.python.some((p) => p.cmd === head) && !(head === 'python' && inv.python.length)) add('missing_tool', cmd, `\`${head}\` is not installed on this machine (found: ${inv.python.map((p) => p.cmd).join(', ') || 'no python'})`);
+      else if (inv && KNOWN_TOOLS.has(head) && !/^python/.test(head)) {
+        const tool = head === 'uvx' ? 'uv' : head === 'npx' ? 'npm' : head;
+        if (!M.has(inv, tool)) add('missing_tool', cmd, `\`${head}\` is not installed on this machine: use a tool it has (${['uv', 'poetry', 'virtualenv', 'pipx', 'node', 'npm', 'pnpm', 'yarn', 'docker'].filter((t) => M.has(inv, t)).join(', ') || 'none of the usual'}), or install it yourself (no sudo: uv installs with curl -LsSf https://astral.sh/uv/install.sh | sh), then factory doctor --machine`);
+        else if (head === 'docker' && /^docker\s+compose\b/.test(seg) && inv.docker.compose !== 'docker compose') add('missing_tool', cmd, `\`docker compose\` is not available here (${inv.docker.compose || 'no compose'})`);
+        else if (head === 'docker' && inv.docker.daemon && inv.docker.daemon !== 'reachable') add('missing_tool', cmd, `the docker daemon is ${inv.docker.daemon === 'needs_sudo' ? 'reachable only with sudo (add yourself to the docker group)' : 'not running'} on this machine`);
+      }
+      if (/\bpip3?\s+install\b/.test(seg) && !/\buv\s+pip\s+install\b/.test(seg) && !/--retries\b/.test(seg)) add('pip_no_retries', cmd, 'pip installs without retries: one slow or dropped connection to the package index fails the whole setup; add --retries 5 --timeout 60 (or use uv, which retries)');
+    }
+  }
+  for (const cmd of setup) {
+    if (inv && inv.venv && inv.venv.works === false && /\bpython[\d.]*\s+-m\s+venv\b/.test(cmd)) add('venv_no_ensurepip', cmd, `\`python3 -m venv\` does not work on this machine (${inv.venv.why || 'no ensurepip'}; installing python3-venv needs sudo): use ${M.has(inv, 'uv') ? '`uv venv .venv`' : M.has(inv, 'virtualenv') ? '`virtualenv .venv`' : 'uv or virtualenv (install uv without sudo)'}; after installing something, factory doctor --machine scans again`);
+  }
+  // files setup reads: on the base commit, or written first by the bootstrap task
+  if (root) {
+    const git = require('../lib/git');
+    const { matchesAny } = require('../lib/glob');
+    const tasks = (plan && plan.tasks) || [];
+    const at = (f) => git.run(root, ['cat-file', '-e', `${base}:${f.replace(/^\.\//, '')}`], { allowFail: true }).code === 0;
+    for (const cmd of setup) {
+      for (const alts of readsOf(cmd)) {
+        if (alts.some(at)) continue;
+        const makers = tasks.filter((t) => alts.some((f) => matchesAny(f.replace(/^\.\//, ''), t.allowed_paths || [])));
+        if (makers.some((t) => t.bootstrap === true)) continue;
+        add('setup_reads_plan_file', cmd, makers.length ? `reads ${alts[0]}, which ${makers.map((t) => t.id).join(', ')} create${makers.length > 1 ? '' : 's'} (not a bootstrap task): every worktree, ${makers[0].id}'s own included, is set up before that file exists. Install from pins directly in the setup (e.g. pip install 'django==5.0.6'), or make the task that writes ${alts[0]} the bootstrap task ("bootstrap": true) that every other task depends on` : `reads ${alts[0]}, which does not exist at the base commit and no task creates it`);
+      }
+    }
+  }
+  if (svc && svc.up) {
+    const waits = (c) => /\b(until|while)\b|\bfor\b[^;]*;\s*do\b|--wait\b|--retry\b|\bretries\b|wait-for|\btimeout\s+\d/.test(String(c || ''));
+    if (svc.health && !waits(svc.health)) add('single_health_check', svc.health, 'the service health check runs once, right after start, before the service is ready (a database takes seconds): wait with a deadline, e.g. `for i in $(seq 60); do pg_isready -h localhost && exit 0; sleep 1; done; exit 1`, or `docker compose up --wait`');
+    else if (!svc.health && !waits(svc.up)) add('single_health_check', svc.up, 'nothing waits for the services to be ready: add a health command that retries with a deadline (or `docker compose up --wait`)');
+  }
+  return out;
 }
 
 // What `factory env set` would confirm: the main session's proposal file, else detection.
@@ -217,7 +324,9 @@ function wrap(e, v, cmd) {
 }
 
 // The env for a process started inside the environment: values expanded, $VAR from this env.
-function processEnv(e, v, base = process.env) {
+// under a base environment (the probe, a sandboxed check) $VAR expands from that allowlist, never
+// from the user's full environment (a declared `X: $GH_TOKEN` would carry the token in)
+function processEnv(e, v, base = BASE_ENV || process.env) {
   const out = {};
   for (const [k, val] of Object.entries((e && e.env) || {})) out[k] = expand(val, v).replace(/\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?/g, (_, n) => (n in out ? out[n] : base[n] || ''));
   return out;
@@ -316,17 +425,20 @@ function servicesUp(root, state, e, v) {
   const job = require('./job');
   const key = hash({ up: s.up, env: e.env || {} });
   const fresh = state ? job.load(root, state.id) : null;
-  const jv = { ...v, worktree: root, task: 'job', slug: `${v.job}`.toLowerCase(), db: `factory_${String(v.job).toLowerCase().replace(/[^a-z0-9]/g, '')}` };
+  // a job's services run from the checkout; a check's (no job: env check, the probe, a repair
+  // candidate) from its scratch worktree, never the user's checkout (release review M3)
+  const home = state ? root : v.worktree || root;
+  const jv = { ...v, worktree: home, task: 'job', slug: `${v.job}`.toLowerCase(), db: `factory_${String(v.job).toLowerCase().replace(/[^a-z0-9]/g, '')}` };
   const env = processEnv(e, jv);
   const up = () => {
-    const r = sh(expand(s.up, jv), root, T, env);
+    const r = sh(expand(s.up, jv), home, T, env);
     if (r.code !== 0) return broken('services.up', expand(s.up, jv), r);
     if (fresh) job.mutate(root, fresh.id, (st) => { st.environment_services = { key, up_at: nowIso() }; });
     return null;
   };
   const healthy = () => {
     if (!s.health) return null;
-    const r = sh(expand(s.health, jv), root, Math.min(T, 300), env);
+    const r = sh(expand(s.health, jv), home, Math.min(T, 300), env);
     return r.code === 0 ? null : broken('services.health', expand(s.health, jv), r);
   };
   const wasUp = Boolean(fresh && fresh.environment_services && fresh.environment_services.key === key);
@@ -442,26 +554,122 @@ function confirm(root, { file, none = false, env: given = null, expectHash = nul
 // `factory env check`: validate, then run setup (and services up/health/down) in a scratch
 // worktree of HEAD. Changes no job state. Read-only for the repo: the scratch worktree is
 // removed afterwards.
-function check(root, { proposed = false } = {}) {
+function check(root, { proposed = false, env: given = null } = {}) {
   const { env: confirmed, error } = loadSafe(root);
-  if (error) return { ok: false, error };
-  const e = proposed || !confirmed ? strip(proposal(root)) : confirmed;
-  const which = proposed || !confirmed ? 'proposed' : 'confirmed';
-  const pp = problems(e);
+  if (error && !given) return { ok: false, error };
+  const e = given ? strip(given) : proposed || !confirmed ? strip(proposal(root)) : confirmed;
+  const which = given || proposed || !confirmed ? 'proposed' : 'confirmed';
+  // a proposal carries where it came from (source, evidence): not fields of the environment
+  const pp = problems(which === 'proposed' ? essence(e) : e);
   if (pp.length) return { ok: false, which, problems: pp };
+  sweepChecks(root);
   const wt = path.join(root, '.factory', 'worktrees', `_envcheck-${process.pid}`);
   git.run(root, ['worktree', 'prune'], { allowFail: true });
   git.run(root, ['worktree', 'add', '--detach', wt, 'HEAD']);
+  const owner = `${wt}.owner.json`;
+  try {
+    const ps = require('./probe').procStat(process.pid);
+    writeJson(owner, { pid: process.pid, start: ps ? ps.start : null, at: nowIso() });
+  } catch {
+    /* the owner file only helps the sweep */
+  }
   try {
     const { evidence: _e, notes: _n, source: _s, ...run } = e;
-    const r = ensure(root, null, { taskId: 'envcheck', wt, env: run });
-    const torn = teardown(root, null, { taskId: 'envcheck', wt, env: run });
+    // An environment nobody confirmed yet (a proposal: detected, or written with factory env
+    // propose; an agent may run env check) runs like the plan probe's setup: the allowlisted
+    // environment without the user's tokens, a home inside the scratch worktree, no login shell
+    // (review MAJ-3). The confirmed one is the human's and runs as their own shell would.
+    let inBox = (fn) => fn();
+    if (which === 'proposed') {
+      const P = require('./probe');
+      const box = path.join(wt, '.factory-probe');
+      for (const d of ['home', 'tmp', 'cache']) fs.mkdirSync(path.join(box, d), { recursive: true });
+      const base = P.probeEnv(root, `envcheck-${process.pid}`, {}, P.ownDirs(box));
+      inBox = (fn) => withBaseEnv(base, fn);
+    }
+    let r = inBox(() => ensure(root, null, { taskId: 'envcheck', wt, env: run }));
+    // the prefix runs in front of every verify command: the check runs it too (release review B2)
+    if (r.ok && run.prefix && String(run.prefix).trim()) {
+      const v = vars(root, null, 'envcheck', wt);
+      const pr = inBox(() => sh(wrap(run, v, 'true'), wt, 120, processEnv(run, v)));
+      if (pr.code !== 0) r = { ...r, ok: false, broken: broken('prefix', `${run.prefix} true`, pr) };
+    }
+    const torn = inBox(() => teardown(root, null, { taskId: 'envcheck', wt, env: run }));
     let down = null;
-    if (e.services && e.services.down) down = sh(expand(e.services.down, vars(root, null, 'envcheck', wt)), root, 600).code;
+    if (e.services && e.services.down) down = inBox(() => sh(expand(e.services.down, vars(root, null, 'envcheck', wt)), wt, 600)).code;
+    // what a sandboxed check started and left running (a backgrounded service, a setsid'd
+    // process): found by the check's tag or a working directory in its worktree, killed (M3)
+    if (which === 'proposed') {
+      // a moment for what is already ending (a service's last step) to end
+      try {
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 500);
+      } catch {
+        /* no wait */
+      }
+      const left = require('./probe').survivors(`envcheck-${process.pid}`, { wt });
+      if (left.length) {
+        return { ok: false, which, name: e.name || null, ran: r.ran || [], broken: { step: 'survivors', cmd: left.map((x) => x.cmd).join('; '), code: null, tail: '', reason: `left ${left.length} process(es) running after the check (killed): ${left.map((x) => x.cmd).join('; ')}` }, message: 'processes left running' };
+      }
+    }
     return { ok: r.ok, which, name: e.name || null, ran: r.ran || [], ...(r.ok ? {} : { broken: r.broken, message: r.broken.reason }), ...(torn ? { teardown_exit: torn.code } : {}), ...(down !== null ? { services_down_exit: down } : {}) };
   } finally {
     git.run(root, ['worktree', 'remove', '--force', wt], { allowFail: true });
+    try {
+      fs.rmSync(wt, { recursive: true, force: true });
+      fs.rmSync(owner, { force: true });
+    } catch {
+      /* gone */
+    }
   }
+}
+
+// Scratch worktrees of env checks that died (a killed drive call, a killed child): removed, with
+// whatever still runs in them, unless their owner (pid and start time) still lives (port review
+// M-1). Without an owner file, a live pid keeps one for at most 2 h. `force`: pids whose
+// worktrees go whatever their owner (a run just killed).
+function sweepChecks(root, { force = [] } = {}) {
+  const dir = path.join(root, '.factory', 'worktrees');
+  let names = [];
+  try {
+    names = fs.readdirSync(dir).filter((n) => /^_envcheck-\d+$/.test(n));
+  } catch {
+    return [];
+  }
+  const P = require('./probe');
+  const gone = [];
+  for (const n of names) {
+    const wt = path.join(dir, n);
+    const pid = Number(n.split('-')[1]);
+    const owner = readJson(`${wt}.owner.json`, null);
+    let keep;
+    if (force.includes(pid)) keep = false;
+    else if (owner && owner.pid) keep = P.sameProcess(owner.pid, owner.start);
+    else {
+      let age = 0;
+      try {
+        age = Date.now() - fs.statSync(wt).mtimeMs;
+      } catch {
+        age = Infinity;
+      }
+      keep = P.sameProcess(pid, null) && age < 2 * 3600e3;
+    }
+    if (keep) continue;
+    try {
+      P.survivors(`envcheck-${pid}`, { wt });
+    } catch {
+      /* nothing left running */
+    }
+    git.run(root, ['worktree', 'remove', '--force', wt], { allowFail: true });
+    try {
+      fs.rmSync(wt, { recursive: true, force: true });
+      fs.rmSync(`${wt}.owner.json`, { force: true });
+    } catch {
+      /* gone */
+    }
+    gone.push(n);
+  }
+  if (gone.length) git.run(root, ['worktree', 'prune'], { allowFail: true });
+  return gone;
 }
 
 // Undo what setup (or the tests) started for one worktree: the environment's teardown, run in
@@ -567,4 +775,4 @@ function notice(root) {
   };
 }
 
-module.exports = { withBaseEnv, gateProposal, needsConfirmation, fullHash, essence, isNone, JOB_PROPOSED, teardown, servicesDown, load, loadSafe, detect, proposal, problems, show, propose, confirm, check, ensure, wrap, preamble, processEnv, vars, expand, notice, cacheKey, short, FILE, PROPOSED };
+module.exports = { sweepChecks, KEYS, lint, readsOf, withBaseEnv, gateProposal, needsConfirmation, fullHash, essence, isNone, JOB_PROPOSED, teardown, servicesDown, load, loadSafe, detect, proposal, problems, show, propose, confirm, check, ensure, wrap, preamble, processEnv, vars, expand, notice, cacheKey, short, FILE, PROPOSED };

@@ -55,6 +55,10 @@ test('e2e: a five-task, three-wave feature@medium job with a crashing builder, a
   F.write(root, 'src/index.js', "module.exports = {\n  add: require('./add'),\n};\n");
   F.sh(root, 'git add -A && git commit -qm "index"');
   const J = F.cli(root, ['job', 'new', '--title', 'CSV export', '--type', 'feature', '--risk', 'medium']).job;
+  // 0.11 (intentional): T2 and T3 both edit src/index.js, which a design-depth Project layout gives
+  // exactly one owner; this test is about the shared file, so the job is one created before design
+  // depth (adr@1 rules, no layout contract)
+  F.asPreDesignDepthJob(root, J);
   fs.writeFileSync(path.join(F.jobDir(root, J), 'contract.md'), CONTRACT);
   // clarify → H1 → ground → decide → H2 → decompose → H3, as in e2e-medium-high
   F.clarify(root);
@@ -67,7 +71,7 @@ test('e2e: a five-task, three-wave feature@medium job with a crashing builder, a
   let b = F.cli(root, ['wfargs', 'ground']);
   F.record(root, F.envelope(b, 'ok', { topics: [{ topic: 'codebase', claims: [{ claim: 'add subtracts', source: 'src/add.js:1' }], unknowns: [] }], degraded: [] }));
   assert.equal(next(root).config, 'decide');
-  F.write(F.jobDir(root, J), 'adr-001-csv.md', F.adrText({ job: J, acs: ['AC-1', 'AC-2', 'AC-3', 'AC-4'], decision: 'We will build toCsv in src/csv.js and have alerts and the report call it.' }));
+  F.write(F.jobDir(root, J), 'adr-001-csv.md', F.adrText({ job: J, template: 'adr@1', acs: ['AC-1', 'AC-2', 'AC-3', 'AC-4'], decision: 'We will build toCsv in src/csv.js and have alerts and the report call it.' }));
   b = F.cli(root, ['wfargs', 'fanout-judge', '--config', 'decide']);
   F.record(root, F.envelope(b, 'ok', { options: [], degraded: [], judge: { kind: 'adr', paths: [path.join(F.jobDir(root, J), 'adr-001-csv.md')], summary: 's' }, critiques: [{ verdict: 'approve', items: [] }] }));
   // 0.10.0: no separate H2 at medium risk; design + plan + environment at one H3

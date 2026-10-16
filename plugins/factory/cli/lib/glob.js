@@ -82,6 +82,6 @@ function literalPrefix(glob) {
 }
 
 // A granted file as a path entry that matches only itself.
-const exact = (p) => `=${normalize(p)}`;
+const exact = (p) => `=${normalize(String(p).replace(/^=/, ''))}`;
 
 module.exports = { matches, matchesAny, globsOverlap, normalize, exact, EXACT };
