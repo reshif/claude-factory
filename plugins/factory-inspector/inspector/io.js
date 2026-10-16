@@ -111,6 +111,7 @@ function layout(root) {
       state: path.join(f, 'jobs', id, 'state.json'),
       lock: path.join(f, 'jobs', id, 'recipe.lock.json'),
       ledger: path.join(f, 'jobs', id, 'ledger.jsonl'),
+      clarify: path.join(f, 'jobs', id, 'clarify.json'),
     }),
   };
 }

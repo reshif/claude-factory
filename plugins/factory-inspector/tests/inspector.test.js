@@ -21,13 +21,11 @@ const inspect = (root, args) => JSON.parse(spawnSync('node', [BIN, ...args], { c
 function cleanJob(root) {
   const J = F.cli(root, ['job', 'new', '--title', 'Fix add', '--type', 'bug', '--risk', 'low']).job;
   fs.writeFileSync(path.join(F.jobDir(root, J), 'contract.md'), F.contractText());
-  next(root);
-  let b = F.cli(root, ['wfargs', 'fanout-judge', '--config', 'clarify']);
-  F.record(root, F.envelope(b, 'ok', { analysts: [], degraded: [], judge: { questions: [], dismissed: [] }, critique: { verdict: 'approve', items: [] } }));
+  F.clarify(root); // clarify v3, stage by stage: next, wfargs clarify + record, or clarify reply when it waits
   next(root);
   F.reply(root, 'approve');
   next(root);
-  b = F.cli(root, ['wfargs', 'ground']);
+  let b = F.cli(root, ['wfargs', 'ground']);
   F.record(root, F.envelope(b, 'ok', { topics: [{ topic: 't', claims: [], unknowns: [] }], degraded: [] }));
   next(root);
   F.cli(root, ['plan', 'from-contract']);
@@ -92,9 +90,7 @@ test('driver fidelity (R7): acting at a gate, and skipping what the router asked
   const root = F.makeRepo();
   const J = F.cli(root, ['job', 'new', '--title', 'x', '--type', 'bug', '--risk', 'low']).job;
   fs.writeFileSync(path.join(F.jobDir(root, J), 'contract.md'), F.contractText());
-  next(root);
-  const b = F.cli(root, ['wfargs', 'fanout-judge', '--config', 'clarify']);
-  F.record(root, F.envelope(b, 'ok', { analysts: [], degraded: [], judge: { questions: [], dismissed: [] }, critique: { verdict: 'approve', items: [] } }));
+  F.clarify(root);
   assert.equal(next(root).step, 'H1');
   F.cli(root, ['plan', 'from-contract']); // acting while the human hasn't approved
   F.reply(root, 'approve');
@@ -414,7 +410,7 @@ test('guard regressions: redirects to /dev/null, prose and patterns are not insp
   assert.equal(fs.readFileSync(path.join(PLUGIN, 'hooks', 'shell.js'), 'utf8'), fs.readFileSync(path.join(PLUGIN, '..', 'factory', 'hooks', 'shell.js'), 'utf8'), "the shell reader is an identical copy of the factory's");
 });
 
-test('clarify v2: R6 reads the ceiling each round recorded, R19 flags stalled rounds and re-raised issues, R7 lets clarify status, notes and your split through', () => {
+test('older jobs (clarify v2 records): R6 reads the ceiling each round recorded, R19 flags stalled rounds and re-raised issues, R7 lets clarify status and split through', () => {
   const { LIMITS } = require('../inspector/config');
   const at = (h) => new Date(Date.UTC(2026, 0, 1) + h * 36e5).toISOString();
   const step = (h, round, lg) => ({ kind: 'step', step: 'clarify', ok: false, at: at(h), detail: { round, questions: 0, question_ids: [], ledger: { opened: 0, settled: 0, deferred: 0, asked: 0, progress: false, degraded: false, ceiling: 10, counted: round, reraised: 0, ...lg } } });
@@ -429,14 +425,77 @@ test('clarify v2: R6 reads the ceiling each round recorded, R19 flags stalled ro
   assert.ok(ids.includes('R19.clarify_stalled'), ids.join());
   assert.match(found.find((x) => x.rule === 'R19.clarify_stalled').summary, /4 round\(s\) in a row/, 'the degraded round is not counted; the longest streak');
   assert.ok(ids.includes('R19.issues_reraised'));
-  // R7: clarify status is read-only, clarify note belongs to the clarify step, your split is yours
+  // R7: clarify status is read-only; clarify note and reply belong to the clarify step; split (v3) only says there is nothing to split
   const exp = rules.expectationsFor({ action: 'skill', skill: 'clarify' });
-  assert.ok(exp.allowed.has('clarify:note') && exp.allowed.has('answer'));
+  assert.ok(exp.allowed.has('clarify:note') && exp.allowed.has('clarify:reply') && exp.allowed.has('answer'));
   const cli = (h, d, extra) => ({ event: 'cli', ts: at(h), job: 'J-0002', decision_id: d, ok: true, ...extra });
   const j2 = { id: 'J-0002', state: {}, lock: null, ledger: [], decisions: [{ id: 'D1', ts: at(1), action: 'gate', step: 'H1' }], events: [cli(1.1, 'D1', { cmd: 'clarify', sub: 'status' }), cli(1.2, 'D1', { cmd: 'clarify', sub: 'split' })] };
-  assert.deepEqual(rules.driverFidelity(j2), [], 'clarify status while waiting at a gate is a look; a split that went through is the user acting');
-  j2.events.push(cli(1.3, 'D1', { cmd: 'clarify', sub: 'split', ok: false, code: 'human_only' }));
-  assert.equal(rules.driverFidelity(j2).length, 1, 'a refused split attempt is still judged');
+  assert.deepEqual(rules.driverFidelity(j2), [], 'clarify status and split while waiting at a gate are a look');
+  j2.events.push(cli(1.3, 'D1', { cmd: 'clarify', sub: 'redirect' }));
+  assert.deepEqual(rules.driverFidelity(j2), [], 'at H1 the user may redirect clarify instead of denying');
+  j2.events.push(cli(1.4, 'D1', { cmd: 'clarify', sub: 'reply' }));
+  assert.equal(rules.driverFidelity(j2).length, 1, 'a clarify reply while waiting at H1 is acting at the gate');
+});
+
+test('clarify v3 from the real CLI: a clean run has no clarify findings; replies while it waits are expected; a hand-edited clarify.json is forged (R1)', () => {
+  const root = F.makeRepo();
+  const J = F.cli(root, ['job', 'new', '--title', 'Fix add', '--type', 'feature', '--risk', 'medium']).job;
+  fs.writeFileSync(path.join(F.jobDir(root, J), 'contract.md'), F.contractText({ verify: '`node tests/add.test.js` (AC-1)' }));
+  F.clarify(root, { until: 'readback_wait' });
+  assert.equal(next(root).clarify.stage, 'readback_wait');
+  F.cli(root, ['clarify', 'status']); // read-only
+  F.cli(root, ['clarify', 'reply', 'ok']); // the user's words, recorded by the main session
+  F.clarify(root);
+  assert.equal(next(root).step, 'H1');
+  inspect(root, ['run', '--job', J]);
+  let fds = I.report(root).findings.filter((x) => x.job === J);
+  assert.ok(!fds.some((x) => /^R(6|7|19|20)\./.test(x.rule)), JSON.stringify(fds.map((x) => `${x.rule}: ${x.summary}`)));
+  assert.ok(!fds.some((x) => x.rule === 'R1.seals'), 'clarify.json is sealed by the CLI');
+  // the decision records say which clarify stage ran agents and which waited on the user
+  const ds = fs.readFileSync(path.join(root, '.factory', 'log', 'decisions.jsonl'), 'utf8').trim().split('\n').map(JSON.parse).filter((d) => d.job === J && d.skill === 'clarify');
+  assert.ok(ds.some((d) => d.clarify && d.clarify.waiting_for_user) && ds.some((d) => d.clarify && d.clarify.run), JSON.stringify(ds.map((d) => d.clarify)));
+  // a hand-edited clarify record is a forged record (R1)
+  const file = path.join(F.jobDir(root, J), 'clarify.json');
+  const data = JSON.parse(fs.readFileSync(file, 'utf8'));
+  data.items[0].text = 'edited';
+  fs.writeFileSync(file, JSON.stringify(data));
+  inspect(root, ['run', '--job', J]);
+  fds = I.report(root).findings.filter((x) => x.job === J);
+  assert.match(fds.find((x) => x.rule === 'R1.seals').summary, /clarify\.json/);
+});
+
+test('clarify v3 synthetic: over its caps (R6), parked (R19), proceeded past God Eye (R19), research gaps (R20), skipped a stage it was asked to run (R7)', () => {
+  const at = (h) => new Date(Date.UTC(2026, 0, 1) + h * 36e5).toISOString();
+  const cl = (h, outcome, detail) => ({ kind: 'clarify', at: at(h), job: 'J-0004', stage: outcome, outcome, detail });
+  const job = {
+    id: 'J-0004', state: { status: 'active' }, lock: { limits: {} },
+    ledger: [
+      cl(1, 'sheet_wait', { counters: { research_passes: 3, writer_attempts: 0 }, caps: { research_passes: 2, writer_attempts: 2 }, failures: 2 }),
+      cl(2, 'park', { reason: 'The contract writer returned nothing twice.' }),
+      { kind: 'step', step: 'clarify', at: at(3), job: 'J-0004', ok: true, detail: { version: 3, failures: 2, approved: false, god_eye_objects: 1, proceeded: { at: at(3) } } },
+    ],
+    decisions: [
+      { id: 'J-0004-D0001', ts: at(0.5), action: 'skill', skill: 'clarify', step: 'clarify', clarify: { stage: 'research', run: true, waiting_for_user: false } },
+      { id: 'J-0004-D0002', ts: at(0.9), action: 'skill', skill: 'clarify', step: 'clarify', clarify: { stage: 'sheet_wait', run: false, waiting_for_user: true } },
+      { id: 'J-0004-D0003', ts: at(1.5), action: 'skill', skill: 'clarify', step: 'clarify', clarify: { stage: 'interpret', run: true, waiting_for_user: false } },
+    ],
+    events: [
+      { event: 'cli', ts: at(0.95), job: 'J-0004', decision_id: 'J-0004-D0002', ok: true, cmd: 'clarify', sub: 'reply' },
+      { event: 'cli', ts: at(1.6), job: 'J-0004', decision_id: 'J-0004-D0003', ok: true, cmd: 'wfargs', workflow: 'clarify' },
+      { event: 'cli', ts: at(1.7), job: 'J-0004', decision_id: 'J-0004-D0003', ok: true, cmd: 'record', workflow: 'clarify' },
+    ],
+  };
+  const r6 = rules.loops(job);
+  assert.deepEqual(r6.map((x) => x.rule), ['R6.clarify_over_cap']);
+  assert.match(r6[0].summary, /3 research pass\(es\).*caps were 2 and 2/);
+  const r7 = rules.driverFidelity(job);
+  assert.deepEqual(r7.map((x) => x.rule), ['R7.not_done'], JSON.stringify(r7.map((x) => x.summary)));
+  assert.match(r7[0].summary, /factory wfargs clarify and factory record/, 'the research stage was skipped; the reply while the sheet waited is expected');
+  const health = rules.jobHealth(job, require('../inspector/config').LIMITS, at(10)).filter((x) => /^R(19|20)\./.test(x.rule));
+  assert.deepEqual(health.map((x) => x.rule).sort(), ['R19.clarify_parked', 'R19.proceeded_past_objections', 'R20.research_gaps']);
+  assert.match(health.find((x) => x.rule === 'R19.clarify_parked').summary, /writer returned nothing twice/);
+  assert.match(health.find((x) => x.rule === 'R19.proceeded_past_objections').summary, /1 God Eye objection\(s\) still open.*not approval/);
+  assert.match(health.find((x) => x.rule === 'R20.research_gaps').summary, /2 research gap\(s\)/);
 });
 
 test('outcome integrity: a serious finding left unverified and never settled, and a task counted done after its builder failed (e2e audit)', () => {

@@ -5,7 +5,7 @@ An independent auditor for the Software Factory. It answers two questions about 
 1. **Was the intended recipe the one used?**
 2. **Did the factory behave the way that recipe says?** That covers the order of steps, gates, the evidence chain and caps, and whether Claude did what `factory next` told it to.
 
-It also finds **ambiguities**: places where the rules left room and someone had to improvise. And it watches the factory's **health**: every issue the factory reports about itself — hooks that failed, guard denials, blocked "done" claims, refused replies, CLI failures and crashes, stale or degraded workflow results, agent failures, retries and escalations, agents that never stopped, parks, idle jobs, slow gates. Each finding goes into a register for you to decide on.
+It also finds **ambiguities**: places where the rules left room and someone had to improvise. And it watches the factory's **health**: every issue the factory reports about itself — hooks that failed, guard denials, blocked "done" claims, refused replies, CLI failures and crashes, stale or degraded workflow results, agent failures, retries and escalations, agents that never stopped, parks, idle jobs, slow gates, and clarify parks, research gaps and God Eye objections you proceeded past. Each finding goes into a register for you to decide on.
 
 It never blocks, approves or changes a job, a recipe or a policy.
 
@@ -22,13 +22,13 @@ The inspector has its own implementations of three things: seal verification, re
 
 | Rule | Class | Checks |
 |---|---|---|
-| R1 seals | deviation | Records written outside the factory CLI (state, lock, ledger, decision log, event log) |
+| R1 seals | deviation | Records written outside the factory CLI (state, lock, ledger, decision log, event log, clarify's `clarify.json`) |
 | R2 intended recipe | deviation / gap | Replays the selection rules from the job's inputs. Checks the risk floor, the lock hash, and the recipe version every decision used. Flags a recipe file edited without a version bump |
 | R3 conformance | deviation / ambiguity | Steps outside the recipe; steps reached before earlier ones completed; closed without a step; moving backwards with no recorded cause |
 | R4 gates | deviation | Approvals that were never presented, or presented for a different document hash; automatic approvals the recipe doesn't allow |
 | R5 evidence chain | deviation | Review on a build with no passing proof; proof on a build never integrated; shipping without both on the same build. Outcome integrity: a blocker/major finding a review round left unverified that no later round settled, yet a later round passed or the job shipped (`R5.unverified_finding_lost`); a task counted done although its builder did not finish: a tester passed it after its builder came back with no result or blocked, or the state marks it done with a non-`done` latest builder reply (`R5.done_without_builder`) |
-| R6 loops | deviation | Fix rounds beyond their caps plus your resumes; clarify rounds beyond their cap (clarify v2: counted rounds — degraded ones excluded — beyond the ceiling each round recorded) |
-| R7 driver fidelity | deviation | Claude didn't run what `factory next` asked for, ran something else, or changed things while waiting at a gate (`factory clarify status` is a look; `factory clarify note` belongs to the clarify step; your own `clarify split` is yours, not the driver's) |
+| R6 loops | deviation | Fix rounds beyond their caps plus your resumes; clarify v3 research passes or contract-writer attempts beyond the caps each stage recorded (older jobs: clarify rounds beyond their cap or ceiling) |
+| R7 driver fidelity | deviation | Claude didn't run what `factory next` asked for, ran something else, or changed things while waiting at a gate (`factory clarify status` is a look; `factory clarify reply`/`redirect` while clarify waits on you, and `factory clarify redirect` at H1, are expected; a clarify stage that should have run agents but got no `factory wfargs clarify` and `factory record` is not done) |
 | R8 consistency | ambiguity / deviation | The same failing check routed by different rules under the same rulebook; identical inputs picking different recipes |
 | R9 friction | ambiguity | Repeated patterns across jobs (3+ by default): the same guard denial, refused replies, refused workflow results, caps you nearly always resume past, the same floor waived, denials clustering at one gate, a step repeating with no progress |
 | R10 hook errors | gap | A factory hook failed (`hook_error`; high for the guard, Stop and prompt hooks, which enforce nothing while failing); the inspector's own hooks failed (`.factory/inspect/hook-errors.jsonl`) |
@@ -40,11 +40,12 @@ The inspector has its own implementations of three things: seal verification, re
 | R16 parks and resumes | ambiguity | A job parked, or resumed past its caps, more than a limit |
 | R17 idle job | gap | Active, not waiting for you, and nothing has happened for a long time |
 | R18 slow reply | ambiguity | A gate that waited longer than a limit for your reply |
-| R19 clarify | ambiguity | A job parked because its intent was still unclear after the intent rounds; clarify proposing questions over the round budget or already asked (dropped by the CLI) beyond a limit; clarify v2 rounds in a row that settled, deferred and asked nothing (`R19.clarify_stalled`); settled issues the agents kept raising again, folded as notes by the ledger (`R19.issues_reraised`, low) |
+| R19 clarify | ambiguity | Clarify v3 parks (a cap reached, or an agent that returned nothing), with their reasons (`R19.clarify_parked`); H1 reached with God Eye's objections still open because you said proceed (`R19.proceeded_past_objections`, low: shown at H1 as objections, never approval). Older jobs: intent parks, questions over budget, stalled v2 rounds, issues raised again |
+| R20 research gaps | ambiguity | Clarify v3 reached H1 with research gaps recorded (`R20.research_gaps`, low; limit `research_gaps_per_job`) |
 | R21 review regression | deviation / ambiguity | A finding confirmed serious in one review round found again in a later round (same file and lane + rule, or a line within ±10, or the same summary): the fix was lost. High when the later round let it through (downgraded, minor, unconfirmed — what older factory versions did); medium when it blocked again. From the job's `challenge` ledger records |
 | R22 reconcile drop | deviation | Reconcile's regression guard caught a merge or conflict resolution that dropped lines already-merged tasks or fix rounds had added (high). From the job's failed `reconcile` ledger records |
 
-There is no R20 here: it is copilot-factory's grounded-intent rule, and the numbers are kept in step with that port.
+R20 here covers clarify v3's research gaps only; copilot-factory's R20 also covers its older grounded-intent records, which this factory never had. The numbers are kept in step with that port.
 
 ## Use
 
