@@ -47,7 +47,7 @@ function readStdin() {
 
 const HELP = `factory — Software Factory CLI (plugin at ${PLUGIN_ROOT})
 
-Setup      init [--base <branch>] · doctor · ci install
+Setup      init [--base <branch>] · doctor [--machine] · ci install
 Jobs       job new --title "…" --type <work type> --risk low|medium|high [--epic] [--request "<the user's words>"] · job show · job list · use <job>
 Routing    next · why [--format md] · finalize [--mode before_ship|full] [--check]
 Drive      drive [--record <envelope.json>] [--lessons <reply.json>] [--max-seconds 480] [--max-steps 200]
@@ -78,7 +78,8 @@ Build      reconcile run|continue|abort · verify run · evidence add <AC> --typ
 Ship       report · ship [--local] · pr sync · ci verify [--manifest-dir d | --commit sha] · close
 Change     amend start --reason "…" [--by who] · amend submit · park --reason "…" · followup
 Epic       epic spawn · epic gate
-Docs       doc list · doc template <type> · doc check [<file>] [--type t] [--job J] · doc index
+Docs       doc list · doc template <type> · doc check [<file>] [--type t] [--job J] · doc index · doc design [--format md]
+           (doc design: what the design gate shows — decision table, diagrams, project layout with task owners)
            (templates/docs: adr, no-adr, recommendation, threat-model, contracts, findings, ship-report, lessons, index)
 Learning   distill context · distill done [--result <reply.json | - | json>] · lessons list · lessons add --text "…" --scope "glob,…" [--why "…"]
            telemetry report [--since 30] [--format md] · recipe list|show <id>|check|select --type t --risk r [--epic]
@@ -116,7 +117,7 @@ function run(argv) {
     case 'init':
       return C('setup').init(opt.root || process.cwd(), { baseBranch: opt.base });
     case 'doctor':
-      return C('setup').doctor(opt.root || process.cwd());
+      return C('setup').doctor(opt.root || process.cwd(), { refreshMachine: Boolean(opt.machine) });
     case 'console':
       if (opt.serve) { C('console').runServe(R(), { port: opt.port, job: J, label: opt.label }); return LONG_RUNNING; } // prints its own URL once listening
       return C('console').run(R(), { out: opt.out, job: J, label: opt.label, data: opt.data });
@@ -370,7 +371,16 @@ function run(argv) {
         return r;
       }
       if (sub === 'index') return d.index(R(), { jobId: J });
-      return fail('doc list | template <type> | check [<file>] | index', 'bad_input');
+      if (sub === 'design') {
+        // 0.11: what the design gate shows — the decision table, the diagrams, the layout tree
+        // with each file's owner task, how it runs (--format md: as the gate presents it)
+        const D = C('design');
+        const st = C('job').resolve(R(), J);
+        const v = D.view(R(), st);
+        if (!v) fail(`${st.id} has no ADR or no-adr note yet.`, 'no_design');
+        return opt.format === 'md' ? D.markdown(v) : v;
+      }
+      return fail('doc list | template <type> | check [<file>] | index | design', 'bad_input');
     }
     case 'distill':
       if (sub === 'context') {
@@ -460,6 +470,12 @@ function run(argv) {
       const E = C('environment');
       if (sub === 'show') return E.show(R());
       if (sub === 'check') {
+        // --job: the sealed environment's check before any task (the router's env.check step):
+        // recorded for the job; a failure is a result the repair loop takes up, not an error
+        if (opt.job && !opt.proposed) {
+          C('agents-open').refuseWhileAgentsWork(R(), 'env check --job');
+          return C('env-repair').checkForJob(R(), C('job').resolve(R(), J));
+        }
         const r = E.check(R(), { proposed: Boolean(opt.proposed) });
         if (!r.ok) process.exitCode = 1;
         return r;

@@ -34,7 +34,7 @@ const path = require('path');
 const { emit, realpath } = require('./lib');
 const { parse } = require('./shell');
 
-const JOB_DOCS = /^(contract\.md|threat-model\.md|no-adr\.md|recommendation\.md|adr-\d+[^/]*\.md|contracts\.md|contracts\.json|plan\.json|slices\.json|environment\.proposed\.json)$/;
+const JOB_DOCS = /^(contract\.md|threat-model\.md|no-adr\.md|recommendation\.md|adr-\d+[^/]*\.md|contracts\.md|contracts\.json|plan\.json|slices\.json|environment\.proposed\.json|environment\.repair\.json)$/;
 
 function deny(reason) {
   emit({ hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: `[factory guard] ${reason}` } });
@@ -683,6 +683,15 @@ function checkCommand(cmd, pipeline, ctx, depth, collect) {
       // inbox lists what waits on the human. A factory agent runs neither.
       if (a && ctx.agent && MAIN_ONLY.has(a)) return mainOnlyMessage(a);
       if (a && ctx.agent && agentRefused(a, b)) return agentRefusedMessage(a, b);
+      // 0.11 machine-aware environments: the machine scan (factory doctor --machine) and the
+      // sealed environment's check for a job (factory env check --job: it runs the human's
+      // environment with their shell and records the result the repair loop and the seal read)
+      // are the main session's steps; an agent may check a proposal (env check --proposed)
+      if (a && ctx.agent) {
+        const flags = (call.args || []).map((x) => (x && typeof x === 'object' ? x.text : x)).filter((x) => typeof x === 'string');
+        if (a === 'doctor' && flags.some((x) => /^--machine(=|$)/.test(x))) return '"factory doctor --machine" scans this machine\'s tools; it is the main session\'s step, never a factory agent\'s. Read the machine summary your brief carries.';
+        if (a === 'env' && b === 'check' && flags.some((x) => /^--job(=|$)/.test(x)) && !flags.includes('--proposed')) return '"factory env check --job" checks the sealed build environment for the job and records it (factory drive runs it); a factory agent may only check a proposal (factory env check --proposed).';
+      }
       if (a && ctx.agent && isUserRelay(a, b)) return `"factory ${a}${a === 'clarify' ? ` ${b}` : ''}" records what the user said; it is the main session's, never a factory agent's. Return what you found in your final message instead.`;
     } else if (!collect) {
       const why = unknownExpansionHuman(head, ctx);

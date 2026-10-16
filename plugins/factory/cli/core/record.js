@@ -155,6 +155,10 @@ function recDecide(root, state, env) {
   const last = critiques[critiques.length - 1] || null;
   state.counters.decide_rounds += 1;
   job.save(root, state);
+  // 0.11: the option generators' options, by id (O-1 for option-1…): the ADR's "Considered
+  // options" has a row for each (doc check reads options.json); a targeted revise keeps the last
+  const genOpts = (Array.isArray(d.options) ? d.options : []).filter((x) => x && /^option-\d+$/.test(String(x.id)) && x.output);
+  if (genOpts.length) writeJson(path.join(jp.dir, 'options.json'), { options: genOpts.map((x) => ({ id: `O-${String(x.id).split('-')[1]}`, title: String(x.output.title || ''), summary: String(x.output.summary || '').slice(0, 400), touches: Array.isArray(x.output.touches) ? x.output.touches.slice(0, 20).map(String) : [] })), at: nowIso() });
   const max = state.policy.limits.max_design_critique_rounds;
   // 0.10.0: the critics' open serious items (verified, not refuted), how the loop stopped, and
   // whether the architect revised after the last critique, for the gate to show
@@ -554,6 +558,7 @@ function apply(root, { jobId, file, envelope }) {
       if (env.config === 'decide') res = recDecide(root, fresh, env);
       else if (env.config === 'challenge') res = recChallenge(root, fresh, env);
       else if (env.config === 'diagnose') res = recDiagnose(root, fresh, env);
+      else if (env.config === 'env_repair') res = require('./env-repair').record(root, fresh, env);
       else fail(`Unknown config ${env.config}`, 'bad_envelope');
       break;
     case 'ground':

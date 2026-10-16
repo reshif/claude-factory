@@ -339,6 +339,18 @@ function parkAnswer(state, text) {
   const t = String(text || '').trim();
   const opts = (park.options || []).map((o, i) => ({ key: String(o.key || String.fromCharCode(97 + i)).toLowerCase(), text: String(o.text || '') }));
   if (pendingLive(park) && PARK_CONFIRM.test(t)) return { words: park.pending_answer.words, via: 'confirmed' };
+  // a repaired environment waits for its seal: only "approve environment <its short hash>" or the
+  // option letter seal it, never a bare ok / yes (release review B2)
+  if (park.kind === 'environment_repair') {
+    const m = /^approve(?:\s+J-\d+)?\s+environment(?:\s+([0-9a-f]{8}))?$/i.exec(t);
+    if (m) {
+      const want = (state.env_repair || {}).short;
+      if (!m[1]) fail(`Name the environment you seal: reply "approve environment ${want || '<hash>'}" (or "a"). Nothing was sealed.`, 'explicit_seal_needed');
+      if (m[1].toLowerCase() !== want) fail(`The repaired environment waiting for your seal is ${want}, not ${m[1]}: it changed after it was shown. Nothing was sealed.`, 'stale_environment');
+      const a = (park.options || [])[0];
+      return { words: a ? a.text : 'seal', option: 'a', optionText: a ? a.text : 'seal', extra: null, via: 'option' };
+    }
+  }
   const m = PARK_OPTION.exec(t) || PARK_LETTER.exec(t);
   if (m && opts.length) {
     const key = String(m[1] || m[2] || m[3] || '').toLowerCase();
@@ -371,14 +383,19 @@ function replyToPark(root, { jobId, text, channel }) {
   const words = ans ? ans.words : raw;
   if (needsGrant(state, words, ans && ans.option ? ans.optionText : null)) fail(GRANT_MSG(state), 'needs_grant');
   const question = (state.park && state.park.question) || String((state.park && state.park.reason) || 'why the job parked').split('\n')[0].slice(0, 300);
+  if (!ans && state.park && state.park.kind === 'environment_repair' && PARK_CONFIRM.test(raw)) {
+    fail(`"${raw}" does not seal the repaired build environment: reply "approve environment ${(state.env_repair || {}).short || '<hash>'}" (or "a") to seal it, "b" (or your words) to repair it again, or "c" to re-check after a fix on your machine. Nothing was sealed.`, 'explicit_seal_needed');
+  }
   if (!ans) {
     state.park = { ...state.park, pending_answer: { words: raw.slice(0, 2000), at: nowIso(), park_at: (state.park && state.park.at) || null } };
     job.save(root, state);
     log(root, state, 'park_answer_pending', { channel, words: raw.slice(0, 500) });
-    return { job: state.id, resumed: false, pending: true, question, message: `Nothing was resumed. Use this as your answer to "${question}"? Reply "yes" to resume ${state.id} with it (or answer the question).` };
+    // on the seal question, "yes" to stored words sends them to a new repair round; it never seals (m6)
+    const envPark = state.park && state.park.kind === 'environment_repair';
+    return { job: state.id, resumed: false, pending: true, question, message: envPark ? `Nothing was sealed or resumed. Reply "yes" to DISCARD the repaired environment ${(state.env_repair || {}).short || ''} and send your words to a new repair round, or "approve environment ${(state.env_repair || {}).short || '<hash>'}" to seal it.` : `Nothing was resumed. Use this as your answer to "${question}"? Reply "yes" to resume ${state.id} with it (or answer the question).` };
   }
   confirmTyped(channel, state.id, 'resume it with your words');
-  applyResume(root, state, { words, via: ans.via === 'option' ? `option ${ans.option}` : 'reply', option: ans.option ? { key: ans.option, text: ans.optionText, extra: ans.extra } : null });
+  applyResume(root, state, { words, via: ans.via === 'option' ? `option ${ans.option}` : 'reply', option: ans.option ? { key: ans.option, text: ans.optionText, extra: ans.extra } : null, channel });
   job.save(root, state);
   log(root, state, 'resume', { channel, from: state.resumed.from, via: ans.via, ...(ans.option ? { option: ans.option } : {}), words: words.slice(0, 500), ...(state.resumed.grant ? { grant: state.resumed.grant } : {}) });
   return { job: state.id, resumed: true, ...(ans.option ? { option: ans.option } : {}), message: `Resumed ${state.id} with ${ans.option ? `option ${ans.option} (${words.slice(0, 160)})` : 'your words'}${state.resumed.grant ? ` and ${Math.round((state.resumed.grant - 1) * 100)}% more agent runs` : ''}: they go to the next round. Claude continues with factory next.` };
@@ -388,7 +405,7 @@ function replyToPark(root, { jobId, text, channel }) {
 // job): the loop that stopped starts a new segment with the human's words (it never just buys one
 // more identical round), the repeat guard is cleared, the job is active again. The budget grows
 // only by the grant the human's words name. Mutates state; the caller saves and logs.
-function applyResume(root, state, { step = null, via = null, words = null, option = null } = {}) {
+function applyResume(root, state, { step = null, via = null, words = null, option = null, channel = null } = {}) {
   const park = state.park || {};
   const from = park.from;
   const L = state.policy.limits;
@@ -414,6 +431,25 @@ function applyResume(root, state, { step = null, via = null, words = null, optio
   if (from === 'clarify' || require('./clarify').inClarify(state)) require('./clarify').onResume(root, state, words);
   if (from === 'decompose') oneMore('decompose_rounds', L.max_plan_validate_rounds);
   if (from === 'reverify') state.counters.reverify_bonus = (state.counters.reverify_bonus || 0) + 1;
+  // 0.11 (copilot-factory fix 0.10.1): a repaired build environment that passed its check: option a seals it (this is
+  // the human's channel; agents never seal); b repairs again with the human's words; c leaves it
+  // to the human (factory env set). A park the repair loop stopped in starts a fresh loop.
+  // Release review M4: "I fixed it on my machine" (c on the seal question, a on the stopped loop's
+  // question, or a plain resume) re-checks the sealed environment, with a fresh machine inventory
+  // and its real execution context, before any agent repair; b repairs again with the words.
+  const ER = require('./env-repair');
+  if (park.kind === 'environment_repair') {
+    if (option && option.key === 'a') ER.sealRepair(root, state, channel || 'chat');
+    else if (option && option.key === 'c') ER.recheck(root, state);
+    else {
+      state.env_repair = null;
+      if (state.loops) delete state.loops.environment;
+    }
+  } else if (park.from === 'environment') {
+    if (option && option.key === 'b') {
+      if (state.loops) delete state.loops.environment;
+    } else ER.recheck(root, state);
+  }
   // the plan probe was interrupted twice (review MAJ-2): the answer sets how this job is probed,
   // and the interrupted runs are forgotten (a run the human started in their terminal counts)
   if (park.kind === 'plan_probe') {
@@ -586,6 +622,7 @@ function parseReplyRaw(text) {
   if (!t || t.includes('\n')) return null;
   let m;
   const J = '(J-\\d+)';
+  if ((m = t.match(new RegExp(`^approve(?:\\s+${J})?\\s+environment(?:\\s+([0-9a-f]{8}))?$`, 'i')))) return { cmd: 'approve_environment', jobId: m[1] && m[1].toUpperCase(), hash: m[2] ? m[2].toLowerCase() : null };
   if ((m = t.match(new RegExp(`^approve(?:\\s+${J})?\\s+ship$`, 'i')))) return { cmd: 'approve_ship', jobId: m[1] && m[1].toUpperCase() };
   if ((m = t.match(new RegExp(`^approve(?:\\s+${J})?(?:\\s+(${GATE_IDS.join('|')}))?$`, 'i')))) return { cmd: 'approve', jobId: m[1] && m[1].toUpperCase(), gate: m[2] && m[2].toUpperCase() };
   if ((m = t.match(new RegExp(`^deny(?:\\s+${J})?(?:(?:\\s*[:\u2014\u2013-]\\s*|\\s+)(.*))?$`, 'i')))) return { cmd: 'deny', jobId: m[1] && m[1].toUpperCase(), reason: (m[2] || '').trim() };
@@ -655,7 +692,7 @@ function readReply(text) {
 }
 
 // The exact forms, for "that was not applied" hints.
-const REPLY_FORMS = ['approve [J-0001] [H1]', 'approve ship', 'several replies in one message, separated by ";"', 'deny [J-0001] <reason>', 'resume [J-0001] [step | your answer]', 'proceed [J-0001]', 'cancel job [J-0001] [reason]', 'abandon job [J-0001] [reason]', 'waive [J-0001] <floor> <reason>', 'merged [J-0001] [sha]', 'confirm AC-1 [J-0001]', 'accept lesson L4', 'reject lesson L4 [reason]', 'accept brief P1', 'reject brief P1 [reason]', 'accept finding code-1 <reason>', 'dismiss finding code-1 <reason>', 'confirm environment [hash|none]'];
+const REPLY_FORMS = ['approve [J-0001] [H1]', 'approve ship', 'approve environment <hash> (a repaired build environment)', 'several replies in one message, separated by ";"', 'deny [J-0001] <reason>', 'resume [J-0001] [step | your answer]', 'proceed [J-0001]', 'cancel job [J-0001] [reason]', 'abandon job [J-0001] [reason]', 'waive [J-0001] <floor> <reason>', 'merged [J-0001] [sha]', 'confirm AC-1 [J-0001]', 'accept lesson L4', 'reject lesson L4 [reason]', 'accept brief P1', 'reject brief P1 [reason]', 'accept finding code-1 <reason>', 'dismiss finding code-1 <reason>', 'confirm environment [hash|none]'];
 const VERBS = ['approve', 'approved', 'deny', 'denied', 'resume', 'proceed', 'cancel', 'abandon', 'waive', 'merged', 'merge', 'confirm', 'accept', 'reject', 'dismiss', 'lgtm'];
 
 function editDistance(a, b) {
@@ -725,6 +762,11 @@ function applyReply(root, parsed, channel = 'chat') {
       return confirmAc(root, { jobId: parsed.jobId, ac: parsed.ac, channel });
     case 'split':
       return require('./clarify').split(root, { jobId: parsed.jobId });
+    case 'approve_environment': {
+      const st = job.resolve(root, parsed.jobId);
+      if (!(st.status === 'parked' && st.park && st.park.kind === 'environment_repair')) fail(`${st.id} has no repaired build environment waiting for your seal.`, 'no_repair');
+      return replyToPark(root, { jobId: st.id, text: parsed.hash ? `approve environment ${parsed.hash}` : 'approve environment', channel });
+    }
     case 'set_environment':
       return setEnvironment(root, { none: parsed.none, expectHash: parsed.hash, channel });
     case 'settle_finding':

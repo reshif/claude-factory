@@ -44,20 +44,89 @@ const LINT = [
 // it, a pty included), tagged so survivors can be found. In claude-factory the CLI runs the probe
 // itself (factory record decompose, or factory plan probe from the main session), never a subagent.
 const KEEP = /^(PATH|LANG|LANGUAGE|LC_[A-Z_]+|TERM|TZ|SHELL|USER|LOGNAME|PWD|COLUMNS|LINES)$/;
-const PROXY = /^(https?_proxy|HTTPS?_PROXY|no_proxy|NO_PROXY|ALL_PROXY|all_proxy|SSL_CERT_FILE|SSL_CERT_DIR|NODE_EXTRA_CA_CERTS|REQUESTS_CA_BUNDLE|PIP_INDEX_URL|PIP_EXTRA_INDEX_URL|npm_config_registry)$/;
+// The network settings a setup needs behind a corporate proxy (fix 0.11: passed by default; the
+// user saw PyPI time out without them): proxies, CA bundles, package index URLs.
+const PROXY = /^(https?_proxy|HTTPS?_PROXY|no_proxy|NO_PROXY|ALL_PROXY|all_proxy|SSL_CERT_FILE|SSL_CERT_DIR|NODE_EXTRA_CA_CERTS|REQUESTS_CA_BUNDLE|CURL_CA_BUNDLE|PIP_INDEX_URL|PIP_EXTRA_INDEX_URL|PIP_TRUSTED_HOST|UV_INDEX_URL|UV_EXTRA_INDEX_URL|UV_DEFAULT_INDEX|npm_config_registry|NPM_CONFIG_REGISTRY|npm_config_proxy|npm_config_https_proxy|NPM_CONFIG_PROXY|NPM_CONFIG_HTTPS_PROXY|YARN_REGISTRY|YARN_NPM_REGISTRY_SERVER)$/;
+// Network values parsed, not pattern-matched (release review M2). A login (userinfo) is whatever
+// precedes the LAST "@" that is followed by a host[:port], with or without a scheme
+// (user:pass@proxy:8080, http://user:p@ss@proxy, socks5h://bob:pa/ss@sock, https://:PAT@host).
+const HOSTPORT = /^(\[[0-9A-Fa-f:.]+\]|[A-Za-z0-9._~%-]+)(:\d{1,5})?$/;
+function splitLogin(v) {
+  const str = String(v || '');
+  const sm = /^\s*([a-z][a-z0-9+.-]*:\/\/)/i.exec(str);
+  const lead = sm ? sm[0] : (/^\s*/.exec(str) || [''])[0];
+  const body = str.slice(lead.length);
+  for (let i = body.lastIndexOf('@'); i > 0; i = body.lastIndexOf('@', i - 1)) {
+    const host = body.slice(i + 1).split(/[/?#\s]/)[0];
+    if (!HOSTPORT.test(host)) continue;
+    const info = body.slice(0, i);
+    if (/\s/.test(info)) continue;
+    // "host/path@x" is a path, not a login: a login has ":" (or no "/") before any "/"
+    const slash = info.indexOf('/');
+    if (slash >= 0 && !(info.indexOf(':') >= 0 && info.indexOf(':') < slash)) continue;
+    return { lead, login: info, rest: body.slice(i + 1) };
+  }
+  return null;
+}
+const stripLogin = (v) => {
+  const p = splitLogin(v);
+  return p ? `${p.lead}${p.rest}` : String(v);
+};
+// A token in an index URL's path or query (Cloudsmith, Gemfury, ?token=…): such a URL is dropped.
+const TOKEN_QUERY = /[?&](token|access_token|auth|key|api_key|apikey|password|secret)=/i;
+const TOKEN_HOSTS = /^(dl\.cloudsmith\.io|[a-z]+\.fury\.io|npm-proxy\.fury\.io)$/i;
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+function urlCarriesToken(u) {
+  const s = String(u || '');
+  if (TOKEN_QUERY.test(s)) return true;
+  const m = /^[a-z][a-z0-9+.-]*:\/\/([^/?#]+)(\/[^?#]*)?/i.exec(s);
+  if (!m) return false;
+  const segs = String(m[2] || '').split('/').filter(Boolean);
+  if (TOKEN_HOSTS.test(m[1].replace(/^.*@/, '').replace(/:\d+$/, '')) && segs[0] && segs[0].length >= 6) return true;
+  return segs.some((x) => x.length >= 16 && /\d/.test(x) && /[A-Za-z]/.test(x) && !UUID.test(x) && /^[A-Za-z0-9_-]+$/.test(x));
+}
+const INDEX_VAR = /INDEX|REGISTRY/i;
+// One network variable's value for an agent's command: logins stripped; an index URL with a token
+// in its path or query dropped (null) — unless the repo opted in (decompose.probe_proxy_credentials).
+function cleanNetValue(k, v, { keepCreds = false } = {}) {
+  if (keepCreds || v === undefined || v === null) return v;
+  const parts = String(v).split(/(\s+)/);
+  const out = [];
+  for (const x of parts) {
+    if (!x.trim()) {
+      out.push(x);
+      continue;
+    }
+    const clean = stripLogin(x);
+    if (INDEX_VAR.test(k) && urlCarriesToken(clean)) return null;
+    out.push(clean);
+  }
+  return out.join('');
+}
+const stripCreds = (v) => cleanNetValue('X', v);
 const SECRET_NAME = /(TOKEN|SECRET|PASSWORD|PASSWD|_KEY$|^KEY$|APIKEY|API_KEY|CREDENTIAL|^AWS_|^GH_|^GITHUB_|^SSH_|^GPG_|^COPILOT_|^ANTHROPIC_|^CLAUDE_CODE_|^NPM_TOKEN|^AZURE_|^GOOGLE_|^GCP_|COOKIE|SESSION)/i;
 // `own`: the probe's own directories (its scratch home, temp and caches), never filtered: a path
 // can contain a secret-looking variable's value (a temp dir named in CLAUDE_CODE_TMPDIR) and must
 // still be set.
 function probeEnv(root, probeId, extra = {}, own = {}) {
-  let allowProxy = false;
+  // proxies and index URLs pass by default (policy decompose.probe_proxy: false keeps them out);
+  // a login embedded in one (user:pass@) is stripped unless decompose.probe_proxy_credentials
+  let dec = {};
   try {
-    allowProxy = ((require('./policy').load(root) || {}).decompose || {}).probe_proxy === true;
+    dec = (require('./policy').load(root) || {}).decompose || {};
   } catch {
-    allowProxy = false;
+    dec = {};
   }
+  const allowProxy = dec.probe_proxy !== false;
+  const keepCreds = dec.probe_proxy_credentials === true;
   const out = {};
-  for (const [k, v] of Object.entries(process.env)) if (KEEP.test(k) || (allowProxy && PROXY.test(k))) out[k] = v;
+  for (const [k, v] of Object.entries(process.env)) {
+    if (KEEP.test(k)) out[k] = v;
+    else if (allowProxy && PROXY.test(k)) {
+      const c = cleanNetValue(k, v, { keepCreds });
+      if (c !== null) out[k] = c;
+    }
+  }
   // what the environment declares (its env block, the probe's own dirs) is kept, except a value
   // carrying one of the user's secrets (a declared `TOKEN: $GH_TOKEN`)
   const secrets = Object.entries(process.env).filter(([k, v]) => SECRET_NAME.test(k) && v && v.length >= 6).map(([, v]) => v);
@@ -70,6 +139,25 @@ function probeEnv(root, probeId, extra = {}, own = {}) {
 // secret-looking environment variables.
 function redact(text) {
   let t = String(text || '');
+  // the raw value of every network variable that carries a login or a token, then its pieces
+  for (const [k, v] of Object.entries(process.env)) {
+    if (!PROXY.test(k) || !v) continue;
+    const p = splitLogin(v);
+    const tok = urlCarriesToken(v);
+    if (!p && !tok) continue;
+    t = t.split(v).join(`[redacted ${k}]`);
+    if (p && p.login.length >= 3) {
+      t = t.split(p.login).join('[redacted]');
+      const pw = p.login.includes(':') ? p.login.slice(p.login.indexOf(':') + 1) : '';
+      if (pw.length >= 4) t = t.split(pw).join('[redacted]');
+    }
+  }
+  // any other login in a URL, with or without a scheme (the same parser)
+  t = t.replace(/[^\s'"`<>()=,;]*@[^\s'"`<>()=,;]+/g, (w) => {
+    const p = splitLogin(w);
+    // without a scheme only user:password@host (an e-mail address is not a login)
+    return p && (/:\/\//.test(p.lead) || p.login.includes(':')) ? `${p.lead}[redacted]@${p.rest}` : w;
+  });
   for (const [k, v] of Object.entries(process.env)) if (SECRET_NAME.test(k) && v && v.length >= 6) t = t.split(v).join(`[redacted ${k}]`);
   return t
     .replace(/\b(gh[pousr]_[A-Za-z0-9]{16,}|github_pat_[A-Za-z0-9_]{20,}|xox[abpr]-[A-Za-z0-9-]{10,}|AKIA[0-9A-Z]{16}|sk-[A-Za-z0-9]{20,}|glpat-[A-Za-z0-9_-]{16,})\b/g, '[redacted]')
@@ -82,7 +170,7 @@ function redact(text) {
 function procStat(pid) {
   try {
     const f = fs.readFileSync(`/proc/${pid}/stat`, 'utf8').split(') ').pop().split(' ');
-    return { pgrp: Number(f[2]), sid: Number(f[3]), start: f[19] };
+    return { state: f[0], pgrp: Number(f[2]), sid: Number(f[3]), start: f[19] };
   } catch {
     return null;
   }
@@ -131,6 +219,8 @@ function survivors(probeId, { sid = null, wt = null } = {}) {
       }
     }
     if (!ours) continue;
+    // a zombie has already ended (its parent has not reaped it yet)
+    if ((procStat(pid) || {}).state === 'Z') continue;
     let cmd = '';
     try {
       cmd = fs.readFileSync(`/proc/${pid}/cmdline`, 'utf8').replace(/\0/g, ' ').trim();
@@ -372,6 +462,20 @@ function run(root, { jobId, probeId: givenId = null, budget = null } = {}) {
   }
   const e = gate.env && !envMod.isNone(gate.env) ? gate.env : null;
   const base = state.base_commit || 'HEAD';
+  // the proposed environment against this machine (0.11; copilot-factory fix 0.10.1): lint, so it is caught before the
+  // gate even when nothing runs (lint-only mode); a confirmed one is the human's and is not linted
+  let machine = null;
+  if (e && gate.status === 'proposed') {
+    try {
+      machine = require('./machine').inventory();
+    } catch {
+      machine = null;
+    }
+    for (const l of envMod.lint(e, { root, base, plan, machine })) {
+      lint.push({ task: 'environment', cmd: l.cmd, rule: l.rule, message: l.message });
+      problems.push(`environment: \`${l.cmd}\` ${l.message} (${l.rule})`);
+    }
+  }
   const green = greenfield(root, base, e);
   const boot = plan.tasks.filter((t) => t.bootstrap === true);
   if (green) {
@@ -406,7 +510,7 @@ function run(root, { jobId, probeId: givenId = null, budget = null } = {}) {
       for (const d of ['home', 'tmp', 'cache']) fs.mkdirSync(path.join(box, d), { recursive: true });
       // who owns this scratch worktree: the sweep keeps it only while this process lives (m7)
       writeJson(path.join(box, 'owner.json'), { pid: process.pid, start: procStart(process.pid), probe_id: probeId, at: nowIso() });
-      const homeEnv = { HOME: path.join(box, 'home'), TMPDIR: path.join(box, 'tmp'), TMP: path.join(box, 'tmp'), TEMP: path.join(box, 'tmp'), XDG_CACHE_HOME: path.join(box, 'cache'), XDG_CONFIG_HOME: path.join(box, 'home', '.config'), npm_config_cache: path.join(box, 'cache', 'npm'), PIP_CACHE_DIR: path.join(box, 'cache', 'pip') };
+      const homeEnv = ownDirs(box);
       try {
         if (e) {
           const { evidence: _e, notes: _n, source: _s, ...runEnv } = e;
@@ -481,6 +585,7 @@ function run(root, { jobId, probeId: givenId = null, budget = null } = {}) {
     environment_name: (gate.env && gate.env.name) || null,
     greenfield: green,
     mode: runMode,
+    ...(machine ? { machine: require('./machine').summary(machine) } : {}),
     ok: problems.length === 0,
     ms: Date.now() - started,
     setup,
@@ -533,6 +638,10 @@ function callerDeadline() {
   const own = Date.now() + ceilingMs() - 60000;
   return d > 0 ? Math.min(d, own) : own;
 }
+// the probe's own scratch directories (a home, temp and caches inside its box): also used by a
+// sandboxed env check (environment.check of a proposal or a repair candidate)
+const ownDirs = (box) => ({ HOME: path.join(box, 'home'), TMPDIR: path.join(box, 'tmp'), TMP: path.join(box, 'tmp'), TEMP: path.join(box, 'tmp'), XDG_CACHE_HOME: path.join(box, 'cache'), XDG_CONFIG_HOME: path.join(box, 'home', '.config'), XDG_DATA_HOME: path.join(box, 'home', '.local', 'share'), npm_config_cache: path.join(box, 'cache', 'npm'), PIP_CACHE_DIR: path.join(box, 'cache', 'pip') });
+
 function readStarted(root, jobId) {
   const s = readJson(STARTED(root, jobId), null);
   return s && valid(s) ? s : null;
@@ -698,4 +807,4 @@ function problemKey(p) {
   return sha256(stableStringify([...((p && p.problems) || [])].map((x) => String(x).replace(/Output \(tail\):.*$/, '')).sort()));
 }
 
-module.exports = { runManaged, runChild, readStarted, procStat, sameProcess, STARTED, MAX_INTERRUPTED, mode, probeEnv, redact, survivors, sweep, NETWORK_SETUP, enabled, run, current, classify, lintCommand, greenfield, planOwns, problemKey, FILE, LINT };
+module.exports = { ownDirs, splitLogin, cleanNetValue, urlCarriesToken, stripCreds, PROXY, runManaged, runChild, readStarted, procStat, sameProcess, STARTED, MAX_INTERRUPTED, mode, probeEnv, redact, survivors, sweep, NETWORK_SETUP, enabled, run, current, classify, lintCommand, greenfield, planOwns, problemKey, FILE, LINT };

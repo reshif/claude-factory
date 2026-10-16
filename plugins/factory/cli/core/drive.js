@@ -268,7 +268,7 @@ function stopDetail(kind, n, extra = {}) {
     case 'gate':
       return {
         gate: g ? { id: g.id, hash: g.hash, docs: g.docs || [] } : null,
-        summary: `${J} waits at gate ${g ? g.id : n.step}${g && g.hash ? ` (hash ${String(g.hash).slice(0, 12)})` : ''}${n.review && (n.review.approves || []).length ? `: one approval for ${n.review.approves.join(' + ')}${n.review.environment && n.review.environment.status === 'proposed' ? ' (it also sets the build environment for this repository: other jobs build in it too)' : ''}` : ''}${n.review && n.review.objections ? `; ${n.review.objections}` : ''}${n.resumes_park ? '; approving it also resumes the parked job' : ''}.`,
+        summary: `${J} waits at gate ${g ? g.id : n.step}${g && g.hash ? ` (hash ${String(g.hash).slice(0, 12)})` : ''}${n.review && (n.review.approves || []).length ? `: one approval for ${n.review.approves.join(' + ')}${n.review.environment && n.review.environment.status === 'proposed' ? ' (it also sets the build environment for this repository: other jobs build in it too)' : ''}` : ''}${n.review && n.review.objections ? `; ${n.review.objections}` : ''}${n.resumes_park ? '; approving it also resumes the parked job' : ''}.${n.review && n.review.design ? ` Design: ${n.review.design.summary} (review.design: the decision table, the diagrams and the layout tree; \`factory doc design\` prints them).` : ''}`,
         ...(n.review ? { review: n.review } : {}),
         reply: 'approve | deny <what must change>',
         command: g && g.id === 'A' ? `factory approve --job ${J}` : `factory approve ${g ? g.id : ''} --job ${J}`.replace('  ', ' '),
@@ -526,7 +526,8 @@ function acquire(root, jobId) {
 
 // What to do before a step (null: run it), from what the drive record remembers.
 // the plan probe runs the project's commands too (review MAJ-2)
-const isLong = (label, verb) => LONG.has(verb || String(label).split(' ')[0]) || /^plan probe\b/.test(String(label));
+// and so does the sealed environment's check (0.11: setup in a scratch worktree)
+const isLong = (label, verb) => LONG.has(verb || String(label).split(' ')[0]) || /^(plan probe|env check)\b/.test(String(label));
 function longStepDecision({ label, verb, killedIn, durations, elapsedSec, job, ceiling = ceilingMs() }) {
   if (!isLong(label, verb)) return null;
   const took = (durations || {})[label];
